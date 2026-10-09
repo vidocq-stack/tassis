@@ -246,7 +246,7 @@ Choices and limits:
 - [x] `InvalidSelectorException` wherever a selector is given
 
 **Deliverable:** `internal.selector` (hand-written lexer and recursive-descent parser, no parser
-generator), `SelectorTest` (77 tests) and `SelectorDeliveryTest` (8), 209 unit tests in all, and
+generator), `SelectorTest` (78 tests) and `SelectorDeliveryTest` (11), 213 unit tests in all, and
 **598 / 598** on the TCK selection: 37 packages of `core`, no test negated (see `TCK.md`).
 
 Choices and limits:
@@ -264,10 +264,20 @@ Choices and limits:
   `Double` approximate (Java numeric promotion). No property conversion applies.
 - **Selectors are evaluated under the broker lock**: on each receive for a queue consumer, which
   scans past the messages it rejects, and once per subscription at publication.
-- **`JMSXDeliveryCount` in a selector** reads as NULL: it is set on the copy handed to the
-  consumer, not on the stored message.
+- **`JMSXDeliveryCount` in a selector** is the count of the delivery being considered, 1 for a
+  first delivery. A queue consumer or browser checks it on each delivery. A subscription selects
+  at publication, with a count of 1, and checks again on redelivery when its selector refers to
+  the count: a message that no longer matches leaves the subscription.
 
 ### M6 — Asynchronous delivery
+
+Also due in this milestone, because it reworks the same dispatch code: **a per-selector index on
+queues**. Today a queue consumer with a selector scans its queue from the head on every receive
+and re-evaluates the selector on every message it already rejected. Each distinct selector active
+on a queue should get its own ordered view, fed when a message is sent, so that a message is
+evaluated once per selector and a receive takes the head of its view. Selectors that refer to
+`JMSXDeliveryCount` are the exception: their answer changes between deliveries. Exit criterion:
+a test proving a message is evaluated once per selector.
 
 `MessageListener` (§8.7), the session threading model (§2.14: serial delivery, on a virtual
 thread), asynchronous send and `CompletionListener` (§7.3), `ExceptionListener` (§6.1.7), and

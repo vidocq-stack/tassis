@@ -87,6 +87,7 @@ final class SelectorParser {
     private final String selector;
     private int position;
     private Token token;
+    private boolean referencesDeliveryCount;
 
     SelectorParser(String selector) {
         this.selector = selector;
@@ -99,6 +100,11 @@ final class SelectorParser {
             throw invalid("unexpected '" + token.text + "'", token.position);
         }
         return conditional(condition);
+    }
+
+    /** Whether the selector parsed refers to {@code JMSXDeliveryCount}. */
+    boolean referencesDeliveryCount() {
+        return referencesDeliveryCount;
     }
 
     // ---- parser ----------------------------------------------------------
@@ -269,6 +275,7 @@ final class SelectorParser {
                     throw invalid("header field " + current.text + " cannot be used in a selector",
                             current.position);
                 }
+                referencesDeliveryCount |= current.text.equals(Identifier.DELIVERY_COUNT);
                 return new Identifier(current.text);
             }
             case KEYWORD -> {

@@ -32,10 +32,12 @@ public final class Selector {
 
     private final String text;
     private final Expression condition;
+    private final boolean referencesDeliveryCount;
 
-    private Selector(String text, Expression condition) {
+    private Selector(String text, Expression condition, boolean referencesDeliveryCount) {
         this.text = text;
         this.condition = condition;
+        this.referencesDeliveryCount = referencesDeliveryCount;
     }
 
     /**
@@ -49,12 +51,27 @@ public final class Selector {
         if (text == null || text.isBlank()) {
             return null;
         }
-        return new Selector(text, new SelectorParser(text).parse());
+        SelectorParser parser = new SelectorParser(text);
+        return new Selector(text, parser.parse(), parser.referencesDeliveryCount());
     }
 
-    /** Returns whether the selector evaluates to true for this message; false and unknown do not match. */
-    public boolean matches(TassisMessage message) {
-        return Boolean.TRUE.equals(condition.evaluate(message));
+    /**
+     * Returns whether the selector evaluates to true for this message; false and unknown do not
+     * match.
+     *
+     * @param deliveryCount the value of {@code JMSXDeliveryCount} for the delivery being
+     *        considered: 1 for a first delivery
+     */
+    public boolean matches(TassisMessage message, int deliveryCount) {
+        return Boolean.TRUE.equals(condition.evaluate(message, deliveryCount));
+    }
+
+    /**
+     * Whether the outcome depends on {@code JMSXDeliveryCount}, and so may differ from one
+     * delivery of a message to the next. Any other selector gives one answer per message.
+     */
+    public boolean referencesDeliveryCount() {
+        return referencesDeliveryCount;
     }
 
     /** The selector as the client wrote it. */

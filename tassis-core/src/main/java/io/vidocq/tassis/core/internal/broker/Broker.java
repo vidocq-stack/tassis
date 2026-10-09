@@ -356,7 +356,7 @@ public final class Broker {
                     boolean local = Objects.equals(subscription.request.subscriber(), outgoing.publisher());
                     Selector selector = subscription.request.selector();
                     // §4.2.2: a message the selector rejects is never part of the subscription.
-                    boolean selected = selector == null || selector.matches(outgoing.message());
+                    boolean selected = selector == null || selector.matches(outgoing.message(), 1);
                     if (selected && !(subscription.request.noLocal() && local)) {
                         store(subscription.storage, outgoing.message());
                     }
@@ -552,9 +552,12 @@ public final class Broker {
                         TassisMessage message = next.message;
                         if (isExpired(message, now)) {
                             stored.remove();
-                        } else if (consumer.selector != null && !consumer.selector.matches(message)) {
+                        } else if (consumer.selector != null
+                                && !consumer.selector.matches(message, next.deliveryCount + 1)) {
                             // Not for this consumer: the message stays where it is.
                             continue;
+                        } else if (noLongerSelected(consumer.subscription, next)) {
+                            stored.remove();
                         } else if (message.getJMSDeliveryTime() > now) {
                             nextDeliveryTime = Math.min(nextDeliveryTime, message.getJMSDeliveryTime());
                         } else {
@@ -607,7 +610,7 @@ public final class Broker {
                 TassisMessage message = stored.message;
                 // §7.9: a browser must not return a message before its delivery time.
                 if (!isExpired(message, now) && message.getJMSDeliveryTime() <= now
-                        && (selector == null || selector.matches(message))) {
+                        && (selector == null || selector.matches(message, stored.deliveryCount + 1))) {
                     TassisMessage copy = message.copy();
                     copy.markReceived();
                     messages.add(copy);
@@ -638,6 +641,20 @@ public final class Broker {
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * A subscription selects its messages when they are published, which settles the matter
+     * unless its selector looks at the delivery count: a message given back may then no longer
+     * belong to the subscription, and leaves it.
+     */
+    private static boolean noLongerSelected(Subscription subscription, Stored stored) {
+        if (subscription == null || stored.deliveryCount == 0) {
+            return false;
+        }
+        Selector selector = subscription.request.selector();
+        return selector != null && selector.referencesDeliveryCount()
+                && !selector.matches(stored.message, stored.deliveryCount + 1);
     }
 
     private void checkExists(String destination, boolean topic, boolean temporary)

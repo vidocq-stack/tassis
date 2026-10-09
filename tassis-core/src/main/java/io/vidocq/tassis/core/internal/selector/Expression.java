@@ -41,14 +41,18 @@ sealed interface Expression {
         ANY
     }
 
-    Object evaluate(TassisMessage message);
+    /**
+     * @param deliveryCount what {@code JMSXDeliveryCount} would be if the message were delivered
+     *        now: the provider sets that property on the delivered copy, not on the stored message
+     */
+    Object evaluate(TassisMessage message, int deliveryCount);
 
     Kind kind();
 
     record Literal(Object value, Kind kind) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
+        public Object evaluate(TassisMessage message, int deliveryCount) {
             return value;
         }
     }
@@ -56,8 +60,10 @@ sealed interface Expression {
     /** A header field or property reference; a property that is not set is NULL. */
     record Identifier(String name) implements Expression {
 
+        static final String DELIVERY_COUNT = "JMSXDeliveryCount";
+
         @Override
-        public Object evaluate(TassisMessage message) {
+        public Object evaluate(TassisMessage message, int deliveryCount) {
             Object value = switch (name) {
                 // §3.8.1.3: the delivery mode reads as one of these two strings.
                 case "JMSDeliveryMode" ->
@@ -67,6 +73,7 @@ sealed interface Expression {
                 case "JMSMessageID" -> message.getJMSMessageID();
                 case "JMSCorrelationID" -> message.getJMSCorrelationID();
                 case "JMSType" -> message.getJMSType();
+                case DELIVERY_COUNT -> deliveryCount;
                 default -> message.getObjectProperty(name);
             };
             // Java numeric promotion: every integral type is exact, every floating type approximate.
@@ -88,8 +95,8 @@ sealed interface Expression {
     record Not(Expression operand) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            Boolean value = condition(operand.evaluate(message));
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            Boolean value = condition(operand.evaluate(message, deliveryCount));
             return value == null ? null : !value;
         }
 
@@ -102,9 +109,9 @@ sealed interface Expression {
     record And(Expression left, Expression right) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            Boolean l = condition(left.evaluate(message));
-            Boolean r = condition(right.evaluate(message));
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            Boolean l = condition(left.evaluate(message, deliveryCount));
+            Boolean r = condition(right.evaluate(message, deliveryCount));
             if (Boolean.FALSE.equals(l) || Boolean.FALSE.equals(r)) {
                 return false;
             }
@@ -120,9 +127,9 @@ sealed interface Expression {
     record Or(Expression left, Expression right) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            Boolean l = condition(left.evaluate(message));
-            Boolean r = condition(right.evaluate(message));
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            Boolean l = condition(left.evaluate(message, deliveryCount));
+            Boolean r = condition(right.evaluate(message, deliveryCount));
             if (Boolean.TRUE.equals(l) || Boolean.TRUE.equals(r)) {
                 return true;
             }
@@ -151,9 +158,9 @@ sealed interface Expression {
     record Comparison(Comparator comparator, Expression left, Expression right) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            Object l = left.evaluate(message);
-            Object r = right.evaluate(message);
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            Object l = left.evaluate(message, deliveryCount);
+            Object r = right.evaluate(message, deliveryCount);
             if (l == null || r == null) {
                 return null;
             }
@@ -196,8 +203,8 @@ sealed interface Expression {
     record Arithmetic(Operator operator, Expression left, Expression right) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            if (!(left.evaluate(message) instanceof Number l) || !(right.evaluate(message) instanceof Number r)) {
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            if (!(left.evaluate(message, deliveryCount) instanceof Number l) || !(right.evaluate(message, deliveryCount) instanceof Number r)) {
                 return null;
             }
             if (l instanceof Long a && r instanceof Long b) {
@@ -228,8 +235,8 @@ sealed interface Expression {
     record Negate(Expression operand) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            return switch (operand.evaluate(message)) {
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            return switch (operand.evaluate(message, deliveryCount)) {
                 case Long l -> -l;
                 case Double d -> -d;
                 case null, default -> null;
@@ -246,8 +253,8 @@ sealed interface Expression {
     record In(Identifier identifier, Set<String> values, boolean negated) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            return identifier.evaluate(message) instanceof String value ? values.contains(value) != negated : null;
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            return identifier.evaluate(message, deliveryCount) instanceof String value ? values.contains(value) != negated : null;
         }
 
         @Override
@@ -260,8 +267,8 @@ sealed interface Expression {
     record Like(Identifier identifier, Pattern pattern, boolean negated) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            return identifier.evaluate(message) instanceof String value
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            return identifier.evaluate(message, deliveryCount) instanceof String value
                     ? pattern.matcher(value).matches() != negated
                     : null;
         }
@@ -276,8 +283,8 @@ sealed interface Expression {
     record IsNull(Identifier identifier, boolean negated) implements Expression {
 
         @Override
-        public Object evaluate(TassisMessage message) {
-            return (identifier.evaluate(message) == null) != negated;
+        public Object evaluate(TassisMessage message, int deliveryCount) {
+            return (identifier.evaluate(message, deliveryCount) == null) != negated;
         }
 
         @Override

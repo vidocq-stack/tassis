@@ -151,6 +151,46 @@ class SelectorDeliveryTest {
     }
 
     @Test
+    void queueSelectorSeesTheDeliveryCountOfTheDeliveryToCome() throws JMSException {
+        send(queue, "retried", "red");
+        try (Session transacted = connection.createSession(Session.SESSION_TRANSACTED)) {
+            MessageConsumer firstAttempts = transacted.createConsumer(queue, "JMSXDeliveryCount = 1");
+            assertEquals("retried", text(firstAttempts.receive(SOON)));
+            transacted.rollback();
+
+            assertNull(firstAttempts.receive(BRIEFLY), "its next delivery would be the second");
+        }
+
+        Message retried = session.createConsumer(queue, "JMSXDeliveryCount >= 2").receive(SOON);
+        assertEquals("retried", text(retried));
+        assertEquals(2, retried.getIntProperty("JMSXDeliveryCount"));
+    }
+
+    @Test
+    void subscriptionSelectorOnTheDeliveryCountIsCheckedAgainOnRedelivery() throws JMSException {
+        try (Session transacted = connection.createSession(Session.SESSION_TRANSACTED)) {
+            MessageConsumer firstAttempts = transacted.createConsumer(topic, "JMSXDeliveryCount = 1");
+            send(topic, "once only", "red");
+            assertEquals("once only", text(firstAttempts.receive(SOON)));
+
+            transacted.rollback();
+
+            assertNull(firstAttempts.receive(BRIEFLY), "a second delivery no longer matches the subscription");
+        }
+    }
+
+    @Test
+    void browserSelectorSeesTheDeliveryCountToo() throws JMSException {
+        send(queue, "fresh", "red");
+
+        try (QueueBrowser first = session.createBrowser(queue, "JMSXDeliveryCount = 1");
+                QueueBrowser later = session.createBrowser(queue, "JMSXDeliveryCount > 1")) {
+            assertEquals(1, Collections.list(first.getEnumeration()).size());
+            assertEquals(0, Collections.list(later.getEnumeration()).size());
+        }
+    }
+
+    @Test
     void invalidSelectorIsRejectedWhereverOneIsGiven() {
         String invalid = "definitely not a message selector!";
 

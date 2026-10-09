@@ -55,7 +55,7 @@ class SelectorTest {
     }
 
     private boolean matches(String selector) throws InvalidSelectorException {
-        return Selector.parse(selector).matches(message);
+        return Selector.parse(selector).matches(message, 1);
     }
 
     @ParameterizedTest
@@ -192,6 +192,16 @@ class SelectorTest {
     })
     void invalidSelectors(String selector) {
         assertThrows(InvalidSelectorException.class, () -> Selector.parse(selector), selector);
+    }
+
+    @Test
+    void deliveryCountIsTheOneOfTheDeliveryBeingConsidered() throws InvalidSelectorException {
+        Selector retries = Selector.parse("JMSXDeliveryCount > 1");
+
+        assertFalse(retries.matches(message, 1));
+        assertTrue(retries.matches(message, 2));
+        assertTrue(retries.referencesDeliveryCount());
+        assertFalse(Selector.parse("weight > 1").referencesDeliveryCount());
     }
 
     @Test
