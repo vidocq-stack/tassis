@@ -104,11 +104,25 @@ criterion; the exact package-to-milestone mapping is written when the harness is
 
 **Deliverable:** buildable reactor, `./mvnw -ntp clean install` and `./mvnw -ntp -Ptck clean install` green.
 
-### M1 — Message model
+### M1 — Message model ✅
 
-`Message` and the five body types (Text, Bytes, Map, Stream, Object), header fields (§3.4),
-properties and their conversion table (§3.5), read-only / write-only body modes, `getBody` and
-`isBodyAssignableTo` (§3.11). Pure unit tests, one class per message type.
+- [x] `Message` header fields (§3.4), including `JMSCorrelationID` as bytes
+- [x] Properties and their conversion table (§3.5), read-only once received, `clearProperties`
+- [x] The five body types: Text, Object, Map, Bytes, Stream (§3.11), with the Map / Stream
+      conversion table (§3.11.3) and the write-only / read-only modes of Bytes and Stream
+- [x] `getBody` and `isBodyAssignableTo`
+
+**Deliverable:** `io.vidocq.tassis.core.internal.message`, 54 unit tests, one class per message type.
+Messages are instantiated directly by the tests; `Session.createXxxMessage` arrives with M2.
+
+Choices made where the spec leaves room, to be confirmed against the TCK from M2 on:
+
+- A property name that is not a selector identifier, or is a selector reserved word, is
+  rejected with `MessageFormatException` (§3.5.1 requires the rule, not an exception type).
+- An empty `MapMessage` has a body (an empty `Map`); an empty `BytesMessage` has none.
+- `JMSCorrelationID` set as bytes reads back as a UTF-8 string, and conversely.
+- `Message.acknowledge()` throws `UnsupportedOperationException` until M3.
+- `ObjectMessage` deserializes with plain `ObjectInputStream`: no deserialization filter yet.
 
 ### M2 — Point-to-point, and TCK wiring
 

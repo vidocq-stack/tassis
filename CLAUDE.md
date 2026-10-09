@@ -40,8 +40,9 @@ provider, it ships its own broker: in-VM today, network transport later (ROADMAP
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
-tassis-core        ← The provider. Only module with code today: TassisConnectionFactory and a
-                     skeletal TassisConnection (ROADMAP M0)
+tassis-core        ← The provider. Only module with code today: TassisConnectionFactory, a
+                     skeletal TassisConnection (ROADMAP M0) and the message model in
+                     internal.message (ROADMAP M1)
 tassis-cdi-vauban  ← Placeholder — JMSContext injection (M9)
 tassis-bench       ← Placeholder — JMH (M12)
 tassis-examples    ← Placeholder — usage examples
@@ -71,6 +72,13 @@ a milestone.
 7. **JUnit 6** (`org.junit:junit-bom`, managed by `vidocq-parent`) for all tests — no Mockito;
    hand-written fixtures only.
 8. **Language** — commit messages, Javadoc, comments and all `.md` content in **English**.
+
+## Message model (`internal.message`)
+
+`TassisMessage` (headers, properties, body template) and one subclass per body type.
+`ValueConversions` is the single conversion table for properties, `MapMessage` and
+`StreamMessage`: change a conversion there, never in a message class. `markReceived()` puts a
+message in the state a consumer sees it in (properties and body read-only, body rewound).
 
 ## Conventions
 
