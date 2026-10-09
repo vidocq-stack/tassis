@@ -234,11 +234,38 @@ Choices and limits:
 - **TCK run order.** `tassis-tck` runs test methods alphabetically because one TCK class is
   order-dependent (see `TCK.md`).
 
-### M5 — Message selectors
+### M5 — Message selectors ✅
 
-The SQL-92 subset of §3.8: literals, identifiers, comparison and arithmetic operators,
-`LIKE` / `ESCAPE`, `IN`, `BETWEEN`, `IS NULL`, three-valued logic. Hand-written lexer and
-parser, no parser generator.
+- [x] The selector syntax of §3.8.1.1: string, exact and approximate numeric and boolean
+      literals, identifiers, comparison and arithmetic operators, `BETWEEN`, `IN`, `LIKE` with
+      `ESCAPE`, `IS NULL`, parentheses, case-insensitive keywords
+- [x] NULL semantics and three-valued logic (§3.8.1.2); `JMSDeliveryMode` as a string (§3.8.1.3)
+- [x] Selectors on queue consumers and browsers (§4.1.2): a rejected message stays on the queue
+- [x] Selectors on the four kinds of subscription (§4.2.2): a rejected message never enters the
+      subscription, and the selector is part of what makes two subscriptions the same (§8.3)
+- [x] `InvalidSelectorException` wherever a selector is given
+
+**Deliverable:** `internal.selector` (hand-written lexer and recursive-descent parser, no parser
+generator), `SelectorTest` (77 tests) and `SelectorDeliveryTest` (8), 209 unit tests in all, and
+**598 / 598** on the TCK selection: 37 packages of `core`, no test negated (see `TCK.md`).
+
+Choices and limits:
+
+- **Semantic checks made when the selector is given**, which the spec leaves optional and the
+  TCK requires: only numbers have an order (`myProp > 'foo'` is invalid), two operands of known
+  and unlike types cannot be compared (`TRUE = 0`), a logical operand cannot be a number or a
+  string, an arithmetic operand cannot be a string or a boolean. An identifier's type is only
+  known per message: there a mismatch yields false, or unknown in arithmetic.
+- **Header field references** are limited to the six of §3.8.1.1; another `JMS`-prefixed name
+  that is not `JMSX…` or `JMS_…` is rejected.
+- **Exact literals** accept the Java decimal, hexadecimal and octal forms with an optional `L`.
+  Exact arithmetic wraps on overflow, as Java's does; an exact division by zero is unknown.
+- **A property keeps its own type**: `Byte`, `Short`, `Integer` and `Long` are exact, `Float` and
+  `Double` approximate (Java numeric promotion). No property conversion applies.
+- **Selectors are evaluated under the broker lock**: on each receive for a queue consumer, which
+  scans past the messages it rejects, and once per subscription at publication.
+- **`JMSXDeliveryCount` in a selector** reads as NULL: it is set on the copy handed to the
+  consumer, not on the stored message.
 
 ### M6 — Asynchronous delivery
 

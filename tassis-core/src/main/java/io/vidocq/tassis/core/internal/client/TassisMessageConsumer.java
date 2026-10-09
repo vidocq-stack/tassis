@@ -20,6 +20,7 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.Destination;
 import jakarta.jms.IllegalStateException;
 import jakarta.jms.JMSException;
@@ -40,14 +41,16 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     private final TassisSession session;
     private final Destination destination;
     private final boolean noLocal;
+    private final Selector selector;
     private final Broker.Consumer attachment;
     private volatile boolean closed;
 
-    TassisMessageConsumer(TassisSession session, Destination destination, boolean noLocal,
+    TassisMessageConsumer(TassisSession session, Destination destination, boolean noLocal, Selector selector,
             Broker.Consumer attachment) {
         this.session = session;
         this.destination = destination;
         this.noLocal = noLocal;
+        this.selector = selector;
         this.attachment = attachment;
     }
 
@@ -78,7 +81,7 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     @Override
     public String getMessageSelector() throws JMSException {
         checkOpen();
-        return null;
+        return selector == null ? null : selector.text();
     }
 
     @Override

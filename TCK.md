@@ -21,29 +21,18 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M4
+## Status — M5
 
-**458 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
-`./mvnw -ntp -Ptck clean install`; the run reports 459 because it also executes `PortingSmokeTest`).
+**598 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
+`./mvnw -ntp -Ptck clean install`; the run reports 599 because it also executes `PortingSmokeTest`).
 
-The selection is 35 packages of `core` (471 tests): every package outside `appclient` except
-`selectorQueue` and `selectorTopic`, plus `appclient/txqueuetests` and `appclient/txtopictests`.
-The 13 tests below are negated in the `tck.test` property of `tassis-tck/pom.xml`; all of them
-need message selectors (M5).
+The selection is 37 packages of `core`, with no test negated: every package outside `appclient`,
+plus `appclient/txqueuetests` and `appclient/txtopictests`.
 
-| Class | Tests |
-|---|---|
-| `ExceptionQueueTestsIT` | `xInvalidSelectorExceptionQueueTest` |
-| `ExceptionTopicTestsIT` | `xInvalidSelectorExceptionTopicTest` |
-| `QueueConnectionTestsIT` | `connNotStartedQueueTest` |
-| `QueueTestsIT` | `queueBrowserMsgsRemainOnQueueTest`, `messageSelectorMsgRemainsOnQueueTest`, `msgSelectorMsgHeaderQueueTest` |
-| `SessionTestsIT` | `selectorAndBrowserTests`, `InvalidSelectorTests`, `SubscriberTests` |
-| `TopicTestsIT` | `consumerTests`, `durableSubscriberChangeSelectorTest`, `durableSubscriberChangeSelectorTest2`, `msgSelectorMsgHeaderTopicTest` |
+Not selected yet: the other 9 `appclient` packages (expected with listeners, M6) and all of
+`core20` (M7).
 
-Not selected yet: `selectorQueue`, `selectorTopic` (M5), the other 9 `appclient` packages
-(expected with listeners, M6) and all of `core20` (M7).
-
-History: M2 199 on 16 packages; M3 219 on 18 packages; M4 458 on 35 packages.
+History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37.
 
 The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
 `DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite

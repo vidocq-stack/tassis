@@ -19,6 +19,7 @@
  */
 package io.vidocq.tassis.core.internal.client;
 
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.IllegalStateException;
 import jakarta.jms.JMSException;
 import jakarta.jms.Queue;
@@ -31,11 +32,13 @@ final class TassisQueueBrowser implements QueueBrowser, SessionChild {
 
     private final TassisSession session;
     private final Queue queue;
+    private final Selector selector;
     private volatile boolean closed;
 
-    TassisQueueBrowser(TassisSession session, Queue queue) {
+    TassisQueueBrowser(TassisSession session, Queue queue, Selector selector) {
         this.session = session;
         this.queue = queue;
+        this.selector = selector;
     }
 
     private void checkOpen() throws IllegalStateException {
@@ -53,14 +56,14 @@ final class TassisQueueBrowser implements QueueBrowser, SessionChild {
     @Override
     public String getMessageSelector() throws JMSException {
         checkOpen();
-        return null;
+        return selector == null ? null : selector.text();
     }
 
     /** A snapshot of the queue at the time of the call. */
     @Override
     public Enumeration<?> getEnumeration() throws JMSException {
         checkOpen();
-        return Collections.enumeration(session.broker().browse(Destinations.queue(queue).name()));
+        return Collections.enumeration(session.broker().browse(Destinations.queue(queue).name(), selector));
     }
 
     @Override

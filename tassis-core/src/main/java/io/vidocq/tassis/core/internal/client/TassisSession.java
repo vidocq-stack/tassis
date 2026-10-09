@@ -28,6 +28,7 @@ import io.vidocq.tassis.core.internal.message.TassisMessage;
 import io.vidocq.tassis.core.internal.message.TassisObjectMessage;
 import io.vidocq.tassis.core.internal.message.TassisStreamMessage;
 import io.vidocq.tassis.core.internal.message.TassisTextMessage;
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.BytesMessage;
 import jakarta.jms.Destination;
 import jakarta.jms.IllegalStateException;
@@ -349,15 +350,15 @@ public final class TassisSession implements QueueSession, TopicSession {
             throws JMSException {
         checkOpen();
         Destinations.Address address = Destinations.resolve(destination);
-        checkNoSelector(messageSelector);
+        Selector selector = Selector.parse(messageSelector);
         if (address.temporary() && address.owner() != connection) {
             throw new JMSException("temporary destination " + destination + " belongs to another connection");
         }
         if (address.topic()) {
-            return subscribe(destination, address, null, false, false, noLocal);
+            return subscribe(destination, address, null, false, false, noLocal, selector);
         }
-        return register(new TassisMessageConsumer(this, destination, false,
-                broker().attach(address.name(), address.temporary(), connection::isStarted)));
+        return register(new TassisMessageConsumer(this, destination, false, selector,
+                broker().attach(address.name(), address.temporary(), selector, connection::isStarted)));
     }
 
     @Override
@@ -395,8 +396,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         checkOpen();
         notForA(Domain.TOPIC, "createBrowser");
         Destinations.queue(queue);
-        checkNoSelector(messageSelector);
-        return register(new TassisQueueBrowser(this, queue));
+        return register(new TassisQueueBrowser(this, queue, Selector.parse(messageSelector)));
     }
 
     /**
@@ -412,12 +412,6 @@ public final class TassisSession implements QueueSession, TopicSession {
         return child;
     }
 
-    private static void checkNoSelector(String messageSelector) {
-        if (messageSelector != null && !messageSelector.isBlank()) {
-            throw new UnsupportedOperationException("message selectors: see ROADMAP M5");
-        }
-    }
-
     /** §9.2: a domain-specific session rejects the inherited methods of the other domain. */
     private void notForA(Domain other, String method) throws IllegalStateException {
         if (domain == other) {
@@ -429,10 +423,10 @@ public final class TassisSession implements QueueSession, TopicSession {
     // ---- subscriptions (§8.3) -------------------------------------------
 
     private TassisMessageConsumer subscribe(Destination topic, Destinations.Address address, String name,
-            boolean durable, boolean shared, boolean noLocal) throws JMSException {
+            boolean durable, boolean shared, boolean noLocal, Selector selector) throws JMSException {
         Broker.Subscribing request = new Broker.Subscribing(address.name(), address.temporary(), name, durable,
-                shared, connection.clientId(), noLocal, connection.localIdentity());
-        return register(new TassisMessageConsumer(this, topic, noLocal,
+                shared, connection.clientId(), noLocal, selector, connection.localIdentity());
+        return register(new TassisMessageConsumer(this, topic, noLocal, selector,
                 broker().subscribe(request, connection::isStarted)));
     }
 
@@ -441,7 +435,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         checkOpen();
         notForA(Domain.QUEUE, method);
         Destinations.Address address = Destinations.topic(topic);
-        checkNoSelector(messageSelector);
+        Selector selector = Selector.parse(messageSelector);
         if (name == null || name.isEmpty()) {
             throw new JMSException("a subscription name must not be null or empty");
         }
@@ -451,7 +445,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         if (address.temporary() && address.owner() != connection) {
             throw new JMSException("temporary topic " + topic + " belongs to another connection");
         }
-        return subscribe(topic, address, name, durable, shared, noLocal);
+        return subscribe(topic, address, name, durable, shared, noLocal, selector);
     }
 
     @Override

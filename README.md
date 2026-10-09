@@ -8,9 +8,9 @@
 
 ## Status
 
-🚧 **M4** — queues and topics on an in-VM broker through the classic API: acknowledgement modes, local
-transactions, durable and shared subscriptions. Selectors, listeners and the simplified API are not
-implemented yet; see [ROADMAP.md](ROADMAP.md).
+🚧 **M5** — queues and topics on an in-VM broker through the classic API: acknowledgement modes, local
+transactions, durable and shared subscriptions, message selectors. Listeners and the simplified API are
+not implemented yet; see [ROADMAP.md](ROADMAP.md).
 
 ## Ecosystem rules
 

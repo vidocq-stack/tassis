@@ -45,9 +45,9 @@
         <tck.jms.timeout>3000</tck.jms.timeout>
 
         <!--
-            What the TCK run executes: the packages Tassis is expected to pass, then the
-            tests of those packages that need a later milestone, each negated. A milestone
-            is done when its negations are gone. TCK.md mirrors this list.
+            What the TCK run executes: the packages Tassis is expected to pass. A test of one
+            of them that needs a later milestone is negated here by name (!Class#method) and
+            listed in TCK.md; there is none at the moment.
             Override with -Dtck.test=... to run something else.
         -->
         <tck.test>
@@ -87,20 +87,8 @@
             **/core/exceptionTopic/*IT,
             **/core/exceptiontests/*IT,
             **/core/appclient/txtopictests/*IT,
-            <!-- M5: message selectors -->
-            !ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest,
-            !QueueConnectionTestsIT#connNotStartedQueueTest,
-            !QueueTestsIT#queueBrowserMsgsRemainOnQueueTest,
-            !QueueTestsIT#messageSelectorMsgRemainsOnQueueTest,
-            !QueueTestsIT#msgSelectorMsgHeaderQueueTest,
-            !SessionTestsIT#selectorAndBrowserTests,
-            !SessionTestsIT#InvalidSelectorTests,
-            !SessionTestsIT#SubscriberTests,
-            !ExceptionTopicTestsIT#xInvalidSelectorExceptionTopicTest,
-            !TopicTestsIT#consumerTests,
-            !TopicTestsIT#durableSubscriberChangeSelectorTest,
-            !TopicTestsIT#durableSubscriberChangeSelectorTest2,
-            !TopicTestsIT#msgSelectorMsgHeaderTopicTest
+            **/core/selectorQueue/*IT,
+            **/core/selectorTopic/*IT
         </tck.test>
     </properties>
 

@@ -45,7 +45,7 @@ provider, it ships its own broker: in-VM today, network transport later (ROADMAP
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
                      TassisTopic),
-                     internal.message (M1), internal.broker and internal.client (M2)
+                     internal.message, internal.broker, internal.client, internal.selector
 tassis-cdi-vauban  ← Placeholder — JMSContext injection (M9)
 tassis-bench       ← Placeholder — JMH (M12)
 tassis-examples    ← Placeholder — usage examples
@@ -100,6 +100,13 @@ either settle it (commit, acknowledge, or automatic acknowledgement on delivery)
 with `Broker.redeliver`. Losing a `Delivery` loses the message. `TassisSession.work` guards the
 session's unsettled deliveries and uncommitted sends; the only lock order is `work`, then the
 broker lock.
+
+## Selectors (`internal.selector`)
+
+`Selector.parse` compiles a selector, or returns `null` for none. `SelectorParser` holds the
+grammar (as a comment) and the checks made when a selector is given; `Expression` is the tree and
+its evaluation, where `null` is SQL's NULL / unknown. A queue consumer filters at receive time; a
+subscription filters at publication (`Broker.send`).
 
 ## Conventions
 

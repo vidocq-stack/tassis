@@ -20,6 +20,7 @@
 package io.vidocq.tassis.core.internal.broker;
 
 import io.vidocq.tassis.core.internal.message.TassisMessage;
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.InvalidClientIDException;
 import jakarta.jms.InvalidDestinationException;
 import jakarta.jms.JMSException;
@@ -74,14 +75,15 @@ public final class Broker {
      *
      * @param name the subscription name, or {@code null} for an unshared non-durable subscription
      * @param clientId the client identifier the name is scoped by, or {@code null} if unset
+     * @param selector what the subscription keeps of the topic's messages, or {@code null} for all
      * @param subscriber identifies who subscribes, to be compared with {@link Outgoing#publisher}
      */
     public record Subscribing(String topic, boolean temporary, String name, boolean durable, boolean shared,
-            String clientId, boolean noLocal, Object subscriber) {
+            String clientId, boolean noLocal, Selector selector, Object subscriber) {
 
         /** Whether the two requests describe the same subscription (§8.3.3, §8.3.4). */
         private boolean describesTheSameAs(Subscribing other) {
-            return topic.equals(other.topic) && noLocal == other.noLocal;
+            return topic.equals(other.topic) && noLocal == other.noLocal && Objects.equals(selector, other.selector);
         }
     }
 
@@ -90,15 +92,18 @@ public final class Broker {
 
         private final Storage storage;
         private final Subscription subscription;
+        // A queue consumer's own filter; a subscription filters when the message is published.
+        private final Selector selector;
         private final BooleanSupplier started;
         private boolean closed;
         private boolean detached;
         // A count, not a flag: a misused consumer may be in several receives at once.
         private int receiving;
 
-        private Consumer(Storage storage, Subscription subscription, BooleanSupplier started) {
+        private Consumer(Storage storage, Subscription subscription, Selector selector, BooleanSupplier started) {
             this.storage = storage;
             this.subscription = subscription;
+            this.selector = selector;
             this.started = started;
         }
     }
@@ -349,7 +354,10 @@ public final class Broker {
                 for (Subscription subscription : subscriptionsByTopic.getOrDefault(outgoing.destination(), List.of())) {
                     // §8.3.1: a noLocal subscription ignores what its own connection publishes.
                     boolean local = Objects.equals(subscription.request.subscriber(), outgoing.publisher());
-                    if (!(subscription.request.noLocal() && local)) {
+                    Selector selector = subscription.request.selector();
+                    // §4.2.2: a message the selector rejects is never part of the subscription.
+                    boolean selected = selector == null || selector.matches(outgoing.message());
+                    if (selected && !(subscription.request.noLocal() && local)) {
                         store(subscription.storage, outgoing.message());
                     }
                 }
@@ -389,16 +397,18 @@ public final class Broker {
      * Attaches a consumer to a queue.
      *
      * @param temporary whether {@code queue} names a temporary queue, which must then still exist
+     * @param selector the messages the consumer takes, or {@code null} for all; the others stay
+     *        on the queue for other consumers (§4.1.2)
      * @param started tells whether the consumer's connection is started; read under the broker lock
      */
-    public Consumer attach(String queue, boolean temporary, BooleanSupplier started)
+    public Consumer attach(String queue, boolean temporary, Selector selector, BooleanSupplier started)
             throws InvalidDestinationException {
         lock.lock();
         try {
             checkExists(queue, false, temporary);
             Storage storage = storageOf(queue);
             storage.consumers++;
-            return new Consumer(storage, null, started);
+            return new Consumer(storage, null, selector, started);
         } finally {
             lock.unlock();
         }
@@ -416,7 +426,7 @@ public final class Broker {
             checkExists(request.topic(), true, request.temporary());
             Subscription subscription = request.name() == null ? add(request) : named(request);
             subscription.storage.consumers++;
-            return new Consumer(subscription.storage, subscription, started);
+            return new Consumer(subscription.storage, subscription, null, started);
         } finally {
             lock.unlock();
         }
@@ -440,9 +450,9 @@ public final class Broker {
         }
         if (active) {
             throw new JMSException("subscription " + request.name()
-                    + " has active consumers and cannot be changed to another topic");
+                    + " has active consumers and cannot be changed to another topic or selector");
         }
-        // Same name, another topic: the old subscription is deleted and a new one starts.
+        // Same name, another topic or selector: the old subscription is deleted and a new one starts.
         remove(existing);
         return add(request);
     }
@@ -542,6 +552,9 @@ public final class Broker {
                         TassisMessage message = next.message;
                         if (isExpired(message, now)) {
                             stored.remove();
+                        } else if (consumer.selector != null && !consumer.selector.matches(message)) {
+                            // Not for this consumer: the message stays where it is.
+                            continue;
                         } else if (message.getJMSDeliveryTime() > now) {
                             nextDeliveryTime = Math.min(nextDeliveryTime, message.getJMSDeliveryTime());
                         } else {
@@ -577,8 +590,11 @@ public final class Broker {
         }
     }
 
-    /** Returns copies of the messages a consumer could take from the queue right now, in delivery order. */
-    public List<TassisMessage> browse(String queue) {
+    /**
+     * Returns copies of the messages a consumer with that selector could take from the queue
+     * right now, in delivery order.
+     */
+    public List<TassisMessage> browse(String queue, Selector selector) {
         lock.lock();
         try {
             long now = System.currentTimeMillis();
@@ -590,7 +606,8 @@ public final class Broker {
             for (Stored stored : storage.messages) {
                 TassisMessage message = stored.message;
                 // §7.9: a browser must not return a message before its delivery time.
-                if (!isExpired(message, now) && message.getJMSDeliveryTime() <= now) {
+                if (!isExpired(message, now) && message.getJMSDeliveryTime() <= now
+                        && (selector == null || selector.matches(message))) {
                     TassisMessage copy = message.copy();
                     copy.markReceived();
                     messages.add(copy);
