@@ -19,26 +19,60 @@
  */
 package io.vidocq.tassis.core;
 
+import io.vidocq.tassis.core.internal.broker.Broker;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.JMSContext;
+import jakarta.jms.QueueConnection;
+import jakarta.jms.QueueConnectionFactory;
+import java.util.Objects;
 
 /**
  * The Tassis {@link ConnectionFactory}: the administered object a client uses to
- * reach the in-VM broker (Jakarta Messaging 3.1 §5.3). A Java SE client
+ * reach an in-VM broker (Jakarta Messaging 3.1 §5.3). A Java SE client
  * instantiates it directly; no JNDI lookup is involved.
+ *
+ * <p>A broker is identified by its name within the JVM: factories created with
+ * the same name connect to the same broker, which is created on first use.
  */
-public final class TassisConnectionFactory implements ConnectionFactory {
+public final class TassisConnectionFactory implements ConnectionFactory, QueueConnectionFactory {
 
-    @Override
-    public Connection createConnection() {
-        return new TassisConnection();
+    /** Name of the broker the no-argument constructor connects to. */
+    public static final String DEFAULT_BROKER = "default";
+
+    private final String brokerName;
+
+    public TassisConnectionFactory() {
+        this(DEFAULT_BROKER);
+    }
+
+    public TassisConnectionFactory(String brokerName) {
+        this.brokerName = Objects.requireNonNull(brokerName, "brokerName");
     }
 
     @Override
+    public Connection createConnection() {
+        return new TassisConnection(Broker.named(brokerName));
+    }
+
+    /**
+     * The in-VM broker has no user registry: any user name and password are
+     * accepted (§6.1.1 leaves authentication to the provider).
+     */
+    @Override
     public Connection createConnection(String userName, String password) {
-        throw new UnsupportedOperationException("createConnection(userName, password): see ROADMAP M2");
+        return createConnection();
+    }
+
+    @Override
+    public QueueConnection createQueueConnection() {
+        return new TassisConnection(Broker.named(brokerName));
+    }
+
+    @Override
+    public QueueConnection createQueueConnection(String userName, String password) {
+        return createQueueConnection();
     }
 
     @Override

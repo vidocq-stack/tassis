@@ -246,6 +246,17 @@ public final class TassisBytesMessage extends TassisMessage implements BytesMess
     }
 
     @Override
+    TassisMessage newInstance() {
+        return new TassisBytesMessage();
+    }
+
+    @Override
+    void copyBodyTo(TassisMessage target) {
+        // Copies whatever was written so far, without switching this message to read-only.
+        ((TassisBytesMessage) target).written.writeBytes(isBodyReadOnly() ? content : written.toByteArray());
+    }
+
+    @Override
     Object body() {
         // Message.getBody: "This method will reset the BytesMessage before and after use."
         reset();

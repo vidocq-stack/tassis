@@ -70,6 +70,39 @@ public class TassisMessage implements Message {
         makeBodyReadOnly();
     }
 
+    /**
+     * Returns an independent, writable copy of this message: same header
+     * fields, properties and body. A send stores such a copy, so that later
+     * changes to the client's message do not reach the broker (§3.9).
+     */
+    public final TassisMessage copy() {
+        TassisMessage copy = newInstance();
+        copy.messageId = messageId;
+        copy.timestamp = timestamp;
+        copy.correlationId = correlationId;
+        copy.correlationIdBytes = correlationIdBytes;
+        copy.replyTo = replyTo;
+        copy.destination = destination;
+        copy.deliveryMode = deliveryMode;
+        copy.redelivered = redelivered;
+        copy.type = type;
+        copy.expiration = expiration;
+        copy.deliveryTime = deliveryTime;
+        copy.priority = priority;
+        copy.properties.putAll(properties);
+        copyBodyTo(copy);
+        return copy;
+    }
+
+    /** Returns a new, empty message of this message's type. */
+    TassisMessage newInstance() {
+        return new TassisMessage();
+    }
+
+    /** Copies this message's body into {@code target}, a fresh instance of the same type. */
+    void copyBodyTo(TassisMessage target) {
+    }
+
     // ---- header fields -------------------------------------------------
 
     @Override

@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+    tassis-tck: runs the official Jakarta Messaging TCK (jakarta.tck:jms-tck, JUnit 5,
+    "Jakarta Messaging Outside container") against Tassis.
+
+    In-reactor module gated by the `tck` Maven profile of tassis-parent: a plain
+    `mvn install` neither downloads nor runs anything TCK-related. Use
+    run-official-tck-messaging-3.1.sh at the repository root.
+
+    The TCK jars are not Java modules, so this module has no module-info and its
+    tests run on the class path. Everything here is test scope and never released.
+-->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -12,7 +23,7 @@
 
     <artifactId>tassis-tck</artifactId>
     <name>Tassis :: TCK</name>
-    <description>Official Jakarta Messaging TCK runner (jakarta.tck:jms-tck), placeholder until ROADMAP M2 wires the harness</description>
+    <description>Official Jakarta Messaging TCK runner (jakarta.tck:jms-tck) for Tassis</description>
 
     <properties>
         <!-- Never released as a dependency: skip every release-time attachment. -->
@@ -21,12 +32,96 @@
         <maven.javadoc.skip>true</maven.javadoc.skip>
         <maven.source.skip>true</maven.source.skip>
         <gpg.skip>true</gpg.skip>
+
+        <jakarta.tck.jms.version>11.0.3</jakarta.tck.jms.version>
+        <!--
+            jms-tck 11.0.3 declares jakarta.tck:common 11.0.0-RC4, whose
+            BytesMessageTestImpl never creates its output stream: writeBoolean() fails with a
+            NullPointerException before the provider is involved (foreignMsg* tests). Later
+            releases of the same line fix it. Recorded in TCK.md.
+        -->
+        <jakarta.tck.common.version>11.0.8</jakarta.tck.common.version>
+        <!-- How long a TCK test waits for a message, in milliseconds (the TCK's own default is 10000). -->
+        <tck.jms.timeout>3000</tck.jms.timeout>
+
+        <!--
+            What the TCK run executes: the packages Tassis is expected to pass, then the
+            tests of those packages that need a later milestone, each negated. A milestone
+            is done when its negations are gone. TCK.md mirrors this list.
+            Override with -Dtck.test=... to run something else.
+        -->
+        <tck.test>
+            PortingSmokeTest,
+            **/core/queuetests/*IT,
+            **/core/bytesMsgQueue/*IT,
+            **/core/mapMsgQueue/*IT,
+            **/core/streamMsgQueue/*IT,
+            **/core/objectMsgQueue/*IT,
+            **/core/messageQueue/*IT,
+            **/core/queueMsgHeaders/*IT,
+            **/core/queueMsgProperties/*IT,
+            **/core/foreignMsgQueue/*IT,
+            **/core/queueConnection/*IT,
+            **/core/closedQueueConnection/*IT,
+            **/core/closedQueueReceiver/*IT,
+            **/core/closedQueueSender/*IT,
+            **/core/closedQueueSession/*IT,
+            **/core/exceptionQueue/*IT,
+            **/core/messageProducer/*IT,
+            <!-- M3: transacted and client-acknowledged sessions, JMSXDeliveryCount -->
+            !ClosedQueueConnectionTestsIT#closedQueueConnectionCommitTest,
+            !ClosedQueueSessionTestsIT#closedSessionRecoverTest,
+            !ClosedQueueSessionTestsIT#closedQueueSessionRecoverTest,
+            !ClosedQueueSessionTestsIT#closedQueueSessionCommitTest,
+            !ClosedQueueSessionTestsIT#closedQueueSessionRollbackTest,
+            !ClosedQueueSessionTestsIT#closedQueueSessionGetTransactedTest,
+            !QueuePropertyTestsIT#msgPropertiesQTest,
+            <!-- M4: topics -->
+            !ExceptionQueueTestsIT#xIllegalStateExceptionTestTopicMethodsQ,
+            !MessageProducerTestsIT#sendTopicTest4,
+            !MessageProducerTestsIT#sendTopicTest5,
+            !MessageProducerTestsIT#sendTopicTest6,
+            <!-- M5: message selectors -->
+            !ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest,
+            !QueueConnectionTestsIT#connNotStartedQueueTest,
+            !QueueTestsIT#queueBrowserMsgsRemainOnQueueTest,
+            !QueueTestsIT#messageSelectorMsgRemainsOnQueueTest,
+            !QueueTestsIT#msgSelectorMsgHeaderQueueTest
+        </tck.test>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.tck</groupId>
+            <artifactId>jms-tck</artifactId>
+            <version>${jakarta.tck.jms.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.tck</groupId>
+            <artifactId>common</artifactId>
+            <version>${jakarta.tck.common.version}</version>
+            <scope>test</scope>
+            <!-- Harness leftovers the standalone Messaging tests never load. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.derby</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.ant</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-httpclient</groupId>
+                    <artifactId>commons-httpclient</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -34,4 +129,57 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>tck-harness-properties</id>
+                        <phase>process-test-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/tck-tmp</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>src/test/tck</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- The tests live in the TCK jar, not in this module. -->
+                    <dependenciesToScan>
+                        <dependency>jakarta.tck:jms-tck</dependency>
+                    </dependenciesToScan>
+                    <test>${tck.test}</test>
+                    <systemPropertyVariables>
+                        <!-- Where the TCK harness looks for its property file: see src/test/tck. -->
+                        <java.io.tmpdir>${project.build.directory}/tck-tmp</java.io.tmpdir>
+                        <user.name>tassis</user.name>
+                        <platform.mode>standalone</platform.mode>
+                        <jms_timeout>${tck.jms.timeout}</jms_timeout>
+                        <user>j2ee</user>
+                        <password>j2ee</password>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

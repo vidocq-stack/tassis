@@ -26,8 +26,11 @@ sdk env
 # Unit tests
 ./mvnw test
 
-# TCK profile (currently a placeholder module — the harness is wired in ROADMAP M2)
-./mvnw -ntp -Ptck clean install
+# Official TCK: the tests Tassis is expected to pass today (see TCK.md)
+./run-official-tck-messaging-3.1.sh
+
+# Another TCK selection
+./run-official-tck-messaging-3.1.sh -Dtck.test='**/core/selectorQueue/*IT'
 ```
 
 > `tassis-tck` is **in-reactor behind the `tck` Maven profile**. A plain `./mvnw install`
@@ -40,13 +43,12 @@ provider, it ships its own broker: in-VM today, network transport later (ROADMAP
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
-tassis-core        ← The provider. Only module with code today: TassisConnectionFactory, a
-                     skeletal TassisConnection (ROADMAP M0) and the message model in
-                     internal.message (ROADMAP M1)
+tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue),
+                     internal.message (M1), internal.broker and internal.client (M2)
 tassis-cdi-vauban  ← Placeholder — JMSContext injection (M9)
 tassis-bench       ← Placeholder — JMH (M12)
 tassis-examples    ← Placeholder — usage examples
-tassis-tck         ← Placeholder — official TCK runner, in-reactor behind `tck` (wired in M2)
+tassis-tck         ← Official TCK runner, in-reactor behind `tck`, class path, test scope only
 ```
 
 `ROADMAP.md` records the design decisions, the spike findings (API module descriptor, TCK
@@ -80,6 +82,14 @@ a milestone.
 `StreamMessage`: change a conversion there, never in a message class. `markReceived()` puts a
 message in the state a consumer sees it in (properties and body read-only, body rewound).
 
+## Broker and client (`internal.broker`, `internal.client`)
+
+`Broker` is the in-VM broker, one per name per JVM (`Broker.named`). A single lock guards its
+queues **and** the delivery-related state of its clients (connection started, consumer closed):
+change such state only through `Broker.update(...)`, which also wakes the waiting receives. A
+send hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
+`Destinations.queue(...)` is the one place that decides which `Destination` objects are ours.
+
 ## Conventions
 
 - **Maven groupId**: `io.vidocq.tassis`. Version `0.4.0-SNAPSHOT`, parent
@@ -98,11 +108,11 @@ stale `target/`.
 
 ## TCK — Technology Compatibility Kit
 
-Runner: `jakarta.tck:jms-tck` (JUnit 5, Maven Central), not the JavaTest zip. Administered
-objects are supplied through `com.sun.ts.lib.porting.TSJMSObjectsInterface`, selected by the
-system property `porting.ts.jmsObjects.class.1` — no JNDI. Scope is `core` + `core20`
-(905 tests); `ee` / `ee20` need EJB or a web container and are out of reach. Details and
-open questions in ROADMAP "Spike findings".
+Runner, wiring, current score and the list of tests waiting for a later milestone are in
+`TCK.md`. The selection run by default is the `tck.test` property of `tassis-tck/pom.xml`:
+packages expected to pass, then negated tests grouped by the milestone that will enable them.
+Finishing a milestone means deleting its lines there and updating `TCK.md`. When every TCK test
+fails at once, run `PortingSmokeTest`: TCK tests swallow the exception of a failed setup.
 
 **Release discipline (once M8 lands):** no structural merge on `tassis-core` without TCK
 PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivation plan.

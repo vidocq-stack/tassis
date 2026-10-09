@@ -167,6 +167,17 @@ public final class TassisMapMessage extends TassisMessage implements MapMessage 
     }
 
     @Override
+    TassisMessage newInstance() {
+        return new TassisMapMessage();
+    }
+
+    @Override
+    void copyBodyTo(TassisMessage target) {
+        // Byte array values are private copies that are never modified in place.
+        ((TassisMapMessage) target).entries.putAll(entries);
+    }
+
+    @Override
     Object body() {
         Map<String, Object> copy = new LinkedHashMap<>(entries);
         copy.replaceAll((name, value) -> value instanceof byte[] bytes ? bytes.clone() : value);

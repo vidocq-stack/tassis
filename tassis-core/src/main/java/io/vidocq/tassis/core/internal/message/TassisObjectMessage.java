@@ -66,6 +66,17 @@ public final class TassisObjectMessage extends TassisMessage implements ObjectMe
     }
 
     @Override
+    TassisMessage newInstance() {
+        return new TassisObjectMessage();
+    }
+
+    @Override
+    void copyBodyTo(TassisMessage target) {
+        // The serialized form is never modified in place, so it can be shared.
+        ((TassisObjectMessage) target).serialized = serialized;
+    }
+
+    @Override
     Object body() throws JMSException {
         return getObject();
     }

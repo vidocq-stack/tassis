@@ -39,6 +39,16 @@ public final class TassisTextMessage extends TassisMessage implements TextMessag
     }
 
     @Override
+    TassisMessage newInstance() {
+        return new TassisTextMessage();
+    }
+
+    @Override
+    void copyBodyTo(TassisMessage target) {
+        ((TassisTextMessage) target).text = text;
+    }
+
+    @Override
     Object body() {
         return text;
     }

@@ -124,17 +124,50 @@ Choices made where the spec leaves room, to be confirmed against the TCK from M2
 - `Message.acknowledge()` throws `UnsupportedOperationException` until M3.
 - `ObjectMessage` deserializes with plain `ObjectInputStream`: no deserialization filter yet.
 
-### M2 — Point-to-point, and TCK wiring
+### M2 — Point-to-point, and TCK wiring ✅
 
-Classic API on an in-VM queue: `send`, `receive` (blocking, timeout, `receiveNoWait`),
-connection start/stop/close (§6.1), ordering, priority, expiration (§7.8), delivery delay (§7.9),
-temporary queues, `QueueBrowser`, `ConnectionMetaData`. Includes the **legacy queue API**
-(`QueueConnectionFactory`, `QueueConnection`, `QueueSession`, `QueueSender`, `QueueReceiver`)
-and **`createConnection(user, password)`**, both required by the TCK.
+- [x] In-VM broker (`internal.broker.Broker`): named queues created on first use, delivery by
+      priority then send order, expiration (§3.4.9), delivery delay (§7.9)
+- [x] Classic API: `Connection` (start / stop / close, §6.1), `Session`, `MessageProducer`
+      (identified and unidentified), `MessageConsumer` (`receive`, timeout, `receiveNoWait`)
+- [x] A send stores a snapshot of the message (§3.9); a foreign message is rebuilt through the
+      `jakarta.jms` interfaces (§3.12)
+- [x] Temporary queues (§6.2.2), `QueueBrowser` (§4.1.3), `ConnectionMetaData` (§6.1.6)
+- [x] Legacy queue API (§2.9): `QueueConnectionFactory`, `QueueConnection`, `QueueSession`,
+      `QueueSender`, `QueueReceiver`
+- [x] `createConnection(user, password)`: any credentials are accepted, the in-VM broker has no
+      user registry
+- [x] TCK wired: `tassis-tck`, `run-official-tck-messaging-3.1.sh`, `TCK.md`
 
-TCK wiring: `tassis-tck` gets `jakarta.tck:jms-tck` + `jakarta.tck:common` in test scope, a
-`TSJMSObjectsInterface` implementation, and `run-official-tck-messaging-3.1.sh`. Settle the two
-unverified points of spike 2 here.
+**Deliverable:** 33 unit tests (`PointToPointTest`, `QueueFacilitiesTest`, `MessagesTest`,
+`CloseRaceTest`) and **199 / 199** on the TCK selection of 16 queue packages (see `TCK.md`).
+
+The `virtual-threads-reviewer` pass found no deadlock, lost wake-up or pinning, and one real
+defect, fixed here with `CloseRaceTest` as its regression test: a close racing with a create
+could leave a consumer attached for ever. Hence the add-then-check in `TassisSession.register`
+and `TassisConnection`, and close paths that never throw and never return early.
+
+What M2 settles and leaves open:
+
+- **Spike 2's open points.** The `core` queue packages run as-is in `standalone` mode, no JNDI.
+  Two things the spike had missed: the harness reads the porting class from a property *file*,
+  not from the system properties, and `jakarta.tck:common` 11.0.0-RC4 has a defect that requires
+  pinning 11.0.8 (both in `TCK.md`). `appclient` packages and `core20` are not tried yet.
+- **M1's open choices** hold against the 199 tests: nothing in the selected packages contradicts them.
+- **Sessions** are non-transacted with `AUTO_ACKNOWLEDGE` or `DUPS_OK_ACKNOWLEDGE` only; a
+  message leaves its queue the moment a consumer takes it. `CLIENT_ACKNOWLEDGE` and transacted
+  sessions throw `UnsupportedOperationException` until M3.
+- **One broker lock** guards the broker and the delivery-related state of its clients. It is the
+  simplest design that honours `stop()` and `close()`; M6 (listeners) and M12 (benchmarks) decide
+  whether it must be split. Known costs: every state change wakes every waiting receive of the
+  broker, a receive scans its queue from the head past delayed messages, and expired messages
+  are only purged when a started consumer scans the queue.
+- **Brokers live in a static registry** keyed by name and are never removed: a JVM that creates
+  many differently named brokers keeps them all. To be revisited with M11.
+- **Producer hints** `setDisableMessageID` / `setDisableMessageTimestamp` are recorded and
+  ignored: every message gets an ID and a timestamp, which the spec allows.
+- **`QueueSession` restrictions** of §9.2 (topic methods must throw `IllegalStateException`) come
+  with M4, when those methods exist.
 
 ### M3 — Acknowledgement and local transactions
 

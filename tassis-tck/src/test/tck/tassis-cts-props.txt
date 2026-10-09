@@ -1,0 +1,6 @@
+# Properties of the TCK's own harness (com.sun.ts.lib.util.TestUtil), which reads them from
+# ${java.io.tmpdir}/${user.name}-cts-props.txt rather than from the system properties.
+# The build copies this file to target/tck-tmp and points both properties at it.
+porting.ts.jmsObjects.class.1=io.vidocq.tassis.tck.TassisJmsObjects
+platform.mode=standalone
+harness.log.traceflag=false

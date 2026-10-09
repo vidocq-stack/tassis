@@ -8,8 +8,8 @@
 
 ## Status
 
-🚧 **Bootstrap (M0)** — buildable reactor and a connection factory skeleton. No messaging
-feature is implemented yet; see [ROADMAP.md](ROADMAP.md).
+🚧 **M2** — point-to-point messaging on an in-VM queue through the classic API. Topics, transactions,
+selectors, listeners and the simplified API are not implemented yet; see [ROADMAP.md](ROADMAP.md).
 
 ## Ecosystem rules
 

@@ -233,6 +233,17 @@ public final class TassisStreamMessage extends TassisMessage implements StreamMe
     }
 
     @Override
+    TassisMessage newInstance() {
+        return new TassisStreamMessage();
+    }
+
+    @Override
+    void copyBodyTo(TassisMessage target) {
+        // Byte array fields are private copies that are never modified in place.
+        ((TassisStreamMessage) target).fields.addAll(fields);
+    }
+
+    @Override
     public <T> T getBody(Class<T> c) throws JMSException {
         throw new MessageFormatException("getBody is not available on a StreamMessage");
     }
