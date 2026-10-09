@@ -21,32 +21,33 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M3
+## Status — M4
 
-**219 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
-`./mvnw -ntp -Ptck clean install`; the run reports 220 because it also executes `PortingSmokeTest`).
+**458 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
+`./mvnw -ntp -Ptck clean install`; the run reports 459 because it also executes `PortingSmokeTest`).
 
-The selection is 18 packages of `core` (234 tests): the 16 queue packages, `sessiontests` and
-`appclient/txqueuetests`, minus the 15 tests below, which need a later milestone. The list lives
-in the `tck.test` property of `tassis-tck/pom.xml`; a milestone is done when its lines are gone
-from it.
+The selection is 35 packages of `core` (471 tests): every package outside `appclient` except
+`selectorQueue` and `selectorTopic`, plus `appclient/txqueuetests` and `appclient/txtopictests`.
+The 13 tests below are negated in the `tck.test` property of `tassis-tck/pom.xml`; all of them
+need message selectors (M5).
 
-| Milestone | Test | Needs |
-|---|---|---|
-| M4 | `ExceptionQueueTestsIT#xIllegalStateExceptionTestTopicMethodsQ` | topic methods on a `QueueSession` |
-| M4 | `MessageProducerTestsIT#sendTopicTest4`, `#sendTopicTest5`, `#sendTopicTest6` | topics |
-| M4 | `SessionTestsIT#SimpleSendAndReceiveT`, `#SubscriberTests`, `#ackTests`, `#InvalidDestinationTests` | topics |
-| M5 | `ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest` | selector parsing |
-| M5 | `QueueConnectionTestsIT#connNotStartedQueueTest` | selectors |
-| M5 | `QueueTestsIT#queueBrowserMsgsRemainOnQueueTest`, `#messageSelectorMsgRemainsOnQueueTest`, `#msgSelectorMsgHeaderQueueTest` | selectors |
-| M5 | `SessionTestsIT#selectorAndBrowserTests`, `#InvalidSelectorTests` | selectors (the second also needs topics) |
+| Class | Tests |
+|---|---|
+| `ExceptionQueueTestsIT` | `xInvalidSelectorExceptionQueueTest` |
+| `ExceptionTopicTestsIT` | `xInvalidSelectorExceptionTopicTest` |
+| `QueueConnectionTestsIT` | `connNotStartedQueueTest` |
+| `QueueTestsIT` | `queueBrowserMsgsRemainOnQueueTest`, `messageSelectorMsgRemainsOnQueueTest`, `msgSelectorMsgHeaderQueueTest` |
+| `SessionTestsIT` | `selectorAndBrowserTests`, `InvalidSelectorTests`, `SubscriberTests` |
+| `TopicTestsIT` | `consumerTests`, `durableSubscriberChangeSelectorTest`, `durableSubscriberChangeSelectorTest2`, `msgSelectorMsgHeaderTopicTest` |
 
-`appclient/txqueuetests` passing settles one of spike 2's open points for this package: an
-`appclient` package runs as-is in `standalone` mode. The other `appclient` packages are not tried yet.
+Not selected yet: `selectorQueue`, `selectorTopic` (M5), the other 9 `appclient` packages
+(expected with listeners, M6) and all of `core20` (M7).
 
-Not selected yet: the other 24 packages of `core` and all of `core20`.
+History: M2 199 on 16 packages; M3 219 on 18 packages; M4 458 on 35 packages.
 
-History: M2 199 / 199 on 16 packages; M3 re-enabled the 7 tests waiting for it and added 2 packages.
+The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
+`DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite
+never calls `Connection.setClientID` itself in `core`.
 
 ## Deviations from the TCK as published
 
@@ -59,6 +60,18 @@ History: M2 199 / 199 on 16 packages; M3 re-enabled the 7 tests waiting for it a
 `ForeignMsgQueueTestsIT#sendReceiveBytesMsgQueueTest` (and its topic twin) with any provider.
 `common` 11.0.8 assigns the field; `tassis-tck` pins that version. To be revisited when a
 `jms-tck` release declares a fixed `common`.
+
+### Test methods run in alphabetical order (TCK defect)
+
+Some TCK classes only pass for some orders of their tests. In
+`appclient/txtopictests/TxTopicTestsIT`, `transactionRollbackOnPublishTopicTest` creates the
+durable subscription `TxTopicTestSubscription` and never unsubscribes; two other tests of the
+class reuse that name, and assert on the text of the first message they receive. If a test
+publishing another text to the same topic runs in between, they get that stale message, as any
+correct provider must deliver it, and fail with "didn't get the right message". JUnit 5's
+default order produces exactly that sequence; the alphabetical order does not. `tassis-tck`
+sets `junit.jupiter.testmethod.order.default` to `MethodOrderer$MethodName`. No test is
+skipped or altered by it.
 
 ### Harness dependencies excluded
 

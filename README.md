@@ -8,9 +8,9 @@
 
 ## Status
 
-🚧 **M3** — point-to-point messaging on an in-VM queue through the classic API, with acknowledgement modes
-and local transactions. Topics, selectors, listeners and the simplified API are not implemented yet; see
-[ROADMAP.md](ROADMAP.md).
+🚧 **M4** — queues and topics on an in-VM broker through the classic API: acknowledgement modes, local
+transactions, durable and shared subscriptions. Selectors, listeners and the simplified API are not
+implemented yet; see [ROADMAP.md](ROADMAP.md).
 
 ## Ecosystem rules
 

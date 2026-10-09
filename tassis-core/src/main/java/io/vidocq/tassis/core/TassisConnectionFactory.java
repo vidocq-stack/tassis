@@ -20,12 +20,16 @@
 package io.vidocq.tassis.core;
 
 import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.client.Domain;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.JMSContext;
+import jakarta.jms.JMSException;
 import jakarta.jms.QueueConnection;
 import jakarta.jms.QueueConnectionFactory;
+import jakarta.jms.TopicConnection;
+import jakarta.jms.TopicConnectionFactory;
 import java.util.Objects;
 
 /**
@@ -35,44 +39,73 @@ import java.util.Objects;
  *
  * <p>A broker is identified by its name within the JVM: factories created with
  * the same name connect to the same broker, which is created on first use.
+ *
+ * <p>The in-VM broker has no user registry: the methods taking a user name and a
+ * password accept any (§6.1.1 leaves authentication to the provider).
  */
-public final class TassisConnectionFactory implements ConnectionFactory, QueueConnectionFactory {
+public final class TassisConnectionFactory
+        implements ConnectionFactory, QueueConnectionFactory, TopicConnectionFactory {
 
     /** Name of the broker the no-argument constructor connects to. */
     public static final String DEFAULT_BROKER = "default";
 
     private final String brokerName;
+    private final String clientId;
 
     public TassisConnectionFactory() {
         this(DEFAULT_BROKER);
     }
 
     public TassisConnectionFactory(String brokerName) {
-        this.brokerName = Objects.requireNonNull(brokerName, "brokerName");
+        this(brokerName, null);
     }
 
-    @Override
-    public Connection createConnection() {
-        return new TassisConnection(Broker.named(brokerName));
+    private TassisConnectionFactory(String brokerName, String clientId) {
+        this.brokerName = Objects.requireNonNull(brokerName, "brokerName");
+        this.clientId = clientId;
     }
 
     /**
-     * The in-VM broker has no user registry: any user name and password are
-     * accepted (§6.1.1 leaves authentication to the provider).
+     * Returns a factory for the same broker whose connections are created with this client
+     * identifier, the preferred way to assign one (§6.1.2). Such a connection rejects
+     * {@code setClientID}, and only one of them can be open at a time.
      */
-    @Override
-    public Connection createConnection(String userName, String password) {
-        return createConnection();
+    public TassisConnectionFactory withClientID(String clientId) {
+        return new TassisConnectionFactory(brokerName, Objects.requireNonNull(clientId, "clientId"));
+    }
+
+    private TassisConnection connect(Domain domain) throws JMSException {
+        return new TassisConnection(Broker.named(brokerName), domain, clientId);
     }
 
     @Override
-    public QueueConnection createQueueConnection() {
-        return new TassisConnection(Broker.named(brokerName));
+    public Connection createConnection() throws JMSException {
+        return connect(Domain.UNIFIED);
     }
 
     @Override
-    public QueueConnection createQueueConnection(String userName, String password) {
-        return createQueueConnection();
+    public Connection createConnection(String userName, String password) throws JMSException {
+        return connect(Domain.UNIFIED);
+    }
+
+    @Override
+    public QueueConnection createQueueConnection() throws JMSException {
+        return connect(Domain.QUEUE);
+    }
+
+    @Override
+    public QueueConnection createQueueConnection(String userName, String password) throws JMSException {
+        return connect(Domain.QUEUE);
+    }
+
+    @Override
+    public TopicConnection createTopicConnection() throws JMSException {
+        return connect(Domain.TOPIC);
+    }
+
+    @Override
+    public TopicConnection createTopicConnection(String userName, String password) throws JMSException {
+        return connect(Domain.TOPIC);
     }
 
     @Override

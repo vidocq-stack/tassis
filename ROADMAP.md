@@ -202,12 +202,37 @@ Choices and limits:
   redelivered for ever. Neither is in the spec.
 - **A redelivered message is immediately available**: there is no redelivery delay.
 
-### M4 — Publish/subscribe
+### M4 — Publish/subscribe ✅
 
-Topics, non-durable, durable and shared subscriptions (§4.2), `noLocal`, client identifier
-(§6.1.2) including a **client ID preconfigured on the connection factory**, `unsubscribe`,
-temporary topics. Includes the **legacy topic API** (`TopicConnectionFactory`, `TopicSession`,
-`TopicPublisher`, `TopicSubscriber`).
+- [x] Topics (`TassisTopic`); a queue and a topic of the same name are two destinations
+- [x] The four kinds of subscription (§8.3): unshared non-durable, shared non-durable, unshared
+      durable, shared durable, with their creation, reuse, replacement and conflict rules
+- [x] `noLocal`, `unsubscribe`, temporary topics (§6.2.2)
+- [x] Client identifier (§6.1.2): `setClientID` before any other use, unique among open
+      connections, or assigned by `TassisConnectionFactory.withClientID`
+- [x] Legacy topic API (§2.9) and the domain restrictions of §9.2 on `QueueSession`,
+      `TopicSession` and `QueueConnection`
+
+**Deliverable:** `PublishSubscribeTest` (23 tests, 124 unit tests in all) and **458 / 458** on the
+TCK selection, now 35 packages (see `TCK.md`).
+
+How it works: the broker keeps messages in a `Storage`, one per queue and one per subscription.
+Publishing to a topic adds the message to the storage of each of its subscriptions; from there
+a subscription behaves like a queue, so receive, acknowledgement, transactions and redelivery
+are the code of M2 and M3 unchanged.
+
+Choices and limits:
+
+- **A topic with no subscription drops what is published to it**, which is the pub/sub model.
+- **Durable subscriptions live in the broker's memory**: they survive connections, not the JVM.
+  Durability across restarts is M10.
+- **`noLocal` compares client identifiers** when the connection has one, the connection object
+  otherwise, so that a durable `noLocal` subscription keeps ignoring its owner after a reconnect.
+- **`setClientID` is too late** after `createSession`, `start`, `stop`, `getMetaData` or the
+  exception listener accessors; `getClientID` does not count as a use.
+- **Subscription sameness** is topic and `noLocal` for now; M5 adds the selector to it.
+- **TCK run order.** `tassis-tck` runs test methods alphabetically because one TCK class is
+  order-dependent (see `TCK.md`).
 
 ### M5 — Message selectors
 

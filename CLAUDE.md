@@ -43,7 +43,8 @@ provider, it ships its own broker: in-VM today, network transport later (ROADMAP
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
-tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue),
+tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
+                     TassisTopic),
                      internal.message (M1), internal.broker and internal.client (M2)
 tassis-cdi-vauban  ← Placeholder — JMSContext injection (M9)
 tassis-bench       ← Placeholder — JMH (M12)
@@ -84,11 +85,15 @@ message in the state a consumer sees it in (properties and body read-only, body 
 
 ## Broker and client (`internal.broker`, `internal.client`)
 
-`Broker` is the in-VM broker, one per name per JVM (`Broker.named`). A single lock guards its
-queues **and** the delivery-related state of its clients (connection started, consumer closed):
+`Broker` is the in-VM broker, one per name per JVM (`Broker.named`). Messages wait in a
+`Storage`: one per queue, one per topic subscription. Publishing to a topic adds the message to
+each subscription's storage, after which a subscription behaves exactly like a queue. A single
+lock guards the broker **and** the delivery-related state of its clients (connection started,
+consumer closed):
 change such state only through `Broker.update(...)`, which also wakes the waiting receives. A
 send hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
-`Destinations.queue(...)` is the one place that decides which `Destination` objects are ours.
+`Destinations.resolve(...)` is the one place that decides which `Destination` objects are ours.
+The subscription rules of §8.3 (reuse, replacement, conflicts) are all in `Broker.named`.
 
 `Broker.receive` returns a `Delivery`; from then on the consumer's **session owns it** and must
 either settle it (commit, acknowledge, or automatic acknowledgement on delivery) or hand it back

@@ -20,6 +20,7 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.TassisQueue;
+import io.vidocq.tassis.core.TassisTopic;
 import io.vidocq.tassis.core.internal.broker.Broker;
 import io.vidocq.tassis.core.internal.message.TassisBytesMessage;
 import io.vidocq.tassis.core.internal.message.TassisMapMessage;
@@ -47,6 +48,8 @@ import jakarta.jms.TemporaryQueue;
 import jakarta.jms.TemporaryTopic;
 import jakarta.jms.TextMessage;
 import jakarta.jms.Topic;
+import jakarta.jms.TopicPublisher;
+import jakarta.jms.TopicSession;
 import jakarta.jms.TopicSubscriber;
 import jakarta.jms.TransactionRolledBackException;
 import java.io.Serializable;
@@ -64,11 +67,12 @@ import java.util.concurrent.locks.ReentrantLock;
  * session. It settles them (commit, acknowledge) or gives them back to the broker (rollback,
  * recover, close). An automatically acknowledged session settles on delivery and owns nothing.
  */
-public final class TassisSession implements QueueSession {
+public final class TassisSession implements QueueSession, TopicSession {
 
     private final TassisConnection connection;
     private final int acknowledgeMode;
     private final boolean transacted;
+    private final Domain domain;
     private final List<SessionChild> children = new CopyOnWriteArrayList<>();
     // Guards the two lists below, which the session's thread and a concurrent close() both touch.
     private final ReentrantLock work = new ReentrantLock();
@@ -76,8 +80,9 @@ public final class TassisSession implements QueueSession {
     private final List<Broker.Outgoing> uncommittedSends = new ArrayList<>();
     private volatile boolean closed;
 
-    TassisSession(TassisConnection connection, int acknowledgeMode) {
+    TassisSession(TassisConnection connection, int acknowledgeMode, Domain domain) {
         this.connection = connection;
+        this.domain = domain;
         this.acknowledgeMode = acknowledgeMode;
         this.transacted = acknowledgeMode == SESSION_TRANSACTED;
     }
@@ -312,7 +317,10 @@ public final class TassisSession implements QueueSession {
     @Override
     public MessageProducer createProducer(Destination destination) throws JMSException {
         checkOpen();
-        return register(new TassisMessageProducer(this, destination == null ? null : Destinations.queue(destination)));
+        if (destination != null) {
+            Destinations.resolve(destination);
+        }
+        return register(new TassisMessageProducer(this, destination));
     }
 
     @Override
@@ -321,36 +329,60 @@ public final class TassisSession implements QueueSession {
     }
 
     @Override
+    public TopicPublisher createPublisher(Topic topic) throws JMSException {
+        return (TopicPublisher) createProducer(topic);
+    }
+
+    @Override
     public MessageConsumer createConsumer(Destination destination) throws JMSException {
-        return createConsumer(destination, null);
+        return createConsumer(destination, null, false);
     }
 
     @Override
     public MessageConsumer createConsumer(Destination destination, String messageSelector) throws JMSException {
-        checkOpen();
-        Queue queue = Destinations.queue(destination);
-        checkNoSelector(messageSelector);
-        if (queue instanceof TassisTemporaryQueue temporary && temporary.owner() != connection) {
-            throw new JMSException("temporary queue " + temporary + " belongs to another connection");
-        }
-        return register(new TassisMessageConsumer(this, queue));
+        return createConsumer(destination, messageSelector, false);
     }
 
-    /** {@code noLocal} only applies to topics (§8.3.1): it is ignored on a queue. */
+    /** On a queue {@code noLocal} is ignored: it only applies to topics (§8.3.1). */
     @Override
     public MessageConsumer createConsumer(Destination destination, String messageSelector, boolean noLocal)
             throws JMSException {
-        return createConsumer(destination, messageSelector);
+        checkOpen();
+        Destinations.Address address = Destinations.resolve(destination);
+        checkNoSelector(messageSelector);
+        if (address.temporary() && address.owner() != connection) {
+            throw new JMSException("temporary destination " + destination + " belongs to another connection");
+        }
+        if (address.topic()) {
+            return subscribe(destination, address, null, false, false, noLocal);
+        }
+        return register(new TassisMessageConsumer(this, destination, false,
+                broker().attach(address.name(), address.temporary(), connection::isStarted)));
     }
 
     @Override
     public QueueReceiver createReceiver(Queue queue) throws JMSException {
-        return (QueueReceiver) createConsumer(queue, null);
+        return createReceiver(queue, null);
     }
 
     @Override
     public QueueReceiver createReceiver(Queue queue, String messageSelector) throws JMSException {
-        return (QueueReceiver) createConsumer(queue, messageSelector);
+        checkOpen();
+        Destinations.queue(queue);
+        return (QueueReceiver) createConsumer(queue, messageSelector, false);
+    }
+
+    @Override
+    public TopicSubscriber createSubscriber(Topic topic) throws JMSException {
+        return createSubscriber(topic, null, false);
+    }
+
+    @Override
+    public TopicSubscriber createSubscriber(Topic topic, String messageSelector, boolean noLocal)
+            throws JMSException {
+        checkOpen();
+        Destinations.topic(topic);
+        return (TopicSubscriber) createConsumer(topic, messageSelector, noLocal);
     }
 
     @Override
@@ -361,9 +393,10 @@ public final class TassisSession implements QueueSession {
     @Override
     public QueueBrowser createBrowser(Queue queue, String messageSelector) throws JMSException {
         checkOpen();
-        Queue browsed = Destinations.queue(queue);
+        notForA(Domain.TOPIC, "createBrowser");
+        Destinations.queue(queue);
         checkNoSelector(messageSelector);
-        return register(new TassisQueueBrowser(this, browsed));
+        return register(new TassisQueueBrowser(this, queue));
     }
 
     /**
@@ -385,11 +418,100 @@ public final class TassisSession implements QueueSession {
         }
     }
 
+    /** §9.2: a domain-specific session rejects the inherited methods of the other domain. */
+    private void notForA(Domain other, String method) throws IllegalStateException {
+        if (domain == other) {
+            throw new IllegalStateException(
+                    method + " is not available on a " + (other == Domain.QUEUE ? "QueueSession" : "TopicSession"));
+        }
+    }
+
+    // ---- subscriptions (§8.3) -------------------------------------------
+
+    private TassisMessageConsumer subscribe(Destination topic, Destinations.Address address, String name,
+            boolean durable, boolean shared, boolean noLocal) throws JMSException {
+        Broker.Subscribing request = new Broker.Subscribing(address.name(), address.temporary(), name, durable,
+                shared, connection.clientId(), noLocal, connection.localIdentity());
+        return register(new TassisMessageConsumer(this, topic, noLocal,
+                broker().subscribe(request, connection::isStarted)));
+    }
+
+    private TassisMessageConsumer subscribeByName(String method, Topic topic, String name, String messageSelector,
+            boolean durable, boolean shared, boolean noLocal) throws JMSException {
+        checkOpen();
+        notForA(Domain.QUEUE, method);
+        Destinations.Address address = Destinations.topic(topic);
+        checkNoSelector(messageSelector);
+        if (name == null || name.isEmpty()) {
+            throw new JMSException("a subscription name must not be null or empty");
+        }
+        if (durable && !shared && connection.clientId() == null) {
+            throw new IllegalStateException("an unshared durable subscription needs a client identifier");
+        }
+        if (address.temporary() && address.owner() != connection) {
+            throw new JMSException("temporary topic " + topic + " belongs to another connection");
+        }
+        return subscribe(topic, address, name, durable, shared, noLocal);
+    }
+
+    @Override
+    public TopicSubscriber createDurableSubscriber(Topic topic, String name) throws JMSException {
+        return subscribeByName("createDurableSubscriber", topic, name, null, true, false, false);
+    }
+
+    @Override
+    public TopicSubscriber createDurableSubscriber(Topic topic, String name, String messageSelector,
+            boolean noLocal) throws JMSException {
+        return subscribeByName("createDurableSubscriber", topic, name, messageSelector, true, false, noLocal);
+    }
+
+    @Override
+    public MessageConsumer createDurableConsumer(Topic topic, String name) throws JMSException {
+        return subscribeByName("createDurableConsumer", topic, name, null, true, false, false);
+    }
+
+    @Override
+    public MessageConsumer createDurableConsumer(Topic topic, String name, String messageSelector,
+            boolean noLocal) throws JMSException {
+        return subscribeByName("createDurableConsumer", topic, name, messageSelector, true, false, noLocal);
+    }
+
+    @Override
+    public MessageConsumer createSharedConsumer(Topic topic, String sharedSubscriptionName) throws JMSException {
+        return subscribeByName("createSharedConsumer", topic, sharedSubscriptionName, null, false, true, false);
+    }
+
+    @Override
+    public MessageConsumer createSharedConsumer(Topic topic, String sharedSubscriptionName, String messageSelector)
+            throws JMSException {
+        return subscribeByName("createSharedConsumer", topic, sharedSubscriptionName, messageSelector, false, true,
+                false);
+    }
+
+    @Override
+    public MessageConsumer createSharedDurableConsumer(Topic topic, String name) throws JMSException {
+        return subscribeByName("createSharedDurableConsumer", topic, name, null, true, true, false);
+    }
+
+    @Override
+    public MessageConsumer createSharedDurableConsumer(Topic topic, String name, String messageSelector)
+            throws JMSException {
+        return subscribeByName("createSharedDurableConsumer", topic, name, messageSelector, true, true, false);
+    }
+
+    @Override
+    public void unsubscribe(String name) throws JMSException {
+        checkOpen();
+        notForA(Domain.QUEUE, "unsubscribe");
+        broker().unsubscribe(connection.clientId(), name);
+    }
+
     // ---- destinations --------------------------------------------------
 
     @Override
     public Queue createQueue(String queueName) throws JMSException {
         checkOpen();
+        notForA(Domain.TOPIC, "createQueue");
         if (queueName == null || queueName.isEmpty()) {
             throw new JMSException("a queue name must not be null or empty");
         }
@@ -397,68 +519,27 @@ public final class TassisSession implements QueueSession {
     }
 
     @Override
+    public Topic createTopic(String topicName) throws JMSException {
+        checkOpen();
+        notForA(Domain.QUEUE, "createTopic");
+        if (topicName == null || topicName.isEmpty()) {
+            throw new JMSException("a topic name must not be null or empty");
+        }
+        return new TassisTopic(topicName);
+    }
+
+    @Override
     public TemporaryQueue createTemporaryQueue() throws JMSException {
         checkOpen();
+        notForA(Domain.TOPIC, "createTemporaryQueue");
         return connection.createTemporaryQueue();
     }
 
-    // ---- publish/subscribe: ROADMAP M4 ---------------------------------
-
     @Override
-    public Topic createTopic(String topicName) {
-        throw new UnsupportedOperationException("createTopic: see ROADMAP M4");
-    }
-
-    @Override
-    public TemporaryTopic createTemporaryTopic() {
-        throw new UnsupportedOperationException("createTemporaryTopic: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createSharedConsumer(Topic topic, String sharedSubscriptionName) {
-        throw new UnsupportedOperationException("createSharedConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createSharedConsumer(Topic topic, String sharedSubscriptionName, String messageSelector) {
-        throw new UnsupportedOperationException("createSharedConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public TopicSubscriber createDurableSubscriber(Topic topic, String name) {
-        throw new UnsupportedOperationException("createDurableSubscriber: see ROADMAP M4");
-    }
-
-    @Override
-    public TopicSubscriber createDurableSubscriber(Topic topic, String name, String messageSelector,
-            boolean noLocal) {
-        throw new UnsupportedOperationException("createDurableSubscriber: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createDurableConsumer(Topic topic, String name) {
-        throw new UnsupportedOperationException("createDurableConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createDurableConsumer(Topic topic, String name, String messageSelector,
-            boolean noLocal) {
-        throw new UnsupportedOperationException("createDurableConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createSharedDurableConsumer(Topic topic, String name) {
-        throw new UnsupportedOperationException("createSharedDurableConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public MessageConsumer createSharedDurableConsumer(Topic topic, String name, String messageSelector) {
-        throw new UnsupportedOperationException("createSharedDurableConsumer: see ROADMAP M4");
-    }
-
-    @Override
-    public void unsubscribe(String name) {
-        throw new UnsupportedOperationException("unsubscribe: see ROADMAP M4");
+    public TemporaryTopic createTemporaryTopic() throws JMSException {
+        checkOpen();
+        notForA(Domain.QUEUE, "createTemporaryTopic");
+        return connection.createTemporaryTopic();
     }
 
     // ---- application server facilities: optional (§11) -----------------

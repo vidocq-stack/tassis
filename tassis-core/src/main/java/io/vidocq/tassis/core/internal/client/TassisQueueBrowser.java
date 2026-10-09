@@ -60,7 +60,7 @@ final class TassisQueueBrowser implements QueueBrowser, SessionChild {
     @Override
     public Enumeration<?> getEnumeration() throws JMSException {
         checkOpen();
-        return Collections.enumeration(session.broker().browse(Destinations.name(queue)));
+        return Collections.enumeration(session.broker().browse(Destinations.queue(queue).name()));
     }
 
     @Override

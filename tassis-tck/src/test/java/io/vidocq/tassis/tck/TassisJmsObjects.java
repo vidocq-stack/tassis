@@ -22,6 +22,7 @@ package io.vidocq.tassis.tck;
 import com.sun.ts.lib.porting.TSJMSObjectsInterface;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.tassis.core.TassisQueue;
+import io.vidocq.tassis.core.TassisTopic;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.Queue;
 import jakarta.jms.QueueConnectionFactory;
@@ -30,11 +31,19 @@ import jakarta.jms.TopicConnectionFactory;
 
 /**
  * The TCK's porting class: hands the test suite the administered objects it asks
- * for by name. Selected by the system property {@code porting.ts.jmsObjects.class.1}.
- * Every factory connects to the default in-VM broker, and a queue is whatever name
- * the TCK asks for, since Tassis creates queues on first use.
+ * for by name. Selected by the property {@code porting.ts.jmsObjects.class.1} of the
+ * harness. Every factory connects to the default in-VM broker, and a destination is
+ * whatever name the TCK asks for, since Tassis creates destinations on first use.
  */
 public final class TassisJmsObjects implements TSJMSObjectsInterface {
+
+    /** The factory the TCK expects to come with a client identifier, for durable subscriptions. */
+    private static final String DURABLE_FACTORY = "DURABLE_SUB_CONNECTION_FACTORY";
+
+    private static TassisConnectionFactory factory(String name) {
+        TassisConnectionFactory factory = new TassisConnectionFactory();
+        return DURABLE_FACTORY.equals(name) ? factory.withClientID("cts") : factory;
+    }
 
     @Override
     public Queue getQueue(String name) {
@@ -43,21 +52,21 @@ public final class TassisJmsObjects implements TSJMSObjectsInterface {
 
     @Override
     public Topic getTopic(String name) {
-        throw new UnsupportedOperationException("topics: see ROADMAP M4");
+        return new TassisTopic(name);
     }
 
     @Override
     public TopicConnectionFactory getTopicConnectionFactory(String name) {
-        throw new UnsupportedOperationException("topics: see ROADMAP M4");
+        return factory(name);
     }
 
     @Override
     public QueueConnectionFactory getQueueConnectionFactory(String name) {
-        return new TassisConnectionFactory();
+        return factory(name);
     }
 
     @Override
     public ConnectionFactory getConnectionFactory(String name) {
-        return new TassisConnectionFactory();
+        return factory(name);
     }
 }

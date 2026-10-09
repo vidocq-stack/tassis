@@ -20,27 +20,35 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.internal.broker.Broker;
+import jakarta.jms.Destination;
 import jakarta.jms.IllegalStateException;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.MessageListener;
 import jakarta.jms.Queue;
 import jakarta.jms.QueueReceiver;
+import jakarta.jms.Topic;
+import jakarta.jms.TopicSubscriber;
 import java.util.concurrent.TimeUnit;
 
-/** Receives the messages of a queue, synchronously (Jakarta Messaging 3.1 §8). */
-final class TassisMessageConsumer implements QueueReceiver, SessionChild {
+/**
+ * Receives the messages of a queue or of a topic subscription, synchronously
+ * (Jakarta Messaging 3.1 §8).
+ */
+final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, SessionChild {
 
     private final TassisSession session;
-    private final Queue queue;
-    private final Broker.QueueConsumer attachment;
+    private final Destination destination;
+    private final boolean noLocal;
+    private final Broker.Consumer attachment;
     private volatile boolean closed;
 
-    TassisMessageConsumer(TassisSession session, Queue queue) throws JMSException {
+    TassisMessageConsumer(TassisSession session, Destination destination, boolean noLocal,
+            Broker.Consumer attachment) {
         this.session = session;
-        this.queue = queue;
-        this.attachment = session.broker().attach(Destinations.name(queue), Destinations.isTemporary(queue),
-                session.connection()::isStarted);
+        this.destination = destination;
+        this.noLocal = noLocal;
+        this.attachment = attachment;
     }
 
     private void checkOpen() throws IllegalStateException {
@@ -52,7 +60,19 @@ final class TassisMessageConsumer implements QueueReceiver, SessionChild {
     @Override
     public Queue getQueue() throws JMSException {
         checkOpen();
-        return queue;
+        return destination instanceof Queue queue ? queue : null;
+    }
+
+    @Override
+    public Topic getTopic() throws JMSException {
+        checkOpen();
+        return destination instanceof Topic topic ? topic : null;
+    }
+
+    @Override
+    public boolean getNoLocal() throws JMSException {
+        checkOpen();
+        return noLocal;
     }
 
     @Override

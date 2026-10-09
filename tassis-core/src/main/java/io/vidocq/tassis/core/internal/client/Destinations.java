@@ -20,45 +20,72 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.TassisQueue;
+import io.vidocq.tassis.core.TassisTopic;
 import jakarta.jms.Destination;
 import jakarta.jms.InvalidDestinationException;
 import jakarta.jms.Queue;
+import jakarta.jms.Topic;
 
-/** Checks the destinations a client hands to the provider. */
+/** The one place that decides which {@code Destination} objects are ours, and what they name. */
 final class Destinations {
+
+    /**
+     * A destination as the broker knows it.
+     *
+     * @param owner the connection a temporary destination belongs to, {@code null} otherwise
+     */
+    record Address(String name, boolean topic, TassisConnection owner) {
+
+        boolean temporary() {
+            return owner != null;
+        }
+    }
 
     private Destinations() {
     }
 
     /**
-     * Returns {@code destination} as a queue of this provider.
+     * Returns what {@code destination} names in the broker.
      *
-     * @throws InvalidDestinationException if it is null, deleted, or not a Tassis queue
+     * @throws InvalidDestinationException if it is null, deleted, or not a Tassis destination
      */
-    static Queue queue(Destination destination) throws InvalidDestinationException {
+    static Address resolve(Destination destination) throws InvalidDestinationException {
         return switch (destination) {
             case null -> throw new InvalidDestinationException("the destination is null");
-            case TassisQueue queue -> queue;
+            case TassisQueue queue -> new Address(queue.getQueueName(), false, null);
+            case TassisTopic topic -> new Address(topic.getTopicName(), true, null);
             case TassisTemporaryQueue temporary -> {
                 if (temporary.isDeleted()) {
                     throw new InvalidDestinationException("temporary queue " + temporary + " has been deleted");
                 }
-                yield temporary;
+                yield new Address(temporary.getQueueName(), false, temporary.owner());
+            }
+            case TassisTemporaryTopic temporary -> {
+                if (temporary.isDeleted()) {
+                    throw new InvalidDestinationException("temporary topic " + temporary + " has been deleted");
+                }
+                yield new Address(temporary.getTopicName(), true, temporary.owner());
             }
             default -> throw new InvalidDestinationException(
-                    destination.getClass().getName() + " is not a Tassis queue (topics: see ROADMAP M4)");
+                    destination.getClass().getName() + " is not a Tassis destination");
         };
     }
 
-    /** Returns whether a queue {@link #queue} has accepted is a temporary one. */
-    static boolean isTemporary(Queue queue) {
-        return queue instanceof TassisTemporaryQueue;
+    /** Like {@link #resolve}, for a method that only takes a queue. */
+    static Address queue(Queue queue) throws InvalidDestinationException {
+        Address address = resolve(queue);
+        if (address.topic()) {
+            throw new InvalidDestinationException(queue + " is a topic");
+        }
+        return address;
     }
 
-    /** Returns the broker-side name of a queue {@link #queue} has accepted. */
-    static String name(Queue queue) {
-        return queue instanceof TassisQueue named
-                ? named.getQueueName()
-                : ((TassisTemporaryQueue) queue).getQueueName();
+    /** Like {@link #resolve}, for a method that only takes a topic. */
+    static Address topic(Topic topic) throws InvalidDestinationException {
+        Address address = resolve(topic);
+        if (!address.topic()) {
+            throw new InvalidDestinationException(topic + " is a queue");
+        }
+        return address;
     }
 }

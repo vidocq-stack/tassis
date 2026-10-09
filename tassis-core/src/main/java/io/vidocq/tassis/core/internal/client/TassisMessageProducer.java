@@ -30,16 +30,18 @@ import jakarta.jms.Message;
 import jakarta.jms.MessageFormatException;
 import jakarta.jms.Queue;
 import jakarta.jms.QueueSender;
+import jakarta.jms.Topic;
+import jakarta.jms.TopicPublisher;
 
 /**
- * Sends messages to a queue (Jakarta Messaging 3.1 §7). Created with a
- * destination, it sends there only; created without one, each send names its
- * destination.
+ * Sends messages to a queue or publishes them to a topic (Jakarta Messaging 3.1
+ * §7). Created with a destination, it sends there only; created without one,
+ * each send names its destination.
  */
-final class TassisMessageProducer implements QueueSender, SessionChild {
+final class TassisMessageProducer implements QueueSender, TopicPublisher, SessionChild {
 
     private final TassisSession session;
-    private final Queue queue;
+    private final Destination destination;
     private volatile boolean closed;
     private boolean disableMessageId;
     private boolean disableMessageTimestamp;
@@ -48,9 +50,9 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
     private long timeToLive = Message.DEFAULT_TIME_TO_LIVE;
     private long deliveryDelay = Message.DEFAULT_DELIVERY_DELAY;
 
-    TassisMessageProducer(TassisSession session, Queue queue) {
+    TassisMessageProducer(TassisSession session, Destination destination) {
         this.session = session;
-        this.queue = queue;
+        this.destination = destination;
     }
 
     private void checkOpen() throws IllegalStateException {
@@ -138,13 +140,19 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
     @Override
     public Destination getDestination() throws JMSException {
         checkOpen();
-        return queue;
+        return destination;
     }
 
     @Override
     public Queue getQueue() throws JMSException {
         checkOpen();
-        return queue;
+        return destination instanceof Queue queue ? queue : null;
+    }
+
+    @Override
+    public Topic getTopic() throws JMSException {
+        checkOpen();
+        return destination instanceof Topic topic ? topic : null;
     }
 
     @Override
@@ -161,10 +169,10 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
     @Override
     public void send(Message message, int deliveryMode, int priority, long timeToLive) throws JMSException {
         checkOpen();
-        if (queue == null) {
+        if (destination == null) {
             throw new UnsupportedOperationException("this producer has no destination: name one on each send");
         }
-        deliver(queue, message, deliveryMode, priority, timeToLive);
+        deliver(destination, message, deliveryMode, priority, timeToLive);
     }
 
     @Override
@@ -176,10 +184,10 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
     public void send(Destination destination, Message message, int deliveryMode, int priority, long timeToLive)
             throws JMSException {
         checkOpen();
-        if (queue != null) {
-            throw new UnsupportedOperationException("this producer is bound to " + queue);
+        if (this.destination != null) {
+            throw new UnsupportedOperationException("this producer is bound to " + this.destination);
         }
-        deliver(Destinations.queue(destination), message, deliveryMode, priority, timeToLive);
+        deliver(destination, message, deliveryMode, priority, timeToLive);
     }
 
     @Override
@@ -193,12 +201,33 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
         send((Destination) queue, message, deliveryMode, priority, timeToLive);
     }
 
-    private void deliver(Queue target, Message message, int deliveryMode, int priority, long timeToLive)
+    @Override
+    public void publish(Message message) throws JMSException {
+        send(message);
+    }
+
+    @Override
+    public void publish(Message message, int deliveryMode, int priority, long timeToLive) throws JMSException {
+        send(message, deliveryMode, priority, timeToLive);
+    }
+
+    @Override
+    public void publish(Topic topic, Message message) throws JMSException {
+        send((Destination) topic, message);
+    }
+
+    @Override
+    public void publish(Topic topic, Message message, int deliveryMode, int priority, long timeToLive)
+            throws JMSException {
+        send((Destination) topic, message, deliveryMode, priority, timeToLive);
+    }
+
+    private void deliver(Destination target, Message message, int deliveryMode, int priority, long timeToLive)
             throws JMSException {
         if (message == null) {
             throw new MessageFormatException("the message is null");
         }
-        Destinations.queue(target);
+        Destinations.Address address = Destinations.resolve(target);
         checkDeliveryMode(deliveryMode);
         checkPriority(priority);
         long now = System.currentTimeMillis();
@@ -210,8 +239,8 @@ final class TassisMessageProducer implements QueueSender, SessionChild {
         message.setJMSExpiration(timeToLive == 0 ? 0 : now + timeToLive);
         message.setJMSDeliveryTime(now + deliveryDelay);
         message.setJMSMessageID(session.broker().nextMessageId());
-        session.send(new Broker.Outgoing(Destinations.name(target), Destinations.isTemporary(target),
-                Messages.snapshot(message)));
+        session.send(new Broker.Outgoing(address.name(), address.topic(), address.temporary(),
+                session.connection().localIdentity(), Messages.snapshot(message)));
     }
 
     private static void checkDeliveryMode(int deliveryMode) throws JMSException {

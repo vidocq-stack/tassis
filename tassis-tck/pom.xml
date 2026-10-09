@@ -70,15 +70,23 @@
             **/core/messageProducer/*IT,
             **/core/sessiontests/*IT,
             **/core/appclient/txqueuetests/*IT,
-            <!-- M4: topics -->
-            !ExceptionQueueTestsIT#xIllegalStateExceptionTestTopicMethodsQ,
-            !MessageProducerTestsIT#sendTopicTest4,
-            !MessageProducerTestsIT#sendTopicTest5,
-            !MessageProducerTestsIT#sendTopicTest6,
-            !SessionTestsIT#SimpleSendAndReceiveT,
-            !SessionTestsIT#SubscriberTests,
-            !SessionTestsIT#ackTests,
-            !SessionTestsIT#InvalidDestinationTests,
+            **/core/topictests/*IT,
+            **/core/bytesMsgTopic/*IT,
+            **/core/mapMsgTopic/*IT,
+            **/core/streamMsgTopic/*IT,
+            **/core/objectMsgTopic/*IT,
+            **/core/messageTopic/*IT,
+            **/core/topicMsgHeaders/*IT,
+            **/core/topicMsgProperties/*IT,
+            **/core/foreignMsgTopic/*IT,
+            **/core/topicConnection/*IT,
+            **/core/closedTopicConnection/*IT,
+            **/core/closedTopicPublisher/*IT,
+            **/core/closedTopicSession/*IT,
+            **/core/closedTopicSubscriber/*IT,
+            **/core/exceptionTopic/*IT,
+            **/core/exceptiontests/*IT,
+            **/core/appclient/txtopictests/*IT,
             <!-- M5: message selectors -->
             !ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest,
             !QueueConnectionTestsIT#connNotStartedQueueTest,
@@ -86,7 +94,13 @@
             !QueueTestsIT#messageSelectorMsgRemainsOnQueueTest,
             !QueueTestsIT#msgSelectorMsgHeaderQueueTest,
             !SessionTestsIT#selectorAndBrowserTests,
-            !SessionTestsIT#InvalidSelectorTests
+            !SessionTestsIT#InvalidSelectorTests,
+            !SessionTestsIT#SubscriberTests,
+            !ExceptionTopicTestsIT#xInvalidSelectorExceptionTopicTest,
+            !TopicTestsIT#consumerTests,
+            !TopicTestsIT#durableSubscriberChangeSelectorTest,
+            !TopicTestsIT#durableSubscriberChangeSelectorTest2,
+            !TopicTestsIT#msgSelectorMsgHeaderTopicTest
         </tck.test>
     </properties>
 
@@ -169,6 +183,16 @@
                         <dependency>jakarta.tck:jms-tck</dependency>
                     </dependenciesToScan>
                     <test>${tck.test}</test>
+                    <!--
+                        Some TCK classes depend on the order of their tests: one test leaves a
+                        durable subscription behind and a later one reuses its name. JUnit's
+                        default order trips over it, the alphabetical one does not. See TCK.md.
+                    -->
+                    <properties>
+                        <configurationParameters>
+                            junit.jupiter.testmethod.order.default = org.junit.jupiter.api.MethodOrderer$MethodName
+                        </configurationParameters>
+                    </properties>
                     <systemPropertyVariables>
                         <!-- Where the TCK harness looks for its property file: see src/test/tck. -->
                         <java.io.tmpdir>${project.build.directory}/tck-tmp</java.io.tmpdir>
