@@ -1,0 +1,62 @@
+name: CI
+
+# Post-merge flow (push on main). Common steps come from the Vidocq/ci composite actions.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: vidocq-runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Vidocq/ci action (Forgejo mirror, basic-auth)
+        shell: bash
+        env:
+          MIRROR_URL:  ${{ secrets.MIRROR_ASD_URL }}
+          MIRROR_USER: ${{ secrets.MIRROR_ASD_USER }}
+          MIRROR_PASS: ${{ secrets.MIRROR_ASD_PASSWORD }}
+        run: |
+          set -euo pipefail
+          enc_pass=$(python3 -c "import os,urllib.parse;print(urllib.parse.quote(os.environ['MIRROR_PASS'], safe=''))")
+          host="${MIRROR_URL#https://}"; host="${host#http://}"; host="${host%/}"
+          git clone --depth=1 --branch main \
+            "https://${MIRROR_USER}:${enc_pass}@${host}/Vidocq/ci.git" \
+            .ci-action
+
+      - uses: ./.ci-action/setup-maven
+
+      - name: Build & test
+        run: mvn -B -ntp -U verify
+
+      - name: Deploy to Maven Central
+        uses: ./.ci-action/deploy-maven
+        with:
+          central-username: ${{ secrets.CENTRAL_USERNAME }}
+          central-password: ${{ secrets.CENTRAL_PASSWORD }}
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: ./.ci-action/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: failure
+          repo: ${{ github.repository }}
+          ref: ${{ github.ref_name }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_number }}
+
+      - name: Notify Slack on success
+        if: success()
+        uses: ./.ci-action/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: success
+          repo: ${{ github.repository }}
+          ref: ${{ github.ref_name }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_number }}
+          sha: ${{ github.sha }}
+          commit-message: ${{ github.event.head_commit.message }}
+          commit-author: ${{ github.event.head_commit.author.name }}

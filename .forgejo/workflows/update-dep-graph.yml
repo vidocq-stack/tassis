@@ -1,0 +1,21 @@
+name: update-dependency-graph
+
+# Extracts this repo's io.vidocq.* dependencies and pushes them into
+# Vidocq/GestionProjet/data (source of truth for the cross-repo PR validation).
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '**/pom.xml'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: vidocq-runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update dependency graph
+        uses: https://codefloe.com/Vidocq/ci/update-dep-graph@main
+        with:
+          bot-token: ${{ secrets.VIDOCQ_BOT_TOKEN }}
+          repo: ${{ github.repository }}

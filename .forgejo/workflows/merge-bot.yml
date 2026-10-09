@@ -1,0 +1,32 @@
+name: merge-bot
+
+# Declares when the bot may run; what it does lives in the reusable workflow
+# held by Vidocq/ci. Every repository carries this same file, so a change to
+# the bot's behaviour is one commit there rather than one pull request here.
+#
+# `runs-on` is required. Codefloe does not expand a workflow called from
+# another repository: without a label the forge creates a `merge` job with
+# `runs_on: []`, no runner ever takes it, and /merge waits forever without a
+# word (every repository from 2026-09-21 to 2026-09-25). With the label, the
+# runner that takes the job runs the called workflow's steps.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'Pull request number to rebase, re-sign and (optionally) fast-forward merge'
+        required: true
+      merge:
+        description: "Fast-forward merge after rebasing? Set to 'false' for rebase-only."
+        default: 'true'
+
+jobs:
+  merge:
+    runs-on: vidocq-runner
+    uses: https://codefloe.com/Vidocq/ci/.forgejo/workflows/merge-bot-reusable.yml@main
+    with:
+      pr-number: ${{ github.event.inputs.pr-number }}
+      merge: ${{ github.event.inputs.merge || 'true' }}
+    secrets: inherit

@@ -1,0 +1,193 @@
+# Copy verbatim into `.forgejo/workflows/pr.yml` of each *producer* repo
+# (vauban, chappe, champollion, foy, cassini, vidocq, mansart, ravel, dirac,
+#  heisenberg, cyrano, humboldt, knock, grimm, cervantes, erasmus, tassis).
+#
+# Pull-request validation in a SINGLE job. There is NO staging registry anymore
+# (the old Reposilite repo.vidocq.dev is gone, and Maven Central cannot host
+# ephemeral PR artifacts): the producer AND every impacted downstream consumer is
+# built and resolved straight from the runner's local ~/.m2.
+#
+#   1. build the producer at a release-style PR version  -> installed in ~/.m2
+#   2. ci/build-impacted resolves the transitive consumers from the Vidocq graph
+#      and rebuilds each one, in topological order, against those local PR
+#      artifacts (release versions are immutable for Maven, so they are never
+#      re-fetched from the network — no -SNAPSHOT, no offline, no central pollution).
+#
+# The success of this single `pr-validate` job is the only required check to set
+# in branch protection.
+#
+# Kept in sync with GestionProjet/workflow-templates/pr-producer.yml — edit there
+# and re-propagate to every producer repo.
+#
+# Prerequisite: org secret VIDOCQ_BOT_TOKEN (read graph, clone consumers, query API).
+#               org secret SLACK_WEBHOOK_URL (success notification).
+name: pr-validate
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  # CLA + GPG-signature + Signed-off-by gate, mutualised in a composite action
+  # (https://codefloe.com/Vidocq/ci/governance-checks). Forgejo does not resolve
+  # cross-repo reusable workflows, so the shared logic ships as a step-level action.
+  # fetch-depth: 0 is required so the action can read the BASE_REF..HEAD commit range.
+  governance-checks:
+    runs-on: vidocq-runner
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: https://codefloe.com/Vidocq/ci/governance-checks@main
+        with:
+          pr-author: ${{ github.event.pull_request.user.login }}
+          slack-webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  pr-validate:
+    # Gate the build on the governance checks: a PR that fails the CLA/GPG/sign-off gate
+    # is skipped here, so it never emits a "PR validated" success notification.
+    needs: governance-checks
+    runs-on: vidocq-runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect a docs-only change set
+        # Docs-only PRs (*.md, *.adoc, docs/, LICENSE*, NOTICE*) skip the whole
+        # Maven build AND the downstream rebuild — the job still completes and
+        # reports the required `pr-validate` check as green. Files under any
+        # src/ directory never count as docs (they may be packaged in the
+        # artifact). Implemented as step-level `if`s: a `paths:` trigger filter
+        # would leave the required check unreported and block /merge forever.
+        id: changes
+        run: |
+          set -euo pipefail
+          api="${{ github.server_url }}/api/v1/repos/${{ github.repository }}/pulls/${{ github.event.number }}/files"
+          # VIDOCQ_BOT_TOKEN lifts rate limits on internal PRs; external fork
+          # PRs get no secrets and fall back to anonymous reads (public repo).
+          auth=()
+          if [ -n "${{ secrets.VIDOCQ_BOT_TOKEN }}" ]; then
+            auth=(-H "Authorization: token ${{ secrets.VIDOCQ_BOT_TOKEN }}")
+          fi
+          files=""
+          page=1
+          while :; do
+            chunk=$(curl -fsS "${auth[@]}" "${api}?page=${page}&limit=50" \
+              | python3 -c 'import sys,json; print("\n".join(f["filename"] for f in json.load(sys.stdin)))')
+            [ -z "$chunk" ] && break
+            files="${files}${chunk}"$'\n'
+            page=$((page+1))
+          done
+          echo "Changed files:"; printf '%s' "$files" | sed 's/^/  /'
+          docs_only=true
+          [ -n "$(printf '%s' "$files" | tr -d '[:space:]')" ] || docs_only=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/*|*/src/*) docs_only=false; break ;;
+              *.md|*.adoc|docs/*|LICENSE|LICENSE.*|NOTICE|NOTICE.*) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<EOF
+          $files
+          EOF
+          echo "docs-only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "docs-only: $docs_only"
+
+      - uses: https://codefloe.com/Vidocq/ci/setup-maven@main
+        if: steps.changes.outputs.docs-only != 'true'
+
+      - name: Compute PR version (release-style, no -SNAPSHOT)
+        if: steps.changes.outputs.docs-only != 'true'
+        id: version
+        run: |
+          # Parse pom.xml directly with Python — `mvn help:evaluate -q` does not strip all
+          # [INFO] lines on Maven 4, which yields corrupted versions. Namespace detected
+          # dynamically (Model 4.0.0 vs 4.1.0).
+          BASE=$(python3 - <<'PY'
+          import re, sys, xml.etree.ElementTree as ET
+          root = ET.parse("pom.xml").getroot()
+          ns = root.tag[1:].split("}", 1)[0] if root.tag.startswith("{") else ""
+          v = root.find(f"{{{ns}}}version") if ns else root.find("version")
+          if v is None or not v.text:
+              sys.stderr.write(f"root <version> not found (ns={ns!r})\n"); sys.exit(1)
+          print(re.sub(r"-SNAPSHOT$", "", v.text.strip()))
+          PY
+          )
+          if [ -z "$BASE" ]; then
+            echo "Could not read project.version from pom.xml" >&2; exit 1
+          fi
+          SHA8="${{ github.event.pull_request.head.sha }}"; SHA8="${SHA8:0:8}"
+          SUFFIX="PR${{ github.event.number }}.${SHA8}"
+          echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
+          echo "version=${BASE}-${SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "PR version: ${BASE}-${SUFFIX}"
+
+      - name: Set PR version across the reactor
+        if: steps.changes.outputs.docs-only != 'true'
+        run: |
+          mvn -B -ntp versions:set \
+            -DnewVersion=${{ steps.version.outputs.version }} \
+            -DprocessAllModules=true -DgenerateBackupPoms=false
+
+      - name: Sync plugin.xml descriptors with the PR version
+        if: steps.changes.outputs.docs-only != 'true'
+        # versions:set does not touch resources; maven-plugin modules embed a plugin.xml
+        # with a hardcoded <version> — without this sync the plugin JAR ships a stale
+        # descriptor and every consumer fails with "Plugin's descriptor contains the wrong
+        # version".
+        run: |
+          python3 - <<'PY'
+          import re, xml.etree.ElementTree as ET
+          from pathlib import Path
+          rp = ET.parse("pom.xml").getroot()
+          ns = rp.tag[1:].split("}", 1)[0] if rp.tag.startswith("{") else ""
+          v = rp.find(f"{{{ns}}}version") if ns else rp.find("version")
+          version = v.text.strip()
+          n = 0
+          for pom in Path(".").rglob("pom.xml"):
+              if "target" in pom.parts:
+                  continue
+              try:
+                  r = ET.parse(pom).getroot()
+              except ET.ParseError:
+                  continue
+              pns = r.tag[1:].split("}", 1)[0] if r.tag.startswith("{") else ""
+              pkg = r.find(f"{{{pns}}}packaging") if pns else r.find("packaging")
+              if pkg is None or (pkg.text or "").strip() != "maven-plugin":
+                  continue
+              px = pom.parent / "src/main/resources/META-INF/maven/plugin.xml"
+              if not px.is_file():
+                  continue
+              content = px.read_text(encoding="utf-8")
+              new = re.sub(r"(<artifactId>[^<]+</artifactId>\s*\n\s*<version>)[^<]+(</version>)",
+                           rf"\g<1>{version}\g<2>", content, count=1)
+              if new != content:
+                  px.write_text(new, encoding="utf-8"); n += 1
+          print(f"plugin.xml synced: {n}")
+          PY
+
+      - name: Build, test & install the producer locally
+        if: steps.changes.outputs.docs-only != 'true'
+        # install (not deploy): the PR artifact lands in ~/.m2 only — nothing is published.
+        # install runs the full lifecycle incl. integration-test/verify.
+        run: mvn -B -ntp install
+
+      - name: Rebuild impacted downstream consumers against the local PR artifacts
+        if: steps.changes.outputs.docs-only != 'true'
+        uses: https://codefloe.com/Vidocq/ci/build-impacted@main
+        with:
+          producer-slug: ${{ github.repository }}
+          producer-version: ${{ steps.version.outputs.version }}
+          version-suffix: ${{ steps.version.outputs.suffix }}
+          bot-token: ${{ secrets.VIDOCQ_BOT_TOKEN }}
+
+      - name: Notify Slack on PR success
+        if: success()
+        uses: https://codefloe.com/Vidocq/ci/notify-slack@main
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: pr-validated
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-author: ${{ github.event.pull_request.user.login }}
+          pr-url: ${{ github.event.pull_request.html_url }}

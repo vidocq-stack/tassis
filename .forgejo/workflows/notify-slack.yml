@@ -1,0 +1,46 @@
+name: Notify Slack
+
+# pull_request_target (not pull_request): this workflow must also run for PRs opened from
+# external forks, and forks receive NO org secrets under pull_request — SLACK_WEBHOOK_URL
+# would be empty and the notification silently skipped. With pull_request_target the job
+# runs in the BASE repo context (secrets available) using the workflow file from the base
+# branch. Safe here because it only reads event metadata and posts to Slack: no checkout,
+# no build, no interaction with fork-controlled code (the one risk Forgejo warns about).
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, closed]
+
+jobs:
+  notify-pr-open:
+    # PR opened / reopened / marked ready for review
+    if: github.event.action != 'closed'
+    runs-on: vidocq-runner
+    steps:
+      - name: Notify Slack (PR opened)
+        uses: https://codefloe.com/Vidocq/ci/notify-slack@main
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: pr-open
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-author: ${{ github.event.pull_request.user.login }}
+          pr-url: ${{ github.event.pull_request.html_url }}
+
+  notify-pr-merged:
+    # PR closed WITH merge (PRs merely closed without merge are ignored)
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: vidocq-runner
+    steps:
+      - name: Notify Slack (PR merged)
+        uses: https://codefloe.com/Vidocq/ci/notify-slack@main
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: pr-merged
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-author: ${{ github.event.pull_request.user.login }}
+          pr-url: ${{ github.event.pull_request.html_url }}
+          merged-by: ${{ github.event.pull_request.merged_by.login }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
