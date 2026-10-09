@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
+         >
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.vidocq</groupId>
+        <artifactId>vidocq-parent</artifactId>
+        <version>0.4.0-SNAPSHOT</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>io.vidocq.tassis</groupId>
+    <artifactId>tassis-parent</artifactId>
+    <version>0.4.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>Tassis</name>
+    <description>Jakarta Messaging 3.1 provider: zero third-party dependency, in-VM broker, virtual threads, strict Java Modules</description>
+    <url>https://codefloe.com/Vidocq/tassis</url>
+
+    <developers>
+        <developer>
+            <name>Yann Blazart</name>
+            <email>yann.blazart@gmail.com</email>
+        </developer>
+    </developers>
+
+    <!--
+        Disjunctive triple license: a recipient may use this software under
+        ANY ONE of the three licences below, at their option. EPL-2.0 is the
+        anchor (see the LICENSE file); per EPL-2.0 section 1, GPL-2.0-or-later
+        is offered as a Secondary License.
+        SPDX-License-Identifier: EPL-2.0 OR EUPL-1.2 OR GPL-2.0-or-later
+    -->
+    <licenses>
+        <license>
+            <name>EPL-2.0</name>
+            <url>https://www.eclipse.org/legal/epl-2.0/</url>
+            <distribution>repo</distribution>
+        </license>
+        <license>
+            <name>EUPL-1.2</name>
+            <url>https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12</url>
+            <distribution>repo</distribution>
+        </license>
+        <license>
+            <name>GPL-2.0-or-later</name>
+            <url>https://www.gnu.org/licenses/old-licenses/gpl-2.0.html</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://codefloe.com/Vidocq/tassis</url>
+        <connection>scm:git:https://codefloe.com/Vidocq/tassis.git</connection>
+        <developerConnection>scm:git:git@codefloe.com:Vidocq/tassis.git</developerConnection>
+    </scm>
+
+    <properties>
+        <!-- Jakarta Messaging 3.1 spec API: already modular upstream (module jakarta.messaging,
+             package jakarta.jms), no Vidocq fork needed. -->
+        <jakarta.jms.version>3.1.0</jakarta.jms.version>
+    </properties>
+
+    <!--
+        Main reactor modules. tassis-tck joins the reactor only under the `tck`
+        Maven profile (see <profiles> below), same pattern as every other
+        sub-project of this workspace: a regular `mvn install` neither builds
+        nor downloads the TCK harness. Activation: ./mvnw -Ptck -pl tassis-tck test
+    -->
+    <modules>
+        <module>tassis-api</module>
+        <module>tassis-core</module>
+        <module>tassis-cdi-vauban</module>
+        <module>tassis-bench</module>
+        <module>tassis-examples</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Jakarta Messaging 3.1 -->
+            <dependency>
+                <groupId>jakarta.jms</groupId>
+                <artifactId>jakarta.jms-api</artifactId>
+                <version>${jakarta.jms.version}</version>
+            </dependency>
+
+            <!-- Internal Tassis modules -->
+            <dependency>
+                <groupId>io.vidocq.tassis</groupId>
+                <artifactId>tassis-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.tassis</groupId>
+                <artifactId>tassis-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.tassis</groupId>
+                <artifactId>tassis-cdi-vauban</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <profiles>
+        <!--
+            The official Jakarta Messaging TCK runner joins the reactor only
+            when this profile is active:
+
+                ./mvnw -Ptck -pl tassis-tck test
+        -->
+        <profile>
+            <id>tck</id>
+            <modules>
+                <module>tassis-tck</module>
+            </modules>
+        </profile>
+    </profiles>
+</project>
