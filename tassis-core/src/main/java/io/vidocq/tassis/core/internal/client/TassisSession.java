@@ -57,6 +57,9 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -80,6 +83,27 @@ public final class TassisSession implements QueueSession, TopicSession {
     private final List<Broker.Delivery> unsettled = new ArrayList<>();
     private final List<Broker.Outgoing> uncommittedSends = new ArrayList<>();
     private volatile boolean closed;
+
+    /** How many times a message is delivered to a listener that keeps failing before it is dropped. */
+    static final int MAX_LISTENER_DELIVERIES = 10;
+
+    private static final System.Logger LOG = System.getLogger(TassisSession.class.getName());
+
+    // Held around every onMessage call of this session: its listeners run one at a time (§6.2.13).
+    private final ReentrantLock listeners = new ReentrantLock();
+    // Signalled when a dispatcher waiting to call a listener should look again: the connection
+    // was started, or its consumer was closed or lost its listener.
+    private final Condition lookAgain = listeners.newCondition();
+    // The thread currently inside a callback of this session, to refuse what callbacks may not do.
+    private volatile Thread listenerThread;
+    private volatile Thread completionThread;
+
+    // Completion callbacks run one at a time, in send order, on a thread of their own (§7.3.8).
+    // The executor and the count are guarded by 'work'.
+    private ExecutorService completions;
+    private boolean completionsShutDown;
+    private int pendingCompletions;
+    private final Condition completionsDone = work.newCondition();
 
     TassisSession(TassisConnection connection, int acknowledgeMode, Domain domain) {
         this.connection = connection;
@@ -109,16 +133,25 @@ public final class TassisSession implements QueueSession, TopicSession {
      * session was closed in the meantime, in which case the message goes back to its queue.
      */
     Message delivered(Broker.Delivery delivery) {
+        return delivered(delivery, false);
+    }
+
+    /**
+     * @param toAListener whether the message goes to a listener: an automatically acknowledged
+     *        session then owns it until onMessage returns, where a receive settles it at once
+     */
+    private Message delivered(Broker.Delivery delivery, boolean toAListener) {
         if (delivery == null) {
             return null;
         }
-        if (!transacted && acknowledgeMode != CLIENT_ACKNOWLEDGE) {
+        if (automaticallyAcknowledged() && !toAListener) {
             return delivery.message();
         }
         work.lock();
         try {
             if (closed) {
-                broker().redeliver(List.of(delivery));
+                // The application will not see this message: the delivery does not count.
+                broker().returnUndelivered(delivery);
                 return null;
             }
             if (acknowledgeMode == CLIENT_ACKNOWLEDGE) {
@@ -137,6 +170,25 @@ public final class TassisSession implements QueueSession, TopicSession {
         try {
             checkOpen();
             unsettled.clear();
+        } finally {
+            work.unlock();
+        }
+    }
+
+    private boolean automaticallyAcknowledged() {
+        return !transacted && acknowledgeMode != CLIENT_ACKNOWLEDGE;
+    }
+
+    /**
+     * Settles a message an automatically acknowledged listener has just processed.
+     *
+     * @return false if the session no longer owns it, because the listener called recover or the
+     *         session was closed meanwhile: it has then been given back already
+     */
+    private boolean settle(Broker.Delivery delivery) {
+        work.lock();
+        try {
+            return unsettled.remove(delivery);
         } finally {
             work.unlock();
         }
@@ -238,6 +290,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         if (!transacted) {
             throw new IllegalStateException("commit() on a session that is not transacted");
         }
+        awaitCompletions("commit");
         work.lock();
         try {
             checkOpen();
@@ -266,6 +319,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         if (!transacted) {
             throw new IllegalStateException("rollback() on a session that is not transacted");
         }
+        awaitCompletions("rollback");
         work.lock();
         try {
             checkOpen();
@@ -276,7 +330,10 @@ public final class TassisSession implements QueueSession, TopicSession {
         }
     }
 
-    /** Only a client-acknowledged session has unacknowledged messages to redeliver. */
+    /**
+     * Redelivers what the session has consumed and not acknowledged: for an automatically
+     * acknowledged session, that is at most the message its listener is processing.
+     */
     @Override
     public void recover() throws JMSException {
         checkOpen();
@@ -297,20 +354,181 @@ public final class TassisSession implements QueueSession, TopicSession {
      * children, whose own close is idempotent and returns only once they are quiet.
      */
     @Override
-    public void close() {
+    public void close() throws JMSException {
+        // Of the two behaviours §6.2 permits for a listener closing its own session, Tassis fails.
+        if (inOwnListener()) {
+            throw new IllegalStateException("close called by a message listener on its own session");
+        }
+        if (inOwnCompletion()) {
+            throw new IllegalStateException("close called by a completion listener on its own session");
+        }
+        shut();
+    }
+
+    /** Closes the session whatever the calling thread; the connection uses it for its own close. */
+    void shut() {
         closed = true;
         for (SessionChild child : children) {
-            child.close();
+            child.shut();
         }
-        // The transaction in progress is rolled back, and closing acknowledges nothing (§6.1.8).
         work.lock();
         try {
+            // §7.3.4: the completion callbacks of the sends already made must have returned.
+            while (pendingCompletions > 0) {
+                completionsDone.awaitUninterruptibly();
+            }
+            completionsShutDown = true;
+            if (completions != null) {
+                completions.shutdown();
+            }
+            // The transaction in progress is rolled back, and closing acknowledges nothing (§6.1.8).
             uncommittedSends.clear();
             giveBackUnsettled();
         } finally {
             work.unlock();
         }
         connection.forget(this);
+    }
+
+    // ---- message listeners (§8.7, §6.2.13) -------------------------------
+
+    boolean inOwnListener() {
+        return listenerThread == Thread.currentThread();
+    }
+
+    boolean inOwnCompletion() {
+        return completionThread == Thread.currentThread();
+    }
+
+    /** Wakes the dispatchers that hold a message while they wait to be allowed to call a listener. */
+    void resumeListeners() {
+        listeners.lock();
+        try {
+            lookAgain.signalAll();
+        } finally {
+            listeners.unlock();
+        }
+    }
+
+    /** Returns once no listener of this session is running. */
+    void awaitListenerInProgress() {
+        listeners.lock();
+        listeners.unlock();
+    }
+
+    /**
+     * Hands a delivery to a consumer's listener, in turn with the other listeners of the session
+     * and only while the connection is started. Called by the consumer's dispatcher thread.
+     */
+    void dispatch(TassisMessageConsumer consumer, Broker.Delivery delivery) {
+        listeners.lock();
+        try {
+            MessageListener listener = consumer.listenerToCall();
+            while (listener != null && !connection.isStarted()) {
+                lookAgain.awaitUninterruptibly();
+                listener = consumer.listenerToCall();
+            }
+            if (listener == null) {
+                // Closed, or no longer listening: the message was never seen by the application.
+                broker().returnUndelivered(delivery);
+                return;
+            }
+            Message message = delivered(delivery, true);
+            if (message == null) {
+                return;
+            }
+            listenerThread = Thread.currentThread();
+            try {
+                listener.onMessage(message);
+                if (automaticallyAcknowledged()) {
+                    // §6.2.10: acknowledged when the listener has successfully returned.
+                    settle(delivery);
+                }
+            } catch (RuntimeException | Error failure) {
+                // An Error is handled like any other failure: the message must not stay in
+                // limbo, and the consumer must keep listening.
+                listenerFailed(delivery, failure);
+            } finally {
+                listenerThread = null;
+            }
+        } finally {
+            listeners.unlock();
+        }
+    }
+
+    /**
+     * §8.7: with automatic acknowledgement the message is redelivered at once; in the other
+     * modes the session carries on with the next message and the application decides.
+     */
+    private void listenerFailed(Broker.Delivery delivery, Throwable failure) {
+        if (!automaticallyAcknowledged() || !settle(delivery)) {
+            LOG.log(System.Logger.Level.WARNING, "a message listener threw an exception", failure);
+        } else if (delivery.deliveryCount() < MAX_LISTENER_DELIVERIES) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "a message listener threw an exception; the message is redelivered", failure);
+            broker().redeliver(List.of(delivery));
+        } else {
+            LOG.log(System.Logger.Level.ERROR, "a message listener threw an exception on each of "
+                    + MAX_LISTENER_DELIVERIES + " deliveries; the message is dropped", failure);
+        }
+    }
+
+    // ---- completion listeners (§7.3) --------------------------------------
+
+    /** Schedules the notification of a send that has just completed. */
+    void completed(Runnable notification) {
+        work.lock();
+        try {
+            pendingCompletions++;
+            if (completionsShutDown) {
+                // The session was closed while this send was being made. The message was sent,
+                // so its listener is told, on a thread of its own since the executor is gone.
+                Thread.ofVirtual().name("tassis-completions").start(() -> notifyCompletion(notification));
+                return;
+            }
+            if (completions == null) {
+                completions = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("tassis-completions").factory());
+            }
+            completions.execute(() -> notifyCompletion(notification));
+        } finally {
+            work.unlock();
+        }
+    }
+
+    private void notifyCompletion(Runnable notification) {
+        completionThread = Thread.currentThread();
+        try {
+            notification.run();
+        } catch (RuntimeException failure) {
+            LOG.log(System.Logger.Level.WARNING, "a completion listener threw an exception", failure);
+        } finally {
+            completionThread = null;
+            work.lock();
+            try {
+                pendingCompletions--;
+                completionsDone.signalAll();
+            } finally {
+                work.unlock();
+            }
+        }
+    }
+
+    /**
+     * Blocks until the completion callbacks of the sends already made have returned (§7.3.4),
+     * which a completion callback itself cannot ask for.
+     */
+    void awaitCompletions(String method) throws IllegalStateException {
+        if (inOwnCompletion()) {
+            throw new IllegalStateException(method + " called by a completion listener on its own session");
+        }
+        work.lock();
+        try {
+            while (pendingCompletions > 0) {
+                completionsDone.awaitUninterruptibly();
+            }
+        } finally {
+            work.unlock();
+        }
     }
 
     // ---- producers and consumers ---------------------------------------
@@ -406,7 +624,7 @@ public final class TassisSession implements QueueSession, TopicSession {
     private <T extends SessionChild> T register(T child) throws IllegalStateException {
         children.add(child);
         if (closed) {
-            child.close();
+            child.shut();
             throw new IllegalStateException("the session is closed");
         }
         return child;

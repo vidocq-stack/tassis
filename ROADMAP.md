@@ -262,26 +262,76 @@ Choices and limits:
   Exact arithmetic wraps on overflow, as Java's does; an exact division by zero is unknown.
 - **A property keeps its own type**: `Byte`, `Short`, `Integer` and `Long` are exact, `Float` and
   `Double` approximate (Java numeric promotion). No property conversion applies.
-- **Selectors are evaluated under the broker lock**: on each receive for a queue consumer, which
-  scans past the messages it rejects, and once per subscription at publication.
+- **Selectors are evaluated under the broker lock**, once per message and per selector: when the
+  message is sent (queue selectors in use, subscription selectors) or when a selector is first
+  used on a queue. M6 replaced the per-receive scan with an index.
 - **`JMSXDeliveryCount` in a selector** is the count of the delivery being considered, 1 for a
   first delivery. A queue consumer or browser checks it on each delivery. A subscription selects
   at publication, with a count of 1, and checks again on redelivery when its selector refers to
   the count: a message that no longer matches leaves the subscription.
 
-### M6 — Asynchronous delivery
+### M6 — Asynchronous delivery ✅
 
-Also due in this milestone, because it reworks the same dispatch code: **a per-selector index on
-queues**. Today a queue consumer with a selector scans its queue from the head on every receive
-and re-evaluates the selector on every message it already rejected. Each distinct selector active
-on a queue should get its own ordered view, fed when a message is sent, so that a message is
-evaluated once per selector and a receive takes the head of its view. Selectors that refer to
-`JMSXDeliveryCount` are the exception: their answer changes between deliveries. Exit criterion:
-a test proving a message is evaluated once per selector.
+- [x] `MessageListener` (§8.7): one dispatcher virtual thread per consumer that has a listener
+- [x] Serial execution of a session's listeners (§6.2.13); no listener call while the connection
+      is stopped, and `stop` returns only once the listener in progress has returned (§6.1.5)
+- [x] Acknowledgement with listeners: an automatically acknowledged message is settled when
+      `onMessage` returns, so `recover` inside the listener redelivers it; a `RuntimeException`
+      redelivers it at once; client-acknowledged and transacted sessions move on to the next message
+- [x] What a callback may not do: `Session.close`, `Connection.close` and `Connection.stop` from a
+      listener on its own session or connection throw `IllegalStateException`; a listener may close
+      its own consumer
+- [x] Asynchronous send and `CompletionListener` (§7.3); `close`, `commit` and `rollback` wait for
+      the callbacks and refuse to be called from one
+- [x] `ExceptionListener` (§6.1.7) is stored and returned
+- [x] Per-selector index on queues
 
-`MessageListener` (§8.7), the session threading model (§2.14: serial delivery, on a virtual
-thread), asynchronous send and `CompletionListener` (§7.3), `ExceptionListener` (§6.1.7), and
-the calls forbidden from within callbacks.
+**Deliverable:** `AsynchronousDeliveryTest` (20 tests), three index tests in
+`SelectorDeliveryTest`, 236 unit tests in all, and **642 / 642** on the TCK: the whole of `core`,
+46 packages (see `TCK.md`).
+
+The `virtual-threads-reviewer` pass confirmed the lock order and found no deadlock on the paths
+above. It found defects that are fixed here: a listener throwing an `Error` left its message in
+limbo and its consumer deaf; a consumer could briefly have two dispatchers; a message taken while
+the session was closing came back marked as redelivered though no listener had seen it; `start` on
+a started connection could make listeners of two sessions wait for each other; and expired
+messages were no longer removed from a queue whose consumers all read through a selector view.
+
+How it works:
+
+- **Listeners.** A consumer's dispatcher takes one message at a time with `Broker.receive`, then
+  asks its session for the turn (`TassisSession.dispatch`), which holds the session's `listeners`
+  lock around `onMessage`. While the connection is stopped the dispatcher keeps its message and
+  waits; if the consumer is closed or loses its listener first, the message goes back to the
+  broker as if it had never been taken (`Broker.returnUndelivered`).
+- **Asynchronous send.** A send to the in-VM broker is complete when it returns, so it is done
+  entirely in the calling thread, where a failure is thrown. Only the notification is
+  asynchronous: `onCompletion` runs on a single virtual thread per session, in send order.
+  `onException` is never called: nothing can fail after the send has returned.
+- **Selector index.** Each selector in use on a queue has a view: the ordered messages it accepts,
+  built by one scan when its first consumer attaches and kept up to date afterwards. A message is
+  evaluated once per selector, and a receive takes the head of its view.
+
+Choices and limits:
+
+- **A listener that always fails does not loop for ever**: after 10 deliveries
+  (`TassisSession.MAX_LISTENER_DELIVERIES`) the message is dropped and an error is logged through
+  `System.Logger`. §8.7 leaves the number of redeliveries to the provider. There is no
+  dead-letter queue.
+- **`stop` and `close` from a callback fail** with `IllegalStateException`: of the two behaviours
+  the spec permits, the one that cannot deadlock.
+- **`Connection.stop` from a completion listener is not refused**: the spec only names message
+  listeners. If a listener of the same connection is at that moment waiting for that completion
+  callback (inside `commit`, say), the two wait for each other. It is a circular wait in the
+  application's own callbacks, left as it is.
+- **A consumer with a listener refuses `receive`** with `IllegalStateException`; the spec calls
+  mixing the two undefined.
+- **`ExceptionListener` is never called**: the in-VM broker has no connection to lose. It will
+  matter with the network transport (M11).
+- **Selectors on `JMSXDeliveryCount` are not indexed**: their answer changes between deliveries,
+  so their consumers still scan the queue.
+- **Still one broker lock.** Listeners and the index did not need it split, and no benchmark has
+  asked for it yet: the decision stays with M12.
 
 ### M7 — Simplified API
 

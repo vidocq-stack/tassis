@@ -33,8 +33,9 @@ import jakarta.jms.TopicSubscriber;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Receives the messages of a queue or of a topic subscription, synchronously
- * (Jakarta Messaging 3.1 §8).
+ * Receives the messages of a queue or of a topic subscription (Jakarta Messaging
+ * 3.1 §8): synchronously through {@code receive}, or, once it has a listener,
+ * asynchronously from a dispatcher thread of its own.
  */
 final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, SessionChild {
 
@@ -44,6 +45,11 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     private final Selector selector;
     private final Broker.Consumer attachment;
     private volatile boolean closed;
+    // Written through Broker.update: the dispatcher's wait for a message depends on it.
+    private volatile MessageListener listener;
+    // The virtual thread that takes messages for the listener; null when there is no listener.
+    // Written through Broker.update, like the listener: a dispatcher's wait depends on it too.
+    private volatile Thread dispatcher;
 
     TassisMessageConsumer(TassisSession session, Destination destination, boolean noLocal, Selector selector,
             Broker.Consumer attachment) {
@@ -84,6 +90,8 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
         return selector == null ? null : selector.text();
     }
 
+    // ---- synchronous delivery (§8.5) -------------------------------------
+
     @Override
     public Message receive() throws JMSException {
         return receive(0);
@@ -92,33 +100,120 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     /** A timeout of zero never expires (§8.5). */
     @Override
     public Message receive(long timeout) throws JMSException {
-        checkOpen();
+        checkSynchronous();
         return session.delivered(session.broker().receive(attachment,
                 timeout == 0 ? Broker.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout)));
     }
 
     @Override
     public Message receiveNoWait() throws JMSException {
-        checkOpen();
+        checkSynchronous();
         return session.delivered(session.broker().receive(attachment, 0));
+    }
+
+    private void checkSynchronous() throws IllegalStateException {
+        checkOpen();
+        if (listener != null) {
+            throw new IllegalStateException("this consumer has a message listener: it cannot also receive synchronously");
+        }
+    }
+
+    // ---- asynchronous delivery (§8.7) ------------------------------------
+
+    @Override
+    public MessageListener getMessageListener() throws JMSException {
+        checkOpen();
+        return listener;
+    }
+
+    @Override
+    public void setMessageListener(MessageListener newListener) throws JMSException {
+        checkOpen();
+        session.broker().update(() -> listener = newListener);
+        if (newListener == null) {
+            awaitDispatcher();
+        } else if (dispatcher == null && !closed) {
+            // Assigned before it runs: the dispatcher stops as soon as it is no longer the one in charge.
+            Thread thread = Thread.ofVirtual().name("tassis-listener-" + destination).unstarted(this::dispatch);
+            session.broker().update(() -> dispatcher = thread);
+            thread.start();
+        }
+    }
+
+    /**
+     * The listener the calling dispatcher should call for the message it holds, or {@code null}
+     * if it should not: the consumer is closed, has no listener, or has another dispatcher by now.
+     */
+    MessageListener listenerToCall() {
+        return closed || dispatcher != Thread.currentThread() ? null : listener;
+    }
+
+    /** The dispatcher: takes messages one at a time for as long as the consumer has a listener. */
+    private void dispatch() {
+        Thread me = Thread.currentThread();
+        try {
+            while (listenerToCall() != null) {
+                Broker.Delivery delivery = session.broker().receive(attachment, Broker.FOREVER,
+                        () -> listener != null && dispatcher == me);
+                if (delivery != null) {
+                    session.dispatch(this, delivery);
+                }
+            }
+        } catch (JMSException interrupted) {
+            // Only an interrupt ends a wait this way; nothing was taken from the broker.
+        } finally {
+            // Whatever ended it, a later setMessageListener must be able to start another one.
+            session.broker().update(() -> {
+                if (dispatcher == me) {
+                    dispatcher = null;
+                }
+            });
+        }
+    }
+
+    /**
+     * Returns once the dispatcher has stopped, and so once a listener call in progress has
+     * returned (§8.8). A listener of this session that ends the dispatching is not made to wait:
+     * it holds the session's turn, so no other listener of the session can be running.
+     */
+    private void awaitDispatcher() {
+        Thread running = dispatcher;
+        if (running == null) {
+            return;
+        }
+        session.resumeListeners();
+        if (!session.inOwnListener()) {
+            boolean interrupted = false;
+            while (true) {
+                try {
+                    running.join();
+                    break;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // Through the broker, so that a dispatcher still waiting there learns it was dismissed.
+        session.broker().update(() -> {
+            if (dispatcher == running) {
+                dispatcher = null;
+            }
+        });
     }
 
     @Override
     public void close() {
+        shut();
+    }
+
+    @Override
+    public void shut() {
         closed = true;
         session.broker().detach(attachment);
+        awaitDispatcher();
         session.forget(this);
-    }
-
-    // ---- asynchronous delivery: ROADMAP M6 -----------------------------
-
-    @Override
-    public MessageListener getMessageListener() {
-        throw new UnsupportedOperationException("message listeners: see ROADMAP M6");
-    }
-
-    @Override
-    public void setMessageListener(MessageListener listener) {
-        throw new UnsupportedOperationException("message listeners: see ROADMAP M6");
     }
 }

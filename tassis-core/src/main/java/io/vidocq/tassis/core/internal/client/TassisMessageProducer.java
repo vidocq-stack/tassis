@@ -155,8 +155,15 @@ final class TassisMessageProducer implements QueueSender, TopicPublisher, Sessio
         return destination instanceof Topic topic ? topic : null;
     }
 
+    /** Returns once the asynchronous sends in progress have completed (§7.3.4). */
     @Override
-    public void close() {
+    public void close() throws JMSException {
+        session.awaitCompletions("close");
+        shut();
+    }
+
+    @Override
+    public void shut() {
         closed = true;
         session.forget(this);
     }
@@ -255,27 +262,48 @@ final class TassisMessageProducer implements QueueSender, TopicPublisher, Sessio
         }
     }
 
-    // ---- asynchronous send: ROADMAP M6 ---------------------------------
+    // ---- asynchronous send (§7.3) --------------------------------------
+
+    /*
+     * A send to the in-VM broker is complete when it returns, so the whole of it is done in the
+     * calling thread, where any failure is thrown (§7.3.2). What is asynchronous is the
+     * notification, which the session makes from a thread of its own (§7.3.8).
+     */
 
     @Override
-    public void send(Message message, CompletionListener completionListener) {
-        throw new UnsupportedOperationException("asynchronous send: see ROADMAP M6");
+    public void send(Message message, CompletionListener completionListener) throws JMSException {
+        requireListener(completionListener);
+        send(message);
+        session.completed(() -> completionListener.onCompletion(message));
     }
 
     @Override
     public void send(Message message, int deliveryMode, int priority, long timeToLive,
-            CompletionListener completionListener) {
-        throw new UnsupportedOperationException("asynchronous send: see ROADMAP M6");
+            CompletionListener completionListener) throws JMSException {
+        requireListener(completionListener);
+        send(message, deliveryMode, priority, timeToLive);
+        session.completed(() -> completionListener.onCompletion(message));
     }
 
     @Override
-    public void send(Destination destination, Message message, CompletionListener completionListener) {
-        throw new UnsupportedOperationException("asynchronous send: see ROADMAP M6");
+    public void send(Destination destination, Message message, CompletionListener completionListener)
+            throws JMSException {
+        requireListener(completionListener);
+        send(destination, message);
+        session.completed(() -> completionListener.onCompletion(message));
     }
 
     @Override
     public void send(Destination destination, Message message, int deliveryMode, int priority, long timeToLive,
-            CompletionListener completionListener) {
-        throw new UnsupportedOperationException("asynchronous send: see ROADMAP M6");
+            CompletionListener completionListener) throws JMSException {
+        requireListener(completionListener);
+        send(destination, message, deliveryMode, priority, timeToLive);
+        session.completed(() -> completionListener.onCompletion(message));
+    }
+
+    private static void requireListener(CompletionListener completionListener) {
+        if (completionListener == null) {
+            throw new IllegalArgumentException("the completion listener is null");
+        }
     }
 }

@@ -8,9 +8,9 @@
 
 ## Status
 
-🚧 **M5** — queues and topics on an in-VM broker through the classic API: acknowledgement modes, local
-transactions, durable and shared subscriptions, message selectors. Listeners and the simplified API are
-not implemented yet; see [ROADMAP.md](ROADMAP.md).
+🚧 **M6** — the classic API in full on an in-VM broker: queues and topics, acknowledgement modes, local
+transactions, durable and shared subscriptions, selectors, message listeners and asynchronous send. The
+simplified API (`JMSContext`) is not implemented yet; see [ROADMAP.md](ROADMAP.md).
 
 ## Ecosystem rules
 

@@ -69,7 +69,6 @@
             **/core/exceptionQueue/*IT,
             **/core/messageProducer/*IT,
             **/core/sessiontests/*IT,
-            **/core/appclient/txqueuetests/*IT,
             **/core/topictests/*IT,
             **/core/bytesMsgTopic/*IT,
             **/core/mapMsgTopic/*IT,
@@ -86,9 +85,9 @@
             **/core/closedTopicSubscriber/*IT,
             **/core/exceptionTopic/*IT,
             **/core/exceptiontests/*IT,
-            **/core/appclient/txtopictests/*IT,
             **/core/selectorQueue/*IT,
-            **/core/selectorTopic/*IT
+            **/core/selectorTopic/*IT,
+            **/core/appclient/*/*IT
         </tck.test>
     </properties>
 
@@ -175,10 +174,12 @@
                         Some TCK classes depend on the order of their tests: one test leaves a
                         durable subscription behind and a later one reuses its name. JUnit's
                         default order trips over it, the alphabetical one does not. See TCK.md.
+                        The timeout turns a test that waits for ever on a listener into a failure.
                     -->
                     <properties>
                         <configurationParameters>
                             junit.jupiter.testmethod.order.default = org.junit.jupiter.api.MethodOrderer$MethodName
+                            junit.jupiter.execution.timeout.default = 2 m
                         </configurationParameters>
                     </properties>
                     <systemPropertyVariables>

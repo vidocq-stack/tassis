@@ -20,10 +20,12 @@
 package io.vidocq.tassis.core.internal.client;
 
 /**
- * What a session closes when it is closed: its producers, consumers and
- * browsers. Their close never fails and may be called more than once.
+ * What a session shuts when it is closed: its producers, consumers and
+ * browsers. Shutting never fails, may be done more than once, and returns only
+ * once the child is quiet. Unlike the public {@code close()} methods it applies
+ * no restriction on the calling thread.
  */
 interface SessionChild {
 
-    void close();
+    void shut();
 }

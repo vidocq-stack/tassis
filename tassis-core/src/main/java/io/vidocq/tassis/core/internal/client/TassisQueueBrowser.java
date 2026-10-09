@@ -68,6 +68,11 @@ final class TassisQueueBrowser implements QueueBrowser, SessionChild {
 
     @Override
     public void close() {
+        shut();
+    }
+
+    @Override
+    public void shut() {
         closed = true;
         session.forget(this);
     }

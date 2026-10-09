@@ -21,6 +21,7 @@ package io.vidocq.tassis.core.internal.selector;
 
 import io.vidocq.tassis.core.internal.message.TassisMessage;
 import jakarta.jms.InvalidSelectorException;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A compiled message selector (Jakarta Messaging 3.1 §3.8): a conditional
@@ -29,6 +30,9 @@ import jakarta.jms.InvalidSelectorException;
  * (§8.3).
  */
 public final class Selector {
+
+    // Diagnostic: how many times a selector was evaluated against a message, in this JVM.
+    private static final AtomicLong EVALUATIONS = new AtomicLong();
 
     private final String text;
     private final Expression condition;
@@ -63,7 +67,17 @@ public final class Selector {
      *        considered: 1 for a first delivery
      */
     public boolean matches(TassisMessage message, int deliveryCount) {
+        EVALUATIONS.incrementAndGet();
         return Boolean.TRUE.equals(condition.evaluate(message, deliveryCount));
+    }
+
+    /** How many selector evaluations took place in this JVM since the last reset. */
+    public static long evaluationCount() {
+        return EVALUATIONS.get();
+    }
+
+    public static void resetEvaluationCount() {
+        EVALUATIONS.set(0);
     }
 
     /**

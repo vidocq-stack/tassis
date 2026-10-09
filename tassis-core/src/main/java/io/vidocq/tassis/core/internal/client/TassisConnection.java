@@ -192,7 +192,7 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
         sessions.add(session);
         // A concurrent close either sees the session in the list, or has raised the flag checked here.
         if (closed) {
-            session.close();
+            session.shut();
             throw new IllegalStateException("the connection is closed");
         }
         return session;
@@ -247,14 +247,45 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     @Override
     public void start() throws JMSException {
         use();
-        broker.update(() -> started = true);
+        boolean[] wasStopped = new boolean[1];
+        broker.update(() -> {
+            wasStopped[0] = !started;
+            started = true;
+        });
+        // Only when delivery really resumes: start on a started connection must do nothing, or
+        // listeners of two sessions calling it would wait for each other's turn.
+        if (wasStopped[0]) {
+            for (TassisSession session : sessions) {
+                session.resumeListeners();
+            }
+        }
     }
 
-    /** Returns once delivery is paused: the flag is flipped under the lock every delivery holds. */
+    /**
+     * Returns once delivery is paused (§6.1.5): no receive will return a message, since the flag
+     * is flipped under the lock every delivery holds, and no listener is running or will be
+     * called. A listener cannot stop the connection it is called by.
+     */
     @Override
     public void stop() throws JMSException {
         use();
+        notFromACallback("stop", false);
         broker.update(() -> started = false);
+        for (TassisSession session : sessions) {
+            session.awaitListenerInProgress();
+        }
+    }
+
+    /** Of the two behaviours §6.1 permits for stop and close in a callback, Tassis fails. */
+    private void notFromACallback(String method, boolean completionListenersToo) throws IllegalStateException {
+        for (TassisSession session : sessions) {
+            if (session.inOwnListener()) {
+                throw new IllegalStateException(method + " called by a message listener on its own connection");
+            }
+            if (completionListenersToo && session.inOwnCompletion()) {
+                throw new IllegalStateException(method + " called by a completion listener on its own connection");
+            }
+        }
     }
 
     /**
@@ -262,13 +293,14 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
      * sessions, so each returns only once the pending receives have completed.
      */
     @Override
-    public void close() {
+    public void close() throws JMSException {
+        notFromACallback("close", true);
         broker.update(() -> {
             closed = true;
             started = false;
         });
         for (TassisSession session : sessions) {
-            session.close();
+            session.shut();
         }
         for (TassisTemporaryQueue queue : temporaryQueues) {
             queue.dispose();

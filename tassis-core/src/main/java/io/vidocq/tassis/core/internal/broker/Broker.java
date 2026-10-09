@@ -29,7 +29,6 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -94,16 +93,20 @@ public final class Broker {
         private final Subscription subscription;
         // A queue consumer's own filter; a subscription filters when the message is published.
         private final Selector selector;
+        // The selector's view of the queue, or null when the consumer looks at the whole storage.
+        private final View view;
         private final BooleanSupplier started;
         private boolean closed;
         private boolean detached;
         // A count, not a flag: a misused consumer may be in several receives at once.
         private int receiving;
 
-        private Consumer(Storage storage, Subscription subscription, Selector selector, BooleanSupplier started) {
+        private Consumer(Storage storage, Subscription subscription, Selector selector, View view,
+                BooleanSupplier started) {
             this.storage = storage;
             this.subscription = subscription;
             this.selector = selector;
+            this.view = view;
             this.started = started;
         }
     }
@@ -113,10 +116,17 @@ public final class Broker {
 
         private final Stored stored;
         private final TassisMessage message;
+        private final int deliveryCount;
 
         private Delivery(Stored stored, TassisMessage message) {
             this.stored = stored;
             this.message = message;
+            this.deliveryCount = stored.deliveryCount;
+        }
+
+        /** How many times the message has been delivered, this delivery included. */
+        public int deliveryCount() {
+            return deliveryCount;
         }
 
         /** The copy of the message made for this delivery. */
@@ -129,9 +139,68 @@ public final class Broker {
     private static final class Storage {
 
         final TreeSet<Stored> messages = new TreeSet<>(Stored.DELIVERY_ORDER);
+        // One view per selector in use by the queue's consumers: see View.
+        final Map<Selector, View> views = new HashMap<>();
         int consumers;
         // Set when the queue or subscription is deleted: a message given back then goes nowhere.
         boolean deleted;
+        // The earliest expiration among the messages, or Long.MAX_VALUE: when to sweep next.
+        long nextExpiration = Long.MAX_VALUE;
+
+        /**
+         * Removes the messages that have expired (§3.4.9). Done on the whole storage, since a
+         * consumer that reads through a view never meets the messages its selector rejects.
+         */
+        void sweepExpired(long now) {
+            if (now < nextExpiration) {
+                return;
+            }
+            List<Stored> expired = new ArrayList<>();
+            long next = Long.MAX_VALUE;
+            for (Stored stored : messages) {
+                long expiration = stored.message.getJMSExpiration();
+                if (expiration != 0 && expiration <= now) {
+                    expired.add(stored);
+                } else if (expiration != 0) {
+                    next = Math.min(next, expiration);
+                }
+            }
+            expired.forEach(this::remove);
+            nextExpiration = next;
+        }
+
+        void add(Stored stored) {
+            long expiration = stored.message.getJMSExpiration();
+            if (expiration != 0) {
+                nextExpiration = Math.min(nextExpiration, expiration);
+            }
+            messages.add(stored);
+            views.forEach((selector, view) -> {
+                if (stored.selectedBy(selector)) {
+                    view.messages.add(stored);
+                }
+            });
+        }
+
+        void remove(Stored stored) {
+            messages.remove(stored);
+            for (View view : views.values()) {
+                view.messages.remove(stored);
+            }
+        }
+    }
+
+    /**
+     * The messages of a queue that one selector accepts, in delivery order. It exists while a
+     * consumer of the queue uses that selector, and is kept up to date as messages come and go,
+     * so that a message is evaluated once per selector and a receive need not scan the messages
+     * its selector rejects. A selector that looks at the delivery count gets no view: its answer
+     * changes from one delivery to the next.
+     */
+    private static final class View {
+
+        final TreeSet<Stored> messages = new TreeSet<>(Stored.DELIVERY_ORDER);
+        int consumers;
     }
 
     private static final class Stored {
@@ -147,11 +216,20 @@ public final class Broker {
         // Kept across redeliveries, so that a message given back returns to its place.
         final long sequence;
         int deliveryCount;
+        // What each selector answered for this message, which never changes: asked once.
+        private Map<Selector, Boolean> selections;
 
         Stored(Storage storage, TassisMessage message, long sequence) {
             this.storage = storage;
             this.message = message;
             this.sequence = sequence;
+        }
+
+        boolean selectedBy(Selector selector) {
+            if (selections == null) {
+                selections = new HashMap<>();
+            }
+            return selections.computeIfAbsent(selector, asked -> asked.matches(message, 1));
         }
     }
 
@@ -369,7 +447,25 @@ public final class Broker {
     }
 
     private void store(Storage storage, TassisMessage message) {
-        storage.messages.add(new Stored(storage, message, sequence++));
+        storage.add(new Stored(storage, message, sequence++));
+    }
+
+    /**
+     * Puts back a message that was taken from the broker but never reached the application,
+     * as if it had not been taken: this delivery does not count.
+     */
+    public void returnUndelivered(Delivery delivery) {
+        lock.lock();
+        try {
+            delivery.stored.deliveryCount--;
+            Storage storage = delivery.stored.storage;
+            if (!storage.deleted) {
+                storage.add(delivery.stored);
+            }
+            changed.signalAll();
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -382,7 +478,7 @@ public final class Broker {
             for (Delivery delivery : deliveries) {
                 Storage storage = delivery.stored.storage;
                 if (!storage.deleted) {
-                    storage.messages.add(delivery.stored);
+                    storage.add(delivery.stored);
                 }
             }
             changed.signalAll();
@@ -408,7 +504,22 @@ public final class Broker {
             checkExists(queue, false, temporary);
             Storage storage = storageOf(queue);
             storage.consumers++;
-            return new Consumer(storage, null, selector, started);
+            View view = null;
+            if (selector != null && !selector.referencesDeliveryCount()) {
+                view = storage.views.get(selector);
+                if (view == null) {
+                    // The one scan a selector costs: afterwards the view follows the queue.
+                    view = new View();
+                    for (Stored stored : storage.messages) {
+                        if (stored.selectedBy(selector)) {
+                            view.messages.add(stored);
+                        }
+                    }
+                    storage.views.put(selector, view);
+                }
+                view.consumers++;
+            }
+            return new Consumer(storage, null, selector, view, started);
         } finally {
             lock.unlock();
         }
@@ -426,7 +537,7 @@ public final class Broker {
             checkExists(request.topic(), true, request.temporary());
             Subscription subscription = request.name() == null ? add(request) : named(request);
             subscription.storage.consumers++;
-            return new Consumer(subscription.storage, subscription, null, started);
+            return new Consumer(subscription.storage, subscription, null, null, started);
         } finally {
             lock.unlock();
         }
@@ -516,6 +627,9 @@ public final class Broker {
             if (!consumer.detached) {
                 consumer.detached = true;
                 consumer.storage.consumers--;
+                if (consumer.view != null && --consumer.view.consumers == 0) {
+                    consumer.storage.views.remove(consumer.selector);
+                }
                 Subscription subscription = consumer.subscription;
                 // A non-durable subscription ends with its last consumer (§8.3.1, §8.3.2).
                 if (subscription != null && !subscription.request.durable() && consumer.storage.consumers == 0
@@ -536,37 +650,57 @@ public final class Broker {
      * @return the delivery, or {@code null} if the timeout expires or the consumer is closed
      */
     public Delivery receive(Consumer consumer, long timeoutNanos) throws JMSException {
+        return receive(consumer, timeoutNanos, () -> true);
+    }
+
+    /**
+     * Like {@link #receive(Consumer, long)}, for a caller that may lose interest while it waits.
+     *
+     * @param wanted tells whether the caller still wants a message; read under the broker lock,
+     *        so whoever changes its answer must do it through {@link #update}
+     * @return the delivery, or {@code null} if the timeout expires, the consumer is closed or the
+     *         caller no longer wants a message
+     */
+    public Delivery receive(Consumer consumer, long timeoutNanos, BooleanSupplier wanted) throws JMSException {
         // The timeout runs from the call, not from the moment the lock is obtained.
         long start = System.nanoTime();
         lock.lock();
         try {
             consumer.receiving++;
-            while (!consumer.closed) {
+            while (!consumer.closed && wanted.getAsBoolean()) {
                 long now = System.currentTimeMillis();
                 long nextDeliveryTime = Long.MAX_VALUE;
                 // A stopped connection delivers nothing, but its receive timers keep running (§6.1.5).
                 if (consumer.started.getAsBoolean()) {
-                    Iterator<Stored> stored = consumer.storage.messages.iterator();
-                    while (stored.hasNext()) {
-                        Stored next = stored.next();
+                    // Through its view a consumer only meets the messages its selector accepts.
+                    TreeSet<Stored> candidates =
+                            consumer.view != null ? consumer.view.messages : consumer.storage.messages;
+                    consumer.storage.sweepExpired(now);
+                    Stored taken = null;
+                    List<Stored> gone = new ArrayList<>();
+                    for (Stored next : candidates) {
                         TassisMessage message = next.message;
-                        if (isExpired(message, now)) {
-                            stored.remove();
-                        } else if (consumer.selector != null
+                        if (noLongerSelected(consumer.subscription, next)) {
+                            gone.add(next);
+                        } else if (consumer.view == null && consumer.selector != null
                                 && !consumer.selector.matches(message, next.deliveryCount + 1)) {
-                            // Not for this consumer: the message stays where it is.
+                            // A selector on the delivery count, checked each time. Not for this
+                            // consumer: the message stays where it is.
                             continue;
-                        } else if (noLongerSelected(consumer.subscription, next)) {
-                            stored.remove();
                         } else if (message.getJMSDeliveryTime() > now) {
                             nextDeliveryTime = Math.min(nextDeliveryTime, message.getJMSDeliveryTime());
                         } else {
-                            // Each delivery gets its own copy: the stored message may be delivered again.
-                            TassisMessage delivered = message.copy();
-                            delivered.markDelivered(++next.deliveryCount);
-                            stored.remove();
-                            return new Delivery(next, delivered);
+                            taken = next;
+                            break;
                         }
+                    }
+                    gone.forEach(consumer.storage::remove);
+                    if (taken != null) {
+                        // Each delivery gets its own copy: the stored message may be delivered again.
+                        TassisMessage delivered = taken.message.copy();
+                        delivered.markDelivered(++taken.deliveryCount);
+                        consumer.storage.remove(taken);
+                        return new Delivery(taken, delivered);
                     }
                 }
                 long wait = timeoutNanos == FOREVER ? FOREVER : timeoutNanos - (System.nanoTime() - start);
@@ -628,6 +762,17 @@ public final class Broker {
         try {
             Storage storage = queues.get(queue);
             return storage == null ? 0 : storage.consumers;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Returns how many messages the queue holds, delivered ones excluded. */
+    public int messageCount(String queue) {
+        lock.lock();
+        try {
+            Storage storage = queues.get(queue);
+            return storage == null ? 0 : storage.messages.size();
         } finally {
             lock.unlock();
         }

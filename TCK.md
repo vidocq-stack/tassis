@@ -21,18 +21,23 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M5
+## Status — M6
 
-**598 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
-`./mvnw -ntp -Ptck clean install`; the run reports 599 because it also executes `PortingSmokeTest`).
+**642 TCK tests passed / 0 failed**: the whole of `core`, its 46 packages including the 11
+`appclient` ones, with no test negated (2026-10-09, `./mvnw -ntp -Ptck clean install`; the run
+reports 643 because it also executes `PortingSmokeTest`).
 
-The selection is 37 packages of `core`, with no test negated: every package outside `appclient`,
-plus `appclient/txqueuetests` and `appclient/txtopictests`.
+`core` has 644 `@Test` annotations but 642 tests: in `QueueHeaderTestsIT` and
+`TopicHeaderTestsIT` the annotation also sits on a private helper taking a parameter
+(`chkMessageID(String)`), which JUnit does not run. The 905 of the spike for `core` + `core20`
+was a count of annotations.
 
-Not selected yet: the other 9 `appclient` packages (expected with listeners, M6) and all of
-`core20` (M7).
+Not selected yet: `core20`, 15 packages and 261 annotations (simplified API, M7).
 
-History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37.
+History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37; M6 642 on 46.
+
+Every `appclient` package of `core` runs as-is in `standalone` mode, which closes the open point
+of spike 2 for `core`.
 
 The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
 `DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite
@@ -61,6 +66,13 @@ correct provider must deliver it, and fail with "didn't get the right message". 
 default order produces exactly that sequence; the alphabetical order does not. `tassis-tck`
 sets `junit.jupiter.testmethod.order.default` to `MethodOrderer$MethodName`. No test is
 skipped or altered by it.
+
+### A timeout on every test
+
+`tassis-tck` sets `junit.jupiter.execution.timeout.default` to 2 minutes. Several TCK tests wait
+on a latch that only a message listener releases; when the provider gets it wrong they wait for
+ever and hang the whole run. The timeout turns that into a failure. The slowest class takes 12
+seconds.
 
 ### Harness dependencies excluded
 

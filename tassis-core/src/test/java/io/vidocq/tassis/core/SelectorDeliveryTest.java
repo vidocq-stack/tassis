@@ -23,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.Connection;
 import jakarta.jms.InvalidSelectorException;
 import jakarta.jms.JMSException;
@@ -49,6 +51,7 @@ class SelectorDeliveryTest {
     private static final long SOON = 5_000;
     private static final long BRIEFLY = 100;
 
+    private String brokerName;
     private Connection connection;
     private Session session;
     private Queue queue;
@@ -56,7 +59,8 @@ class SelectorDeliveryTest {
 
     @BeforeEach
     void connect() throws JMSException {
-        connection = new TassisConnectionFactory("test-" + UUID.randomUUID()).withClientID("reader").createConnection();
+        brokerName = "test-" + UUID.randomUUID();
+        connection = new TassisConnectionFactory(brokerName).withClientID("reader").createConnection();
         session = connection.createSession();
         queue = session.createQueue("orders");
         topic = session.createTopic("news");
@@ -188,6 +192,69 @@ class SelectorDeliveryTest {
             assertEquals(1, Collections.list(first.getEnumeration()).size());
             assertEquals(0, Collections.list(later.getEnumeration()).size());
         }
+    }
+
+    @Test
+    void queueMessageIsEvaluatedOncePerSelector() throws JMSException {
+        for (int i = 0; i < 50; i++) {
+            send(queue, "red " + i, "red");
+        }
+        Selector.resetEvaluationCount();
+        MessageConsumer blue = session.createConsumer(queue, "color = 'blue'");
+        MessageConsumer alsoBlue = session.createConsumer(queue, "color = 'blue'");
+
+        for (int i = 0; i < 5; i++) {
+            assertNull(blue.receiveNoWait());
+            assertNull(alsoBlue.receiveNoWait());
+        }
+        assertEquals(50, Selector.evaluationCount(),
+                "the 50 messages are evaluated once for the selector, however many consumers and receives");
+
+        send(queue, "blue one", "blue");
+        assertEquals("blue one", text(blue.receive(SOON)));
+        assertEquals(51, Selector.evaluationCount(), "a new message is evaluated once when it arrives");
+        assertNull(alsoBlue.receiveNoWait());
+        assertEquals(51, Selector.evaluationCount());
+    }
+
+    @Test
+    void expiredMessageIsRemovedEvenWhenNoSelectorInUseAcceptsIt() throws Exception {
+        MessageProducer producer = session.createProducer(queue);
+        TextMessage shortLived = session.createTextMessage("red and short-lived");
+        shortLived.setStringProperty("color", "red");
+        producer.send(shortLived, jakarta.jms.DeliveryMode.PERSISTENT, 4, 1);
+        MessageConsumer blue = session.createConsumer(queue, "color = 'blue'");
+        Thread.sleep(50);
+
+        assertNull(blue.receiveNoWait());
+
+        assertEquals(0, Broker.named(brokerName).messageCount("orders"),
+                "a consumer that only looks at its view must still let expired messages go");
+    }
+
+    @Test
+    void indexedSelectorKeepsPriorityOrderAndRedelivery() throws JMSException {
+        try (Session transacted = connection.createSession(Session.SESSION_TRANSACTED)) {
+            MessageConsumer blue = transacted.createConsumer(queue, "color = 'blue'");
+            MessageProducer producer = session.createProducer(queue);
+            for (int priority : new int[] {1, 9, 5}) {
+                TextMessage message = session.createTextMessage("p" + priority);
+                message.setStringProperty("color", "blue");
+                producer.send(message, jakarta.jms.DeliveryMode.PERSISTENT, priority, 0);
+            }
+            send(queue, "red one", "red");
+
+            assertEquals("p9", text(blue.receive(SOON)));
+            assertEquals("p5", text(blue.receive(SOON)));
+            transacted.rollback();
+
+            assertEquals("p9", text(blue.receive(SOON)), "messages given back return to their place in the view");
+            assertEquals("p5", text(blue.receive(SOON)));
+            assertEquals("p1", text(blue.receive(SOON)));
+            assertNull(blue.receiveNoWait());
+            transacted.commit();
+        }
+        assertEquals("red one", text(session.createConsumer(queue).receive(SOON)));
     }
 
     @Test

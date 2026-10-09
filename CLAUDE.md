@@ -101,12 +101,28 @@ with `Broker.redeliver`. Losing a `Delivery` loses the message. `TassisSession.w
 session's unsettled deliveries and uncommitted sends; the only lock order is `work`, then the
 broker lock.
 
+## Threads and callbacks
+
+Tassis creates two kinds of thread, both virtual: one **dispatcher per consumer that has a
+listener** (`TassisMessageConsumer.dispatch`), and one **completion thread per session** that has
+made an asynchronous send. Application callbacks run on them and nowhere else.
+
+- All `onMessage` calls of a session go through `TassisSession.dispatch`, under the session's
+  `listeners` lock: that is what makes them serial. Never call a listener from elsewhere.
+- Lock order: `listeners`, then `work`, then the broker lock. Nothing running under the broker
+  lock may take a session lock or call application code.
+- `close()` is the public method, with the restrictions on callbacks; `shut()` is what a parent
+  uses to close a child, with none. A `shut()` never throws and returns once the child is quiet.
+- A dispatcher that cannot deliver the message it took gives it back with
+  `Broker.returnUndelivered`, not `redeliver`: the application never saw it.
+
 ## Selectors (`internal.selector`)
 
 `Selector.parse` compiles a selector, or returns `null` for none. `SelectorParser` holds the
 grammar (as a comment) and the checks made when a selector is given; `Expression` is the tree and
-its evaluation, where `null` is SQL's NULL / unknown. A queue consumer filters at receive time; a
-subscription filters at publication (`Broker.send`).
+its evaluation, where `null` is SQL's NULL / unknown. A subscription filters at publication
+(`Broker.send`). A queue keeps one `View` per selector in use, updated by `Storage.add` and
+`Storage.remove`: always go through those two to change what a queue holds.
 
 ## Conventions
 
