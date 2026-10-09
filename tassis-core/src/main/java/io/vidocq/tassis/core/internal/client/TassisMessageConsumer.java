@@ -70,14 +70,14 @@ final class TassisMessageConsumer implements QueueReceiver, SessionChild {
     @Override
     public Message receive(long timeout) throws JMSException {
         checkOpen();
-        return session.broker().receive(attachment,
-                timeout == 0 ? Broker.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout));
+        return session.delivered(session.broker().receive(attachment,
+                timeout == 0 ? Broker.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout)));
     }
 
     @Override
     public Message receiveNoWait() throws JMSException {
         checkOpen();
-        return session.broker().receive(attachment, 0);
+        return session.delivered(session.broker().receive(attachment, 0));
     }
 
     @Override

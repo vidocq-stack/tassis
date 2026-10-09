@@ -48,25 +48,98 @@ import jakarta.jms.TemporaryTopic;
 import jakarta.jms.TextMessage;
 import jakarta.jms.Topic;
 import jakarta.jms.TopicSubscriber;
+import jakarta.jms.TransactionRolledBackException;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * A single-threaded context for producing and consuming messages (Jakarta
- * Messaging 3.1 §6.2). Non-transacted, automatically acknowledged sessions only
- * for now: a message is gone from its queue as soon as a consumer has taken it.
+ * Messaging 3.1 §6.2).
+ *
+ * <p>The session owns every message its consumers took and that is not settled yet: the
+ * messages of the current transaction, or the unacknowledged ones of a client-acknowledged
+ * session. It settles them (commit, acknowledge) or gives them back to the broker (rollback,
+ * recover, close). An automatically acknowledged session settles on delivery and owns nothing.
  */
 public final class TassisSession implements QueueSession {
 
     private final TassisConnection connection;
     private final int acknowledgeMode;
+    private final boolean transacted;
     private final List<SessionChild> children = new CopyOnWriteArrayList<>();
+    // Guards the two lists below, which the session's thread and a concurrent close() both touch.
+    private final ReentrantLock work = new ReentrantLock();
+    private final List<Broker.Delivery> unsettled = new ArrayList<>();
+    private final List<Broker.Outgoing> uncommittedSends = new ArrayList<>();
     private volatile boolean closed;
 
     TassisSession(TassisConnection connection, int acknowledgeMode) {
         this.connection = connection;
         this.acknowledgeMode = acknowledgeMode;
+        this.transacted = acknowledgeMode == SESSION_TRANSACTED;
+    }
+
+    /** Sends now, or with the current transaction's commit (§6.2.7). */
+    void send(Broker.Outgoing outgoing) throws JMSException {
+        if (!transacted) {
+            broker().send(List.of(outgoing));
+            return;
+        }
+        work.lock();
+        try {
+            checkOpen();
+            uncommittedSends.add(outgoing);
+        } finally {
+            work.unlock();
+        }
+    }
+
+    /**
+     * Takes responsibility for a delivery one of this session's consumers obtained, and returns
+     * the message to hand to the application: {@code null} if there is no delivery, or if the
+     * session was closed in the meantime, in which case the message goes back to its queue.
+     */
+    Message delivered(Broker.Delivery delivery) {
+        if (delivery == null) {
+            return null;
+        }
+        if (!transacted && acknowledgeMode != CLIENT_ACKNOWLEDGE) {
+            return delivery.message();
+        }
+        work.lock();
+        try {
+            if (closed) {
+                broker().redeliver(List.of(delivery));
+                return null;
+            }
+            if (acknowledgeMode == CLIENT_ACKNOWLEDGE) {
+                delivery.message().onAcknowledge(this::acknowledgeAll);
+            }
+            unsettled.add(delivery);
+        } finally {
+            work.unlock();
+        }
+        return delivery.message();
+    }
+
+    /** {@code Message.acknowledge()}: acknowledges everything this session has consumed (§6.2.10). */
+    private void acknowledgeAll() throws IllegalStateException {
+        work.lock();
+        try {
+            checkOpen();
+            unsettled.clear();
+        } finally {
+            work.unlock();
+        }
+    }
+
+    /** Gives every unsettled message back to the broker, to be redelivered (§6.2.11). */
+    private void giveBackUnsettled() {
+        broker().redeliver(unsettled);
+        unsettled.clear();
     }
 
     TassisConnection connection() {
@@ -144,7 +217,7 @@ public final class TassisSession implements QueueSession {
     @Override
     public boolean getTransacted() throws JMSException {
         checkOpen();
-        return false;
+        return transacted;
     }
 
     @Override
@@ -156,19 +229,61 @@ public final class TassisSession implements QueueSession {
     @Override
     public void commit() throws JMSException {
         checkOpen();
-        throw new IllegalStateException("commit() on a session that is not transacted");
+        if (!transacted) {
+            throw new IllegalStateException("commit() on a session that is not transacted");
+        }
+        work.lock();
+        try {
+            checkOpen();
+            try {
+                broker().send(uncommittedSends);
+            } catch (JMSException e) {
+                // Nothing was sent: the whole transaction is rolled back.
+                uncommittedSends.clear();
+                giveBackUnsettled();
+                TransactionRolledBackException rolledBack =
+                        new TransactionRolledBackException("the transaction was rolled back: " + e.getMessage());
+                rolledBack.setLinkedException(e);
+                rolledBack.initCause(e);
+                throw rolledBack;
+            }
+            uncommittedSends.clear();
+            unsettled.clear();
+        } finally {
+            work.unlock();
+        }
     }
 
     @Override
     public void rollback() throws JMSException {
         checkOpen();
-        throw new IllegalStateException("rollback() on a session that is not transacted");
+        if (!transacted) {
+            throw new IllegalStateException("rollback() on a session that is not transacted");
+        }
+        work.lock();
+        try {
+            checkOpen();
+            uncommittedSends.clear();
+            giveBackUnsettled();
+        } finally {
+            work.unlock();
+        }
     }
 
-    // An automatically acknowledged session has no unacknowledged message to redeliver.
+    /** Only a client-acknowledged session has unacknowledged messages to redeliver. */
     @Override
     public void recover() throws JMSException {
         checkOpen();
+        if (transacted) {
+            throw new IllegalStateException("recover() on a transacted session");
+        }
+        work.lock();
+        try {
+            checkOpen();
+            giveBackUnsettled();
+        } finally {
+            work.unlock();
+        }
     }
 
     /**
@@ -180,6 +295,14 @@ public final class TassisSession implements QueueSession {
         closed = true;
         for (SessionChild child : children) {
             child.close();
+        }
+        // The transaction in progress is rolled back, and closing acknowledges nothing (§6.1.8).
+        work.lock();
+        try {
+            uncommittedSends.clear();
+            giveBackUnsettled();
+        } finally {
+            work.unlock();
         }
         connection.forget(this);
     }

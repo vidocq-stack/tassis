@@ -60,6 +60,7 @@ public class TassisMessage implements Message {
     private final Map<String, Object> properties = new LinkedHashMap<>();
     private boolean propertiesReadOnly;
     private boolean bodyReadOnly;
+    private Acknowledgement acknowledgement;
 
     /**
      * Puts this message in the state a client receives it in: properties and
@@ -68,6 +69,22 @@ public class TassisMessage implements Message {
     public final void markReceived() {
         propertiesReadOnly = true;
         makeBodyReadOnly();
+    }
+
+    /**
+     * Puts this message in the state of its {@code deliveryCount}-th delivery to a client:
+     * {@code JMSRedelivered} (§3.4.7) and {@code JMSXDeliveryCount} (§3.5.11) set accordingly,
+     * then read-only as {@link #markReceived()} leaves it.
+     */
+    public final void markDelivered(int deliveryCount) {
+        redelivered = deliveryCount > 1;
+        properties.put("JMSXDeliveryCount", deliveryCount);
+        markReceived();
+    }
+
+    /** Sets what {@link #acknowledge()} does; by default it does nothing. */
+    public final void onAcknowledge(Acknowledgement acknowledgement) {
+        this.acknowledgement = acknowledgement;
     }
 
     /**
@@ -363,9 +380,12 @@ public class TassisMessage implements Message {
 
     // ---- acknowledgement -----------------------------------------------
 
+    /** Ignored unless the message was delivered to a client-acknowledged session (§6.2.10). */
     @Override
-    public void acknowledge() {
-        throw new UnsupportedOperationException("acknowledge(): see ROADMAP M3");
+    public void acknowledge() throws JMSException {
+        if (acknowledgement != null) {
+            acknowledgement.acknowledge();
+        }
     }
 
     // ---- body ----------------------------------------------------------

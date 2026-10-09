@@ -8,8 +8,9 @@
 
 ## Status
 
-🚧 **M2** — point-to-point messaging on an in-VM queue through the classic API. Topics, transactions,
-selectors, listeners and the simplified API are not implemented yet; see [ROADMAP.md](ROADMAP.md).
+🚧 **M3** — point-to-point messaging on an in-VM queue through the classic API, with acknowledgement modes
+and local transactions. Topics, selectors, listeners and the simplified API are not implemented yet; see
+[ROADMAP.md](ROADMAP.md).
 
 ## Ecosystem rules
 

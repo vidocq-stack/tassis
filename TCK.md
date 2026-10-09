@@ -21,27 +21,32 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M2
+## Status — M3
 
-**199 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
-`./run-official-tck-messaging-3.1.sh`; the run reports 200 because it also executes `PortingSmokeTest`).
+**219 TCK tests passed / 0 failed** on the selection of `tck.test` (2026-10-09,
+`./mvnw -ntp -Ptck clean install`; the run reports 220 because it also executes `PortingSmokeTest`).
 
-The selection is the 16 queue packages of `core` (215 tests) minus the 16 tests below, which
-need a later milestone. The list lives in the `tck.test` property of `tassis-tck/pom.xml`;
-a milestone is done when its lines are gone from it.
+The selection is 18 packages of `core` (234 tests): the 16 queue packages, `sessiontests` and
+`appclient/txqueuetests`, minus the 15 tests below, which need a later milestone. The list lives
+in the `tck.test` property of `tassis-tck/pom.xml`; a milestone is done when its lines are gone
+from it.
 
 | Milestone | Test | Needs |
 |---|---|---|
-| M3 | `ClosedQueueConnectionTestsIT#closedQueueConnectionCommitTest` | transacted session |
-| M3 | `ClosedQueueSessionTestsIT#closedSessionRecoverTest`, `#closedQueueSessionRecoverTest`, `#closedQueueSessionCommitTest`, `#closedQueueSessionRollbackTest`, `#closedQueueSessionGetTransactedTest` | transacted and client-acknowledged sessions |
-| M3 | `QueuePropertyTestsIT#msgPropertiesQTest` | `JMSXDeliveryCount`, JMSX names in `ConnectionMetaData` |
 | M4 | `ExceptionQueueTestsIT#xIllegalStateExceptionTestTopicMethodsQ` | topic methods on a `QueueSession` |
 | M4 | `MessageProducerTestsIT#sendTopicTest4`, `#sendTopicTest5`, `#sendTopicTest6` | topics |
+| M4 | `SessionTestsIT#SimpleSendAndReceiveT`, `#SubscriberTests`, `#ackTests`, `#InvalidDestinationTests` | topics |
 | M5 | `ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest` | selector parsing |
 | M5 | `QueueConnectionTestsIT#connNotStartedQueueTest` | selectors |
 | M5 | `QueueTestsIT#queueBrowserMsgsRemainOnQueueTest`, `#messageSelectorMsgRemainsOnQueueTest`, `#msgSelectorMsgHeaderQueueTest` | selectors |
+| M5 | `SessionTestsIT#selectorAndBrowserTests`, `#InvalidSelectorTests` | selectors (the second also needs topics) |
 
-Not selected yet: the other 26 packages of `core` and all of `core20`.
+`appclient/txqueuetests` passing settles one of spike 2's open points for this package: an
+`appclient` package runs as-is in `standalone` mode. The other `appclient` packages are not tried yet.
+
+Not selected yet: the other 24 packages of `core` and all of `core20`.
+
+History: M2 199 / 199 on 16 packages; M3 re-enabled the 7 tests waiting for it and added 2 packages.
 
 ## Deviations from the TCK as published
 

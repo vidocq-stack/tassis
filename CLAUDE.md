@@ -90,6 +90,12 @@ change such state only through `Broker.update(...)`, which also wakes the waitin
 send hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
 `Destinations.queue(...)` is the one place that decides which `Destination` objects are ours.
 
+`Broker.receive` returns a `Delivery`; from then on the consumer's **session owns it** and must
+either settle it (commit, acknowledge, or automatic acknowledgement on delivery) or hand it back
+with `Broker.redeliver`. Losing a `Delivery` loses the message. `TassisSession.work` guards the
+session's unsettled deliveries and uncommitted sends; the only lock order is `work`, then the
+broker lock.
+
 ## Conventions
 
 - **Maven groupId**: `io.vidocq.tassis`. Version `0.4.0-SNAPSHOT`, parent

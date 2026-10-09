@@ -23,6 +23,7 @@ import io.vidocq.tassis.core.internal.message.TassisMessage;
 import jakarta.jms.InvalidDestinationException;
 import jakarta.jms.JMSException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -69,12 +70,45 @@ public final class Broker {
         }
     }
 
-    private record Stored(TassisMessage message, long sequence) {
+    /** A message on its way to a queue. */
+    public record Outgoing(String queue, boolean temporary, TassisMessage message) {
+    }
+
+    /** A message handed to a consumer, which the consumer's session either settles or gives back. */
+    public static final class Delivery {
+
+        private final Stored stored;
+        private final TassisMessage message;
+
+        private Delivery(Stored stored, TassisMessage message) {
+            this.stored = stored;
+            this.message = message;
+        }
+
+        /** The copy of the message made for this delivery. */
+        public TassisMessage message() {
+            return message;
+        }
+    }
+
+    private static final class Stored {
 
         /** Highest priority first, then the order the messages were sent in (§3.4.10, §4.1). */
         static final Comparator<Stored> DELIVERY_ORDER = Comparator
                 .comparingInt((Stored stored) -> -stored.message.getJMSPriority())
-                .thenComparingLong(Stored::sequence);
+                .thenComparingLong(stored -> stored.sequence);
+
+        final Outgoing origin;
+        final TassisMessage message;
+        // Kept across redeliveries, so that a message given back returns to its place in the queue.
+        final long sequence;
+        int deliveryCount;
+
+        Stored(Outgoing origin, long sequence) {
+            this.origin = origin;
+            this.message = origin.message();
+            this.sequence = sequence;
+        }
     }
 
     private final String name;
@@ -134,16 +168,37 @@ public final class Broker {
     }
 
     /**
-     * Adds {@code message}, which the broker now owns, to the queue.
-     *
-     * @param temporary whether {@code queue} names a temporary queue, which must then still exist
+     * Adds messages, which the broker now owns, to their queues: all of them, or none if one
+     * names a temporary queue that no longer exists.
      */
-    public void send(String queue, boolean temporary, TassisMessage message) throws InvalidDestinationException {
+    public void send(Collection<Outgoing> messages) throws InvalidDestinationException {
         lock.lock();
         try {
-            checkExists(queue, temporary);
-            queues.computeIfAbsent(queue, created -> new TreeSet<>(Stored.DELIVERY_ORDER))
-                    .add(new Stored(message, sequence++));
+            for (Outgoing outgoing : messages) {
+                checkExists(outgoing.queue(), outgoing.temporary());
+            }
+            for (Outgoing outgoing : messages) {
+                storageOf(outgoing.queue()).add(new Stored(outgoing, sequence++));
+            }
+            changed.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Puts back on their queues messages that were delivered and not settled. Their next
+     * delivery will be marked as a redelivery. A message of a deleted temporary queue is dropped.
+     */
+    public void redeliver(Collection<Delivery> deliveries) {
+        lock.lock();
+        try {
+            for (Delivery delivery : deliveries) {
+                Outgoing origin = delivery.stored.origin;
+                if (!origin.temporary() || temporaryQueues.contains(origin.queue())) {
+                    storageOf(origin.queue()).add(delivery.stored);
+                }
+            }
             changed.signalAll();
         } finally {
             lock.unlock();
@@ -190,12 +245,13 @@ public final class Broker {
     }
 
     /**
-     * Takes the next message of the consumer's queue, in read-only state.
+     * Takes the next message off the consumer's queue. The caller owns the delivery from then
+     * on: the message is gone unless it is handed back to {@link #redeliver}.
      *
      * @param timeoutNanos how long to wait for one: 0 not at all, {@link #FOREVER} without limit
-     * @return the message, or {@code null} if the timeout expires or the consumer is closed
+     * @return the delivery, or {@code null} if the timeout expires or the consumer is closed
      */
-    public TassisMessage receive(QueueConsumer consumer, long timeoutNanos) throws JMSException {
+    public Delivery receive(QueueConsumer consumer, long timeoutNanos) throws JMSException {
         // The timeout runs from the call, not from the moment the lock is obtained.
         long start = System.nanoTime();
         lock.lock();
@@ -208,15 +264,18 @@ public final class Broker {
                 if (consumer.started.getAsBoolean()) {
                     Iterator<Stored> stored = messagesOf(consumer.queue).iterator();
                     while (stored.hasNext()) {
-                        TassisMessage message = stored.next().message;
+                        Stored next = stored.next();
+                        TassisMessage message = next.message;
                         if (isExpired(message, now)) {
                             stored.remove();
                         } else if (message.getJMSDeliveryTime() > now) {
                             nextDeliveryTime = Math.min(nextDeliveryTime, message.getJMSDeliveryTime());
                         } else {
-                            message.markReceived();
+                            // Each delivery gets its own copy: the stored message may be delivered again.
+                            TassisMessage delivered = message.copy();
+                            delivered.markDelivered(++next.deliveryCount);
                             stored.remove();
-                            return message;
+                            return new Delivery(next, delivered);
                         }
                     }
                 }
@@ -304,6 +363,10 @@ public final class Broker {
         if (temporary && !temporaryQueues.contains(queue)) {
             throw new InvalidDestinationException("temporary queue " + queue + " has been deleted");
         }
+    }
+
+    private TreeSet<Stored> storageOf(String queue) {
+        return queues.computeIfAbsent(queue, created -> new TreeSet<>(Stored.DELIVERY_ORDER));
     }
 
     /** The stored messages of a queue, for reading: a queue nobody sent to has none. */

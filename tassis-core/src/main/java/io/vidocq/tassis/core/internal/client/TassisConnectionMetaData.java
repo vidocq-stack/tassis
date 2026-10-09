@@ -22,6 +22,7 @@ package io.vidocq.tassis.core.internal.client;
 import jakarta.jms.ConnectionMetaData;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.List;
 
 /** What the provider says about itself (Jakarta Messaging 3.1 §6.1.6). */
 final class TassisConnectionMetaData implements ConnectionMetaData {
@@ -84,9 +85,13 @@ final class TassisConnectionMetaData implements ConnectionMetaData {
         return providerMinorVersion;
     }
 
-    // JMSXDeliveryCount, the one mandatory JMSX property, arrives with redelivery (ROADMAP M3).
+    /**
+     * {@code JMSXDeliveryCount} is set by the provider on every delivery (§3.5.11).
+     * {@code JMSXGroupID} and {@code JMSXGroupSeq} are set by the client and carried like any
+     * other property; Tassis attaches no delivery guarantee to them.
+     */
     @Override
     public Enumeration<String> getJMSXPropertyNames() {
-        return Collections.emptyEnumeration();
+        return Collections.enumeration(List.of("JMSXDeliveryCount", "JMSXGroupID", "JMSXGroupSeq"));
     }
 }

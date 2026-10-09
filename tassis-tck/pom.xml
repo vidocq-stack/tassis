@@ -68,25 +68,25 @@
             **/core/closedQueueSession/*IT,
             **/core/exceptionQueue/*IT,
             **/core/messageProducer/*IT,
-            <!-- M3: transacted and client-acknowledged sessions, JMSXDeliveryCount -->
-            !ClosedQueueConnectionTestsIT#closedQueueConnectionCommitTest,
-            !ClosedQueueSessionTestsIT#closedSessionRecoverTest,
-            !ClosedQueueSessionTestsIT#closedQueueSessionRecoverTest,
-            !ClosedQueueSessionTestsIT#closedQueueSessionCommitTest,
-            !ClosedQueueSessionTestsIT#closedQueueSessionRollbackTest,
-            !ClosedQueueSessionTestsIT#closedQueueSessionGetTransactedTest,
-            !QueuePropertyTestsIT#msgPropertiesQTest,
+            **/core/sessiontests/*IT,
+            **/core/appclient/txqueuetests/*IT,
             <!-- M4: topics -->
             !ExceptionQueueTestsIT#xIllegalStateExceptionTestTopicMethodsQ,
             !MessageProducerTestsIT#sendTopicTest4,
             !MessageProducerTestsIT#sendTopicTest5,
             !MessageProducerTestsIT#sendTopicTest6,
+            !SessionTestsIT#SimpleSendAndReceiveT,
+            !SessionTestsIT#SubscriberTests,
+            !SessionTestsIT#ackTests,
+            !SessionTestsIT#InvalidDestinationTests,
             <!-- M5: message selectors -->
             !ExceptionQueueTestsIT#xInvalidSelectorExceptionQueueTest,
             !QueueConnectionTestsIT#connNotStartedQueueTest,
             !QueueTestsIT#queueBrowserMsgsRemainOnQueueTest,
             !QueueTestsIT#messageSelectorMsgRemainsOnQueueTest,
-            !QueueTestsIT#msgSelectorMsgHeaderQueueTest
+            !QueueTestsIT#msgSelectorMsgHeaderQueueTest,
+            !SessionTestsIT#selectorAndBrowserTests,
+            !SessionTestsIT#InvalidSelectorTests
         </tck.test>
     </properties>
 

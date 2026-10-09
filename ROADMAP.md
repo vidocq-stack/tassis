@@ -169,10 +169,38 @@ What M2 settles and leaves open:
 - **`QueueSession` restrictions** of §9.2 (topic methods must throw `IllegalStateException`) come
   with M4, when those methods exist.
 
-### M3 — Acknowledgement and local transactions
+### M3 — Acknowledgement and local transactions ✅
 
-`AUTO_ACKNOWLEDGE`, `CLIENT_ACKNOWLEDGE`, `DUPS_OK_ACKNOWLEDGE`, `SESSION_TRANSACTED` (§6.2),
-commit, rollback, `recover`, `JMSRedelivered`, `JMSXDeliveryCount`.
+- [x] The four session modes (§6.2): `AUTO_ACKNOWLEDGE`, `DUPS_OK_ACKNOWLEDGE` (same as auto),
+      `CLIENT_ACKNOWLEDGE`, `SESSION_TRANSACTED`
+- [x] `Message.acknowledge()` acknowledges everything the session has consumed (§6.2.10);
+      ignored outside client-acknowledged sessions
+- [x] Local transactions (§6.2.7): sends held until `commit`, which is all-or-nothing;
+      `rollback` discards them and gives the consumed messages back
+- [x] `recover` (§6.2.11); closing a session rolls its transaction back and acknowledges nothing
+- [x] Redelivery: `JMSRedelivered` (§3.4.7) and `JMSXDeliveryCount` (§3.5.11) on every delivery;
+      a message given back returns to its place in the queue
+- [x] `ConnectionMetaData.getJMSXPropertyNames`
+
+**Deliverable:** `AcknowledgementTest` (13 tests, 101 unit tests in all) and **219 / 219** on the
+TCK selection, now 18 packages (see `TCK.md`).
+
+How it works: `Broker.receive` hands out a `Delivery`, a per-delivery copy of the message plus
+the stored original. The consumer's session owns the delivery until it settles it or gives it
+back with `Broker.redeliver`. An automatically acknowledged session settles on delivery.
+
+Choices and limits:
+
+- **Acknowledging is forgetting.** With an in-memory store, a settled message needs no broker
+  call. M10 (journal) will have to record settlement.
+- **`DUPS_OK_ACKNOWLEDGE` behaves exactly like `AUTO_ACKNOWLEDGE`**: no lazy acknowledgement, so
+  no duplicates.
+- **`JMSXGroupID` and `JMSXGroupSeq`** are listed as supported and carried like any property.
+  Tassis attaches no delivery guarantee to them; the spec defines none.
+- **`createSession(false, SESSION_TRANSACTED)`** is rejected with a `JMSException`.
+- **No redelivery limit and no dead-letter queue**: a message that is always rolled back is
+  redelivered for ever. Neither is in the spec.
+- **A redelivered message is immediately available**: there is no redelivery delay.
 
 ### M4 — Publish/subscribe
 

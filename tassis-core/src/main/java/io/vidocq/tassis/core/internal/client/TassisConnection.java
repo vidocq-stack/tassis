@@ -89,7 +89,7 @@ public final class TassisConnection implements QueueConnection {
 
     @Override
     public Session createSession(boolean transacted, int acknowledgeMode) throws JMSException {
-        return openSession(transacted ? Session.SESSION_TRANSACTED : acknowledgeMode);
+        return openSession(sessionMode(transacted, acknowledgeMode));
     }
 
     @Override
@@ -104,17 +104,26 @@ public final class TassisConnection implements QueueConnection {
 
     @Override
     public QueueSession createQueueSession(boolean transacted, int acknowledgeMode) throws JMSException {
-        return openSession(transacted ? Session.SESSION_TRANSACTED : acknowledgeMode);
+        return openSession(sessionMode(transacted, acknowledgeMode));
+    }
+
+    /** With {@code transacted} set, the acknowledgement mode is ignored (Java SE rule of createSession). */
+    private static int sessionMode(boolean transacted, int acknowledgeMode) throws JMSException {
+        if (transacted) {
+            return Session.SESSION_TRANSACTED;
+        }
+        if (acknowledgeMode == Session.SESSION_TRANSACTED) {
+            throw new JMSException("SESSION_TRANSACTED is not an acknowledgement mode of a non-transacted session");
+        }
+        return acknowledgeMode;
     }
 
     private TassisSession openSession(int sessionMode) throws JMSException {
         checkOpen();
         switch (sessionMode) {
-            case Session.AUTO_ACKNOWLEDGE, Session.DUPS_OK_ACKNOWLEDGE -> {
+            case Session.AUTO_ACKNOWLEDGE, Session.DUPS_OK_ACKNOWLEDGE, Session.CLIENT_ACKNOWLEDGE,
+                    Session.SESSION_TRANSACTED -> {
             }
-            case Session.CLIENT_ACKNOWLEDGE, Session.SESSION_TRANSACTED ->
-                throw new UnsupportedOperationException(
-                        "client-acknowledged and transacted sessions: see ROADMAP M3");
             default -> throw new JMSException("unknown session mode " + sessionMode);
         }
         TassisSession session = new TassisSession(this, sessionMode);
