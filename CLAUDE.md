@@ -171,7 +171,7 @@ PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivati
 
 ## Documentation (Antora) conventions
 
-Not created yet (ROADMAP M12). Follow `AGENTS.md`: `docs/en` component, Vauban as the
+Not created yet (ROADMAP M8b). Follow `AGENTS.md`: `docs/en` component, Vauban as the
 reference layout, `tck` then `performance` sections.
 
 ## Terminology

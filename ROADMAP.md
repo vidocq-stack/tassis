@@ -383,6 +383,56 @@ small:
 Any challenge (disabled test, spec-interpretation divergence) goes in `TCK.md` with the spec
 citation and a reactivation plan.
 
+### M8b — Documentation
+
+Added on 2026-10-10 after an inventory at the end of M7. The milestone is numbered M8b so that
+M9 to M12, which the code, `TCK.md` and `CLAUDE.md` refer to by number, keep theirs. It depends
+on nothing later than M7 and can be done before or after M8.
+
+What exists and is current: `README.md`, `CLAUDE.md`, `TCK.md`, the milestone sections of this
+file, and the Javadoc of the three exported classes.
+
+What is stale, to correct first:
+
+- [ ] This file's **Design decisions** table and **Module layout** section still describe the
+      plan of M0: a `MessageStore` SPI and a transport SPI that were never written (messages
+      live in `Broker.Storage`), internal packages `store` and `transport` that do not exist,
+      and `tassis-tck` as a placeholder. Rewrite them from the code.
+- [ ] The **Spike findings** section lists as "still unverified" two points settled since M6
+      (every `core` and `core20` package runs standalone; the harness dependencies are
+      excluded), and counts 905 tests where there are 903. Mark the section as a record of
+      2026-10-09 and point to `TCK.md` for the current state.
+- [ ] `AGENTS.md` and `CONTRIBUTING.md` were copied from erasmus at M0 and never reread for
+      Tassis.
+
+What is missing:
+
+- [ ] **Antora component** under `docs/en`, mirroring Vauban's layout as `AGENTS.md` requires:
+      `antora.yml`, `nav.adoc`, and the pages `index` (with the origin of the name and an
+      "at a glance" table), `getting-started`, `usage`, `concepts`, `internals`, `tck`,
+      `reference`, `migration`. The `performance` page waits for M12 and its `BENCH.md` entries.
+  - `usage`: queues, topics and the four kinds of subscription, acknowledgement modes and
+    transactions, selectors, listeners, asynchronous send, the simplified API.
+  - `concepts` and `internals`: the in-VM broker, storages and subscriptions, deliveries and
+    who owns them, the selector index, threads and callbacks, the lock order.
+  - `reference`: the administered objects (`TassisConnectionFactory`, `TassisQueue`,
+    `TassisTopic`), broker names, `withClientID`, and **the limits a user must know**: messages
+    and durable subscriptions do not survive the JVM, any credentials are accepted, a poison
+    message is dropped after 10 failed deliveries to a listener, no XA, no JNDI.
+  - `tck`: the content of `TCK.md`, kept in step with it.
+- [ ] **Logo**: `docs/en/modules/ROOT/images/tassis-logo.png`, to be supplied by the maintainer.
+- [ ] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
+      site's own pages that list the bricks. The published playbook clones from Codefloe, so
+      this needs the `Vidocq/tassis` repository to exist there.
+- [ ] **`tassis-examples`**: at least one runnable example per API (classic, simplified), which
+      `getting-started` can quote. The module is still empty.
+- [ ] **A usage snippet in `README.md`**.
+- [ ] **Javadoc review** of the exported package, and a `package-info.java` for it.
+
+Exit criterion: the Antora site builds locally with the Tassis component
+(`vidocq-docs/antora-playbook-local.yml`), every page was checked against the code as it is, and
+no statement of this file contradicts the code.
+
 ### M9 — CDI through Vauban
 
 `tassis-cdi-vauban`: `@Inject JMSContext` with `@JMSConnectionFactory`, `@JMSSessionMode`,
@@ -416,10 +466,11 @@ and `createContext(user, password)` accept any credentials. To deliver:
 The `ExceptionListener` (§6.1.7), stored and never called so far, also gets its purpose here: a
 lost connection.
 
-### M12 — Benchmarks and documentation
+### M12 — Benchmarks
 
-JMH in `tassis-bench`, every figure recorded in `BENCH.md`. Antora component under `docs/en`,
-mirroring Vauban's layout, with `tck` and `performance` sections.
+JMH in `tassis-bench`, every figure recorded in `BENCH.md`, and the `performance` page of the
+Antora component created in M8b. The benchmarks also settle the question left open since M2:
+whether the single broker lock must be split.
 
 ## Known risks
 
