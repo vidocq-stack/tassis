@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 420" width="300" height="420" role="img" aria-label="Tassis — Vidocq Messaging">
+  <defs>
+    <linearGradient id="tassisBrass" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#f5e070"/>
+      <stop offset="55%"  stop-color="#d4a827"/>
+      <stop offset="100%" stop-color="#a07010"/>
+    </linearGradient>
+    <radialGradient id="tassisEmblemBg" cx="38%" cy="35%" r="65%">
+      <stop offset="0%"   stop-color="#243a6e"/>
+      <stop offset="100%" stop-color="#101e3c"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="300" height="420" fill="#f7f1e3"/>
+
+  <!-- Double frame -->
+  <rect x="5"  y="5"  width="290" height="410" rx="2" fill="none" stroke="#1c2f5e" stroke-width="2.5"/>
+  <rect x="10" y="10" width="280" height="400" rx="1" fill="none" stroke="#1c2f5e" stroke-width="0.7"/>
+
+  <!-- Gold lozenges at the four corners -->
+  <polygon points="5,14  14,5  23,14  14,23" fill="#c9a227"/>
+  <polygon points="277,14 286,5 295,14 286,23" fill="#c9a227"/>
+  <polygon points="5,406  14,397  23,406  14,415" fill="#c9a227"/>
+  <polygon points="277,406 286,397 295,406 286,415" fill="#c9a227"/>
+
+  <!-- Top label -->
+  <text x="150" y="36" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="8" letter-spacing="2.8" fill="#1c2f5e" opacity="0.75">JAKARTA MESSAGING IMPLEMENTATION</text>
+
+  <!-- Emblem -->
+  <circle cx="150" cy="183" r="111" fill="#1c2f5e" opacity="0.12"/>
+  <circle cx="150" cy="183" r="108" fill="url(#tassisEmblemBg)"/>
+
+  <!-- The relay route: a message goes from post to post around the disc.
+       Twelve relay posts on a dashed road, as the riders of the Tassis changed horses. -->
+  <circle cx="150" cy="183" r="93" fill="none" stroke="#c9a227" stroke-width="1.1"
+          stroke-dasharray="2.5 5" opacity="0.6"/>
+  <g fill="#c9a227">
+    <circle cx="150"   cy="90"    r="3.2"/>
+    <circle cx="196.5" cy="102.5" r="2.4"/>
+    <circle cx="230.5" cy="136.5" r="2.4"/>
+    <circle cx="243"   cy="183"   r="3.2"/>
+    <circle cx="230.5" cy="229.5" r="2.4"/>
+    <circle cx="196.5" cy="263.5" r="2.4"/>
+    <circle cx="150"   cy="276"   r="3.2"/>
+    <circle cx="103.5" cy="263.5" r="2.4"/>
+    <circle cx="69.5"  cy="229.5" r="2.4"/>
+    <circle cx="57"    cy="183"   r="3.2"/>
+    <circle cx="69.5"  cy="136.5" r="2.4"/>
+    <circle cx="103.5" cy="102.5" r="2.4"/>
+  </g>
+
+  <!-- The post horn, emblem of the Tassis post: mouthpiece on the left, one coil, bell on the right -->
+  <g transform="translate(-6 0)">
+    <!-- cord, hanging from the coil, with its two tassels -->
+    <path d="M118,203 C122,236 170,236 176,205" fill="none" stroke="#c9a227" stroke-width="1.6" opacity="0.85"/>
+    <path d="M146,229 l-4,13 M146,229 l0,14 M146,229 l4,13" stroke="#c9a227" stroke-width="1.4" stroke-linecap="round" opacity="0.85"/>
+    <circle cx="146" cy="229" r="2.6" fill="#c9a227"/>
+
+    <!-- coil -->
+    <circle cx="142" cy="172" r="27" fill="none" stroke="url(#tassisBrass)" stroke-width="8"/>
+    <!-- straight tube, tangent under the coil -->
+    <rect x="84" y="195" width="100" height="8" fill="url(#tassisBrass)"/>
+    <!-- mouthpiece -->
+    <path d="M86,195 L76,192 L76,206 L86,203 Z" fill="url(#tassisBrass)"/>
+    <rect x="71" y="190" width="5" height="18" rx="1.5" fill="url(#tassisBrass)"/>
+    <!-- bell -->
+    <path d="M182,195 C202,193 215,185 222,170 L222,228 C215,213 202,205 182,203 Z" fill="url(#tassisBrass)"/>
+    <ellipse cx="223" cy="199" rx="4.5" ry="30" fill="#f5e070" stroke="#a07010" stroke-width="0.8"/>
+    <!-- ferrules -->
+    <rect x="96"  y="194" width="3" height="10" fill="#a07010" opacity="0.8"/>
+    <rect x="176" y="194" width="3" height="10" fill="#a07010" opacity="0.8"/>
+  </g>
+
+  <!-- Outer ring of the emblem -->
+  <circle cx="150" cy="183" r="108" fill="none" stroke="#c9a227" stroke-width="3"/>
+
+  <!-- Title -->
+  <text x="150" y="340" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="50" font-weight="bold" letter-spacing="5"
+        fill="#1c2f5e">TASSIS</text>
+
+  <!-- Ornamental separator -->
+  <line x1="25"  y1="352" x2="122" y2="352" stroke="#c9a227" stroke-width="1.5"/>
+  <circle cx="150" cy="352" r="4.5" fill="none" stroke="#c9a227" stroke-width="1.5"/>
+  <circle cx="150" cy="352" r="1.8" fill="#c9a227"/>
+  <line x1="178" y1="352" x2="275" y2="352" stroke="#c9a227" stroke-width="1.5"/>
+
+  <!-- Subtitle -->
+  <text x="150" y="373" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="10.5" letter-spacing="2.2"
+        fill="#1c2f5e">MESSAGING · VIDOCQ</text>
+
+  <line x1="55" y1="386" x2="245" y2="386" stroke="#1c2f5e" stroke-width="0.6" opacity="0.45"/>
+
+  <g fill="#c9a227" opacity="0.75">
+    <polygon points="138,396  142,400  138,404  134,400"/>
+    <polygon points="148,395  153,400  148,405  143,400"/>
+    <polygon points="158,396  162,400  158,404  154,400"/>
+  </g>
+</svg>

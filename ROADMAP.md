@@ -446,7 +446,8 @@ What is missing:
     and durable subscriptions do not survive the JVM, any credentials are accepted, a poison
     message is dropped after 10 failed deliveries to a listener, no XA before M13, no JNDI.
   - `tck`: the content of `TCK.md`, kept in step with it.
-- [ ] **Logo**: `docs/en/modules/ROOT/images/tassis-logo.png`, to be supplied by the maintainer.
+- [x] **Logo**: `tassis-logo.svg` and its rendering `tassis-logo.png`, at the root for the README
+      and in `docs/en/modules/ROOT/images`: a post horn, the emblem of the Tassis post.
 - [ ] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
       site's own pages that list the bricks. The published playbook clones from Codefloe, so
       this needs the `Vidocq/tassis` repository to exist there.
@@ -469,8 +470,7 @@ repository.**
   warning; every cross-reference and anchor resolves. That build used a playbook holding this
   component alone and Antora's default UI, **not** the `vidocq-docs` playbook: Tassis is not
   registered there yet, so the first half of the exit criterion is not met to the letter.
-- Still open: the **logo**, which the maintainer supplies, and the **registration in
-  `vidocq-docs`**, which is a change in another repository and, for the published playbook,
+- Still open: the **registration in `vidocq-docs`**, which is a change in another repository and, for the published playbook,
   needs `Vidocq/tassis` to exist on Codefloe.
 
 ### M8c — Configuration ✅

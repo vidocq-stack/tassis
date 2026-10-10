@@ -1,7 +1,7 @@
 = Tassis
 :description: Jakarta Messaging 3.1 provider with its own in-VM broker: zero third-party dependency, strict Java Modules, virtual threads.
 
-// TODO: the logo is to be added. Supply modules/ROOT/images/tassis-logo.png, then put the centred module-logo image block here.
+image::tassis-logo.png[Tassis,300,role=module-logo]
 
 [.lead]
 Tassis is a Jakarta Messaging 3.1 provider written in Java 25. It depends on the Jakarta Messaging API and on nothing else, every artifact is a Java module, and the threads it creates are virtual threads. Being a provider, it ships its own broker, which today runs inside the JVM of the application that uses it.
@@ -13,9 +13,28 @@ Tassis is **in development and not released**: no artifact has been published. T
 
 == Origin of the name
 
-The Tassis family, later Thurn und Taxis, ran the relay postal service that carried messages across Europe from the end of the 15th century.
+The Tassis family, later Thurn und Taxis, ran the relay postal service that carried messages across Europe from the end of the 15th century. In 1490 Maximilian I of Habsburg entrusted Francesco de Tassis with a line of mounted couriers between Innsbruck and the Low Countries. A contract of 1505 with Philip the Handsome turned it into a network, with fixed routes and delivery times written into the contract. The family ran that post until 1867.
 
 A sender hands a message to the network, and the network takes charge of delivering it to its destination. That is what a Jakarta Messaging provider does for Java applications: a producer sends a message to a queue or publishes it to a topic, and the provider delivers it to the consumers.
+
+[cols="1,1",options="header"]
+|===
+| The Tassis post | Jakarta Messaging
+
+| The sender hands a letter over and goes back to work, without waiting for the addressee.
+| A producer sends a message and carries on. The consumer may be busy, or absent.
+
+| The letter goes from relay to relay, and each relay keeps it until a fresh rider takes it over.
+| The broker stores the message until a consumer takes it.
+
+| A slip travels with the bag, and each relay writes on it the hour the bag went through.
+| A message carries its headers: when it was sent, when it expires, whether it is being delivered again.
+
+| The post horn announces the courier.
+| A message listener is called when a message arrives.
+|===
+
+The post horn of the logo is the emblem of that post, and the dotted circle around it is the road and its relays. The spelling is the one the family used in the Low Countries and in Spain, _de Tassis_.
 
 == At a glance
 
