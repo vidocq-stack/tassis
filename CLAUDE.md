@@ -121,6 +121,14 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
 - A dispatcher that cannot deliver the message it took gives it back with
   `Broker.returnUndelivered`, not `redeliver`: the application never saw it.
 
+## Settings (`internal.settings`)
+
+`Settings` is the one description of what configures a connection factory. A new setting is
+added there once, as a key (`tassis.<name>`) **and** as a URL parameter, with its default and
+its validation, and gets its line in the tables of `README.md`, of the `TassisConnectionFactory`
+Javadoc and of the Antora `reference` page in the same change. Tassis reads no file and no
+system property by itself: the application hands over a `Map` or `Properties`.
+
 ## Simplified API
 
 `TassisContext`, `TassisJMSProducer` and `TassisJMSConsumer` are a thin layer over the classic

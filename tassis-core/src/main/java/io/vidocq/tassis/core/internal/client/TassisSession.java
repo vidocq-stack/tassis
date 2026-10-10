@@ -84,9 +84,6 @@ public final class TassisSession implements QueueSession, TopicSession {
     private final List<Broker.Outgoing> uncommittedSends = new ArrayList<>();
     private volatile boolean closed;
 
-    /** How many times a message is delivered to a listener that keeps failing before it is dropped. */
-    static final int MAX_LISTENER_DELIVERIES = 10;
-
     private static final System.Logger LOG = System.getLogger(TassisSession.class.getName());
 
     // Held around every onMessage call of this session: its listeners run one at a time (§6.2.13).
@@ -476,13 +473,13 @@ public final class TassisSession implements QueueSession, TopicSession {
     private void listenerFailed(Broker.Delivery delivery, Throwable failure) {
         if (!automaticallyAcknowledged() || !settle(delivery)) {
             LOG.log(System.Logger.Level.WARNING, "a message listener threw an exception", failure);
-        } else if (delivery.deliveryCount() < MAX_LISTENER_DELIVERIES) {
+        } else if (delivery.deliveryCount() < connection.maxListenerDeliveries()) {
             LOG.log(System.Logger.Level.WARNING,
                     "a message listener threw an exception; the message is redelivered", failure);
             broker().redeliver(List.of(delivery));
         } else {
             LOG.log(System.Logger.Level.ERROR, "a message listener threw an exception on each of "
-                    + MAX_LISTENER_DELIVERIES + " deliveries; the message is dropped", failure);
+                    + connection.maxListenerDeliveries() + " deliveries; the message is dropped", failure);
         }
     }
 

@@ -42,7 +42,7 @@ class CloseRaceTest {
         TassisQueue queue = new TassisQueue("orders");
 
         for (int round = 0; round < 2_000; round++) {
-            TassisConnection connection = new TassisConnection(broker, Domain.UNIFIED, null);
+            TassisConnection connection = new TassisConnection(broker, Domain.UNIFIED, null, 10);
             Session session = connection.createSession();
             CountDownLatch go = new CountDownLatch(1);
             Thread creator = Thread.startVirtualThread(() -> {

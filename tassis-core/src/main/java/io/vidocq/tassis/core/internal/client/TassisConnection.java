@@ -48,6 +48,7 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
 
     private final Broker broker;
     private final Domain domain;
+    private final int maxListenerDeliveries;
     private final List<TassisSession> sessions = new CopyOnWriteArrayList<>();
     private final List<TassisTemporaryQueue> temporaryQueues = new CopyOnWriteArrayList<>();
     private final List<TassisTemporaryTopic> temporaryTopics = new CopyOnWriteArrayList<>();
@@ -67,9 +68,11 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
      * @param configuredClientId the client identifier assigned by the connection factory, or
      *        {@code null} to leave it to {@link #setClientID}
      */
-    public TassisConnection(Broker broker, Domain domain, String configuredClientId) throws JMSException {
+    public TassisConnection(Broker broker, Domain domain, String configuredClientId, int maxListenerDeliveries)
+            throws JMSException {
         this.broker = broker;
         this.domain = domain;
+        this.maxListenerDeliveries = maxListenerDeliveries;
         if (configuredClientId != null) {
             broker.claimClientId(configuredClientId);
             clientId = configuredClientId;
@@ -83,6 +86,11 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
 
     boolean isStarted() {
         return started;
+    }
+
+    /** How many times a message is delivered to a listener that keeps failing before it is dropped. */
+    int maxListenerDeliveries() {
+        return maxListenerDeliveries;
     }
 
     /** The client identifier, or {@code null} if none is set. */

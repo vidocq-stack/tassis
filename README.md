@@ -21,6 +21,32 @@ are not implemented yet; see [ROADMAP.md](ROADMAP.md) and [TCK.md](TCK.md).
 - **Virtual threads** for any I/O.
 - Bugs tracked in [BUG.md](BUG.md), benchmarks in [BENCH.md](BENCH.md).
 
+## Configuration
+
+A connection factory is configured in code, from settings, or from a connection URL:
+
+```java
+// in code
+ConnectionFactory inCode = new TassisConnectionFactory("orders").withClientID("reader");
+
+// from settings: only the keys under "tassis." are read, so this works with -Dtassis.broker=orders
+ConnectionFactory fromSettings = TassisConnectionFactory.from(System.getProperties());
+
+// from a connection URL
+ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?clientId=reader");
+```
+
+| Key | In a URL | Default | Meaning |
+|---|---|---|---|
+| `tassis.url` | | | A connection URL holding the settings below; a setting given by its own key overrides it |
+| `tassis.broker` | `tassis:vm:<broker>` | `default` | The name of the in-VM broker |
+| `tassis.clientId` | `clientId` | none | The client identifier of the connections |
+| `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
+
+Several factories can be defined by name, `tassis.factory.<name>.<key>`, and obtained with
+`TassisConnectionFactory.named(name, settings)`; a named factory inherits the settings that carry
+no name. An unknown key or an invalid value is an error that names the key.
+
 ## Build
 
 ```bash

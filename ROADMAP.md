@@ -316,7 +316,7 @@ How it works:
 Choices and limits:
 
 - **A listener that always fails does not loop for ever**: after 10 deliveries
-  (`TassisSession.MAX_LISTENER_DELIVERIES`) the message is dropped and an error is logged through
+  (the setting `tassis.listener.maxDeliveries`, since M8c) the message is dropped and an error is logged through
   `System.Logger`. §8.7 leaves the number of redeliveries to the provider. There is no
   dead-letter queue.
 - **`stop` and `close` from a callback fail** with `IllegalStateException`: of the two behaviours
@@ -441,48 +441,51 @@ Exit criterion: the Antora site builds locally with the Tassis component
 (`vidocq-docs/antora-playbook-local.yml`), every page was checked against the code as it is, and
 no statement of this file contradicts the code.
 
-### M8c — Configuration
+### M8c — Configuration ✅
 
-Added on 2026-10-10. What an application can set today, and only in its code: the broker name
-(`new TassisConnectionFactory(name)`) and a client identifier (`withClientID`). Nothing can be
-set from outside the application: no property file, system property, environment variable or
-connection URL is read. The user name and password of `createConnection(user, password)` are
-accepted and ignored, and one behaviour is a constant in the code
-(`TassisSession.MAX_LISTENER_DELIVERIES`, 10).
+- [x] **A settings model with documented keys** (`internal.settings.Settings`), with no new
+      dependency: `TassisConnectionFactory.from(Map)` and `from(Properties)`. An unknown
+      `tassis.` key or an invalid value is rejected by an error that names the key.
+- [x] **A connection URL**, the one-string form of the same settings:
+      `tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]`, read by `fromUrl` and
+      written by `toUrl`. `vm` is the transport; M11 adds its own after `tassis:`.
+- [x] **Named connection factories**: `TassisConnectionFactory.named(name, settings)` reads
+      `tassis.factory.<name>.<key>` and inherits the settings that carry no name. This is what
+      M9 will resolve `@JMSConnectionFactory("name")` with.
+- [x] **The setting that was a constant**: `tassis.listener.maxDeliveries`, also
+      `withMaxListenerDeliveries` in code.
+- [x] **Documentation**: the table of keys in `README.md` and in the Javadoc of
+      `TassisConnectionFactory`. The Antora `reference` and `getting-started` pages take it over
+      in M8b.
 
-The milestone sits before M9 because M9 needs it: an injected
-`@JMSConnectionFactory("...") JMSContext` names a connection factory that has to be defined
-somewhere.
+| Key | In a URL | Default | Meaning |
+|---|---|---|---|
+| `tassis.url` | | | A connection URL holding the settings below; a setting given by its own key overrides it |
+| `tassis.broker` | `tassis:vm:<broker>` | `default` | The name of the in-VM broker |
+| `tassis.clientId` | `clientId` | none | The client identifier of the connections (§6.1.2) |
+| `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped (§8.7) |
 
-To deliver:
+**Deliverable:** `ConnectionFactorySettingsTest` (27 tests), 282 unit tests in all. The exit
+criterion is met: an application changes its broker and its client identifier without
+recompiling, for instance with `TassisConnectionFactory.from(System.getProperties())` and
+`-Dtassis.broker=...`.
 
-- [ ] **A settings model with documented keys**, independent of where the values come from, in
-      `tassis-core` and with no new dependency: `TassisConnectionFactory` built from a
-      `Map<String, String>` or `java.util.Properties`, with unknown keys and invalid values
-      rejected by a clear error. Keys of what exists today: broker name, client identifier,
-      maximum deliveries to a failing listener.
-- [ ] **A connection URL** as the one-string form of the same settings, so that a factory can
-      be configured with a single value. Its scheme must leave room for the network transport
-      (host, port) of M11.
-- [ ] **External sources.** To decide when the milestone opens, because it touches the
-      dependency rule: system properties and a property file need nothing; MicroProfile Config
-      through `ravel` is the workspace's way but would be a new integration, where the roadmap
-      so far allows CDI through Vauban only. If it is wanted, it lives outside `tassis-core`.
-- [ ] **Named connection factories**: several factories defined by name in the configuration,
-      for M9 to resolve `@JMSConnectionFactory("name")`.
-- [ ] **Named destinations**, if useful: a queue or a topic is created on first use today, so
-      nothing needs declaring; the question is whether an application should be able to refer
-      to one by a logical name.
-- [ ] **Documentation**: a table of every key (name, type, default, since which milestone) in
-      the `reference` page of the Antora component (M8b), a configuration section in
-      `getting-started`, and the same table kept in `README.md` or linked from it.
+Choices and limits:
 
-A rule for the milestones that follow: each new setting comes with its key and its line in that
-table, in the same change. Expected: the journal directory (M10), host, port and credentials
-(M11), pool size and timeouts (M11b).
+- **External sources are whatever gives a `Map` or `Properties`.** Only the keys under
+  `tassis.` are read, so the system properties or a property file an application loads can be
+  passed as they are. Tassis itself reads nothing on its own: no file is looked up, no system
+  property consulted behind the application's back.
+- **Not done, and left to a decision**: environment variables (their names cannot contain dots,
+  so they need a naming rule), and MicroProfile Config through `ravel`, which would be a new
+  integration outside `tassis-core`.
+- **No named destinations.** A queue or a topic is created on first use and is its name, so
+  there is nothing to declare; a logical-name indirection can be added if a use for it appears.
+- **`fromUrl` rejects what it does not know**, including a transport other than `vm`.
 
-Exit criterion: an application changes the broker it connects to and its client identifier
-without recompiling, and every key is documented and covered by a test.
+A rule for the milestones that follow: each new setting comes with its key, its URL parameter
+and its line in that table, in the same change. Expected: the journal directory (M10), host,
+port and credentials (M11), pool size and timeouts (M11b).
 
 ### M9 — CDI through Vauban
 
