@@ -73,8 +73,9 @@ a milestone.
    `jakarta/jms/...`): it is a split package and fails module resolution at JVM boot, not at
    compile time.
 5. **No `synchronized` around blocking calls, no `ThreadLocal`** — virtual threads first.
-6. **Out of scope by decision** (see ROADMAP): XA, a `vidocq` runtime extension, CDI message
-   listeners. Do not start on them without a roadmap change.
+6. **Out of scope by decision** (see ROADMAP): a `vidocq` runtime extension, CDI message
+   listeners. Do not start on them without a roadmap change. XA and JTA are ROADMAP M13, and
+   stay out of `tassis-core`'s dependencies.
    **Authentication is deferred to M11**: until then any user name and password are accepted.
 7. **JUnit 6** (`org.junit:junit-bom`, managed by `vidocq-parent`) for all tests — no Mockito;
    hand-written fixtures only.

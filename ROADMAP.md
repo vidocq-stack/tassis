@@ -14,7 +14,8 @@
 | Nature | Home-grown broker, **in-VM** first. Network transport is a later milestone (M11) behind a transport SPI. |
 | Persistence | **In-memory** behind a `MessageStore` SPI, then a home-grown **append-only journal** (M10). |
 | Integrations | **CDI through Vauban** only (`JMSContext` injection, M9). |
-| Out of scope | XA / `mansart-transactions`, a `vidocq` runtime extension, CDI message listeners (MDB substitute). Not on this roadmap. |
+| Transactions | **Local transactions** in `tassis-core` (M3). **XA and JTA** through `mansart-transactions` are a later milestone (M13), outside `tassis-core`'s dependencies. |
+| Out of scope | A `vidocq` runtime extension, CDI message listeners (MDB substitute). Not on this roadmap. |
 | Zero third-party dependency | `tassis-core` compiles against `jakarta.jms-api` only. |
 | Virtual threads | No `synchronized` around blocking calls, no `ThreadLocal`. Session delivery runs on virtual threads. |
 | Strict TDD | Red → green → refactor, each test citing the spec section it covers. |
@@ -368,7 +369,7 @@ Choices and limits:
 - **`createQueue`, `createTopic` and the message factory methods need no session**, so they do
   not count as a use of the connection for `setClientID`.
 - **Any credentials are accepted** by the `createContext(user, password)` forms: see M11.
-- **No `XAJMSContext`**: XA is out of scope.
+- **No `XAJMSContext`** yet: XA is M13.
 
 ### M8 — TCK complete ✅
 
@@ -425,7 +426,7 @@ What is missing:
   - `reference`: the administered objects (`TassisConnectionFactory`, `TassisQueue`,
     `TassisTopic`), broker names, `withClientID`, and **the limits a user must know**: messages
     and durable subscriptions do not survive the JVM, any credentials are accepted, a poison
-    message is dropped after 10 failed deliveries to a listener, no XA, no JNDI.
+    message is dropped after 10 failed deliveries to a listener, no XA before M13, no JNDI.
   - `tck`: the content of `TCK.md`, kept in step with it.
 - [ ] **Logo**: `docs/en/modules/ROOT/images/tassis-logo.png`, to be supplied by the maintainer.
 - [ ] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
@@ -561,10 +562,44 @@ JMH in `tassis-bench`, every figure recorded in `BENCH.md`, and the `performance
 Antora component created in M8b. The benchmarks also settle the question left open since M2:
 whether the single broker lock must be split.
 
+### M13 — Transaction management (XA and JTA)
+
+Local transactions are M3. This milestone lets a Tassis session take part in a transaction it
+does not coordinate itself, typically a message and a database row committed together.
+
+- [ ] The XA interfaces of chapter 11: `XAConnectionFactory`, `XAConnection`, `XASession`,
+      `XAJMSContext`, and their legacy queue and topic variants
+- [ ] An `XAResource` over the broker: one transaction branch per `Xid`, `start` / `end` with
+      suspend and resume, `prepare`, one-phase and two-phase `commit`, `rollback`, `forget`,
+      `isSameRM`, transaction timeout
+- [ ] Prepared branches: the sends and the consumed messages of a prepared branch are held by the
+      broker, neither visible nor redelivered, until the coordinator decides
+- [ ] `XAResource.recover`: prepared branches written to the journal and listed after a restart
+- [ ] JTA enlistment with `mansart-transactions`: a session created inside a transaction enlists
+      itself, so `@Transactional` and `UserTransaction` cover its sends and receives; §12.3 for the
+      session parameters that are then ignored
+- [ ] `JMSContext` injection (M9) inside a transaction: the `@TransactionScoped` context of §12.4.4
+
+**Depends on:** M10 for recovery (a prepared branch must survive a broker stop) and M9 for the
+injected context. The `XAResource` itself needs neither and can be built on the in-memory store.
+
+**Not covered by the TCK**: `core` and `core20` have no XA test (spike 2). Proven by our own
+tests, including crash injection between `prepare` and `commit`.
+
+To settle when the milestone opens:
+
+- **Where the JTA part lives.** `tassis-core` only needs `java.transaction.xa`, which is in the
+  JDK. Enlistment needs `jakarta.transaction` and `mansart-transactions`, so it goes in a module
+  of its own (working name `tassis-transactions-mansart`), which `tassis-core` never requires.
+- **What `mansart-transactions` offers by then.** Today it is local-only: one-phase commit, with
+  two-phase commit and recovery announced as later work. Until it has them, a transaction that
+  spans Tassis and a database is not atomic, and this milestone delivers the `XAResource` and
+  one-phase enlistment only.
+
 ## Known risks
 
 - **TCK standalone coverage** is assumed, not yet proven (spike 2, "still unverified").
 - **No JNDI in Vidocq**: `@JMSConnectionFactoryDefinition` / `@JMSDestinationDefinition` are
   Jakarta EE resource definitions and stay unimplemented unless a milestone is opened for them.
 - **`requires static transitive java.transaction.xa`** in the API module: the XA types are
-  visible at compile time although Tassis does not implement them.
+  visible at compile time although Tassis does not implement them before M13.
