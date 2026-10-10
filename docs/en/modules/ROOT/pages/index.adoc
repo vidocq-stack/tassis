@@ -1,0 +1,56 @@
+= Tassis
+:description: Jakarta Messaging 3.1 provider with its own in-VM broker: zero third-party dependency, strict Java Modules, virtual threads.
+
+// TODO: the logo is to be added. Supply modules/ROOT/images/tassis-logo.png, then put the centred module-logo image block here.
+
+[.lead]
+Tassis is a Jakarta Messaging 3.1 provider written in Java 25. It depends on the Jakarta Messaging API and on nothing else, every artifact is a Java module, and the threads it creates are virtual threads. Being a provider, it ships its own broker, which today runs inside the JVM of the application that uses it.
+
+[IMPORTANT]
+====
+Tassis is **in development and not released**: no artifact has been published. The classic API, the simplified API and the legacy domain-specific API work on the in-VM broker. Messages live in memory, authentication and the network transport are not implemented yet. The limits a user must know are listed in the xref:reference.adoc#limits[reference]. This documentation describes the `{project-version}` development line.
+====
+
+== Origin of the name
+
+The Tassis family, later Thurn und Taxis, ran the relay postal service that carried messages across Europe from the end of the 15th century.
+
+A sender hands a message to the network, and the network takes charge of delivering it to its destination. That is what a Jakarta Messaging provider does for Java applications: a producer sends a message to a queue or publishes it to a topic, and the provider delivers it to the consumers.
+
+== At a glance
+
+[cols="1,3"]
+|===
+| Implemented spec | https://jakarta.ee/specifications/messaging/3.1/jakarta-messaging-spec-3.1.html[Jakarta Messaging 3.1]
+| Java | 25
+| Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`. A third one, `io.vidocq.tassis.cdi.vauban`, is an empty placeholder until milestone M9.
+| Runtime dependencies | None beyond the `jakarta.messaging` API module
+| Broker | In the JVM of the application, held in memory. A journal is planned for milestone M10, a network transport for M11.
+| Status | In development, not released
+| Jakarta Messaging TCK | 901 of the 903 applicable functional tests pass, and the signature test passes. Compatibility is **not claimed**: see xref:tck.adoc[TCK status].
+|===
+
+== Three identifying traits
+
+. **Zero third-party dependency.** `tassis-core` compiles against `jakarta.jms-api` and nothing else: no CDI, no JNDI, no library. The message selector parser is written by hand.
+. **A broker of its own.** Tassis is not a client for another product's broker. Queues, topics, subscriptions, acknowledgement, local transactions and redelivery are implemented in `tassis-core`.
+. **Strict Java Modules and virtual threads.** `io.vidocq.tassis.core` exports one package, which holds the three classes an application names. Message listeners and completion listeners run on virtual threads.
+
+== Position in the ecosystem
+
+Tassis depends on no other Vidocq brick. Two integrations are planned and neither exists today: the injection of `JMSContext` with CDI through Vauban (milestone M9), and XA with JTA enlistment through `mansart-transactions` (milestone M13). A `vidocq` runtime extension and CDI message listeners are out of the scope of the roadmap.
+
+== Quick links
+
+* xref:getting-started.adoc[Getting started]
+* xref:usage.adoc[Usage]
+* xref:concepts.adoc[Concepts]
+* xref:internals.adoc[Internals]
+* xref:tck.adoc[TCK status]
+* xref:reference.adoc[Reference]
+* xref:migration.adoc[Migration]
+
+[NOTE]
+====
+No performance figure appears in this documentation. Benchmarks are milestone M12, and `BENCH.md` at the root of the repository has no entry yet.
+====

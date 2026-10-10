@@ -11,8 +11,8 @@
 
 | Topic | Decision |
 |---|---|
-| Nature | Home-grown broker, **in-VM** first. Network transport is a later milestone (M11) behind a transport SPI. |
-| Persistence | **In-memory** behind a `MessageStore` SPI, then a home-grown **append-only journal** (M10). |
+| Nature | Home-grown broker, **in-VM** today: the client objects call the `Broker` object of their JVM directly. No transport SPI exists. The network transport is a later milestone (M11), which introduces the seam it needs. |
+| Persistence | **In-memory**: messages live in the broker's memory, in `Broker.Storage`. No store SPI exists. A home-grown **append-only journal** is a later milestone (M10), which introduces the seam it needs. |
 | Integrations | **CDI through Vauban** only (`JMSContext` injection, M9). |
 | Transactions | **Local transactions** in `tassis-core` (M3). **XA and JTA** through `mansart-transactions` are a later milestone (M13), outside `tassis-core`'s dependencies. |
 | Out of scope | A `vidocq` runtime extension, CDI message listeners (MDB substitute). Not on this roadmap. |
@@ -21,6 +21,10 @@
 | Strict TDD | Red → green → refactor, each test citing the spec section it covers. |
 
 ## Spike findings (2026-10-09)
+
+> **A record of 2026-10-09, kept as written.** It says what was known before any production
+> code. For the current state of the TCK (runner, counts, deviations) see [TCK.md](TCK.md). Where
+> a finding has been settled or corrected since, a note dated 2026-10-10 says so below.
 
 Three spikes ran before any production code. Their conclusions shape the milestones below.
 
@@ -55,6 +59,9 @@ The TCK exists in two shapes:
   The interface and `JmsTool` live in `jakarta.tck:common`.
 - **Volume**: 1160 `@Test` methods in the sources jar. 905 are in `core` (644) and `core20`
   (261); 255 are in `ee` / `ee20` and need EJB, MDB or a web container, which Vidocq does not have.
+  *Note of 2026-10-10: 905 is a count of annotations. The real total is 903 tests: in two
+  classes of `core` the annotation also sits on a private helper that JUnit does not run (see
+  `TCK.md`).*
 - **No XA and no restart** in `core` / `core20`: no reference to `XAConnection`, `XASession`
   or `XAResource`, no broker-restart test. The journal (M10) does not gate the TCK.
 - **Constraints read from `JmsTool`**: `createConnection(user, password)` is used throughout
@@ -64,6 +71,10 @@ The TCK exists in two shapes:
   named `*IT`; 127 tests sit in `appclient` packages), and the weight of the transitive
   dependencies of `jakarta.tck:common` (ant, derby, commons-httpclient), which must stay in the
   test scope of `tassis-tck`. First task of M2's TCK wiring.
+  *Note of 2026-10-10: both points are settled. Every package of `core` and `core20`, the
+  `appclient` ones included, runs in `standalone` mode (M6 for `core`, M7 for `core20`). The
+  harness dependencies are excluded from `tassis-tck`, and the selection passes without them
+  (see `TCK.md`).*
 
 ### 3. Mandatory vs optional for a Java SE provider
 
@@ -76,18 +87,25 @@ The TCK exists in two shapes:
 ## Module layout
 
 ```
-tassis-api         ← Aggregator re-exposing jakarta.jms-api
-tassis-core        ← The provider: client API, in-VM broker, messages, selectors, store
-tassis-cdi-vauban  ← Placeholder: JMSContext injection (M9)
-tassis-bench       ← Placeholder: JMH (M12)
-tassis-examples    ← Placeholder
-tassis-tck         ← Placeholder: official TCK runner, in-reactor behind the `tck` profile (wired in M2)
+tassis-api         ← Aggregator re-exposing jakarta.jms-api: a module descriptor, no class
+tassis-core        ← The provider: administered objects, client API, in-VM broker, messages, selectors
+tassis-cdi-vauban  ← Placeholder (a module descriptor only): JMSContext injection (M9)
+tassis-bench       ← Placeholder, no sources: JMH (M12)
+tassis-examples    ← Placeholder, no sources
+tassis-tck         ← The official TCK runner: in-reactor behind the `tck` profile, class path,
+                     test scope only (porting class `TassisJmsObjects`, `PortingSmokeTest`)
 ```
 
-Planned internal packages of `tassis-core` (`io.vidocq.tassis.core.internal.*`, not exported):
-`message` (types and conversions), `client` (Connection/Session/Producer/Consumer/JMSContext),
-`broker` (destinations, subscriptions, dispatch), `selector` (lexer/parser/evaluator),
-`store` (`MessageStore` SPI + in-memory implementation), `transport` (SPI + in-VM implementation).
+`tassis-core` exports one package, `io.vidocq.tassis.core`, which holds the administered objects
+(`TassisConnectionFactory`, `TassisQueue`, `TassisTopic`). Its internal packages
+(`io.vidocq.tassis.core.internal.*`, not exported) are four:
+`message` (the message types and their conversions), `client` (Connection / Session / Producer /
+Consumer / QueueBrowser, temporary destinations, and the simplified API), `broker` (the `Broker`
+class: queues, subscriptions, client identifiers, delivery), `selector` (lexer, parser, evaluator).
+
+There is no `store` and no `transport` package, and no SPI for either, although the plan of M0
+had them. Messages live in the broker's memory, in `Broker.Storage`, and the client objects call
+the `Broker` directly. M10 (journal) and M11 (network transport) each introduce the seam they need.
 
 ## Phases
 
@@ -402,20 +420,20 @@ file, and the Javadoc of the three exported classes.
 
 What is stale, to correct first:
 
-- [ ] This file's **Design decisions** table and **Module layout** section still describe the
+- [x] This file's **Design decisions** table and **Module layout** section still describe the
       plan of M0: a `MessageStore` SPI and a transport SPI that were never written (messages
       live in `Broker.Storage`), internal packages `store` and `transport` that do not exist,
       and `tassis-tck` as a placeholder. Rewrite them from the code.
-- [ ] The **Spike findings** section lists as "still unverified" two points settled since M6
+- [x] The **Spike findings** section lists as "still unverified" two points settled since M6
       (every `core` and `core20` package runs standalone; the harness dependencies are
       excluded), and counts 905 tests where there are 903. Mark the section as a record of
       2026-10-09 and point to `TCK.md` for the current state.
-- [ ] `AGENTS.md` and `CONTRIBUTING.md` were copied from erasmus at M0 and never reread for
+- [x] `AGENTS.md` and `CONTRIBUTING.md` were copied from erasmus at M0 and never reread for
       Tassis.
 
 What is missing:
 
-- [ ] **Antora component** under `docs/en`, mirroring Vauban's layout as `AGENTS.md` requires:
+- [x] **Antora component** under `docs/en`, mirroring Vauban's layout as `AGENTS.md` requires:
       `antora.yml`, `nav.adoc`, and the pages `index` (with the origin of the name and an
       "at a glance" table), `getting-started`, `usage`, `concepts`, `internals`, `tck`,
       `reference`, `migration`. The `performance` page waits for M12 and its `BENCH.md` entries.
@@ -601,7 +619,9 @@ To settle when the milestone opens:
 
 ## Known risks
 
-- **TCK standalone coverage** is assumed, not yet proven (spike 2, "still unverified").
+- **TCK standalone coverage** is proven: every package of `core` and `core20` runs in
+  `standalone` mode, and 901 of their 903 tests pass (see `TCK.md`). What remains is the two
+  authentication tests, due with M11; `ee` and `ee20` stay out of reach.
 - **No JNDI in Vidocq**: `@JMSConnectionFactoryDefinition` / `@JMSDestinationDefinition` are
   Jakarta EE resource definitions and stay unimplemented unless a milestone is opened for them.
 - **`requires static transitive java.transaction.xa`** in the API module: the XA types are

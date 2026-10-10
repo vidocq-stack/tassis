@@ -1,0 +1,164 @@
+= Internals
+:description: For contributors: the modules and packages of Tassis, storages and subscriptions, deliveries, the selector index, the threads Tassis creates, the lock order, and close() versus shut().
+
+[.lead]
+For contributors: where the code lives and the rules it obeys. Users do not need this page. The public surface is the Jakarta Messaging API plus the three classes of the package `io.vidocq.tassis.core`.
+
+== Reactor layout
+
+[cols="1,3",options="header"]
+|===
+| Module | Purpose
+
+| `tassis-api` | Aggregator: `requires transitive jakarta.messaging`. It holds no class of its own; the API artifact `jakarta.jms-api` is a Java module upstream and is not forked.
+| `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
+| `tassis-cdi-vauban` | Placeholder: a module descriptor and nothing else. `JMSContext` injection is milestone M9.
+| `tassis-bench` | Placeholder without sources. JMH benchmarks are milestone M12.
+| `tassis-examples` | Placeholder without sources.
+| `tassis-tck` | The runner of the official TCK. It joins the reactor only under the `tck` Maven profile, runs on the class path and is never published. See xref:tck.adoc[TCK status].
+|===
+
+Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
+
+== Packages of `tassis-core`
+
+`io.vidocq.tassis.core` is the only exported package. It holds `TassisConnectionFactory`, `TassisQueue` and `TassisTopic`: what a client must name. Everything else is under `io.vidocq.tassis.core.internal` and is not exported.
+
+[cols="1,3",options="header"]
+|===
+| Package | Content
+
+| `internal.message`
+| `TassisMessage` (header fields, properties, the template for a body) and one subclass per body type: text, object, map, bytes, stream. `ValueConversions` is the single conversion table for properties, `MapMessage` and `StreamMessage`. `Messages.snapshot` turns any `Message`, including another provider's, into an independent Tassis copy.
+
+| `internal.broker`
+| `Broker`, one class: the registry of brokers by name, queues, subscriptions, client identifiers, temporary destinations, and the delivery of messages.
+
+| `internal.client`
+| The API objects: `TassisConnection`, `TassisSession`, `TassisMessageProducer`, `TassisMessageConsumer`, `TassisQueueBrowser`, the temporary destinations, and the simplified API (`TassisContext`, `TassisJMSProducer`, `TassisJMSConsumer`). `Destinations.resolve` is the one place that decides which `Destination` objects belong to Tassis.
+
+| `internal.selector`
+| `Selector` (a compiled selector), `SelectorParser` (a hand-written lexer and recursive-descent parser, with the grammar as a comment) and `Expression` (the tree and its evaluation, where `null` stands for SQL's unknown).
+|===
+
+There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The journal (milestone M10) and the network transport (milestone M11) will each introduce the seam they need.
+
+== Storage and subscriptions
+
+`Broker.Storage` holds the messages waiting for the consumers of **one queue or one subscription**, in a `TreeSet` ordered by priority, highest first, then by a sequence number the broker assigns when it stores the message.
+
+* A queue has one storage, created on first use.
+* A subscription (`Broker.Subscription`) is a subscription request plus a storage of its own.
+* `Broker.send` adds a message sent to a queue to the storage of that queue. It adds a message published to a topic to the storage of each subscription of that topic, after applying the subscription's selector and its `noLocal` rule. The same message object is shared by all those storages; it is never modified.
+
+From there on a subscription behaves like a queue, so receive, acknowledgement, transactions and redelivery are one code path for both.
+
+Named subscriptions are indexed by a key made of three values: durable or not, the client identifier, the name. The creation, reuse, replacement and conflict rules of section 8.3 of the specification are in one private method of `Broker`, `named(Subscribing)`.
+
+A send never hands the broker the client's own message: `TassisMessageProducer` passes `Messages.snapshot(message)`.
+
+== Delivery
+
+`Broker.receive` takes the first deliverable message of the storage a consumer is attached to, removes it from the storage and returns a `Broker.Delivery`: the stored entry, plus a copy of the message made for this delivery, marked with its delivery count.
+
+From that moment **the consumer's session owns the delivery**. It must do one of three things with it:
+
+* settle it, which with an in-memory broker means forgetting it: no broker call is needed;
+* give it back with `Broker.redeliver`: the entry returns to its storage with its sequence number, hence to its place, and its next delivery is a redelivery;
+* give it back with `Broker.returnUndelivered` when the application never saw the message: the delivery count is decremented, as if the message had not been taken.
+
+A `Delivery` that is lost is a lost message. `TassisSession` keeps the deliveries it has not settled in its `unsettled` list. An automatically acknowledged session settles on delivery and keeps nothing, except while a listener is processing a message.
+
+`Storage.add` and `Storage.remove` are the only two ways to change what a storage holds: they keep the selector index and the next expiration time up to date.
+
+== The per-selector index
+
+A consumer on a queue with a selector must not scan, on each receive, the messages its selector rejects. Each selector in use on a queue therefore has a `Broker.View`: the ordered set of the messages of the queue that the selector accepts.
+
+* The view is built by one scan of the queue when the first consumer with that selector attaches, and removed when the last one detaches.
+* `Storage.add` adds a new message to each view whose selector accepts it, and `Storage.remove` removes it from all of them.
+* What a selector answered for a message is remembered on the stored entry, so a message is evaluated once per selector, whatever the number of consumers and of receives.
+* A receive through a view takes the head of the view.
+
+Two cases stay outside the index:
+
+* a selector that refers to `JMSXDeliveryCount` gets no view, because its answer changes from one delivery to the next. Its consumers scan the queue and evaluate the selector on each receive;
+* a subscription needs no view: its selector is applied when the message is published. If that selector refers to the delivery count, it is checked again when a message that was given back is about to be redelivered, and a message that no longer matches leaves the subscription.
+
+Selectors are evaluated under the broker lock.
+
+Expired messages are removed by `Storage.sweepExpired`, which a receive calls on the whole storage, not on the view: a consumer that reads through a view would otherwise never meet the expired messages its selector rejects. The sweep only happens when a consumer of a started connection receives.
+
+== Threads
+
+Tassis creates two kinds of thread, both virtual.
+
+=== The dispatcher of a consumer
+
+`setMessageListener` with a non-null listener starts a virtual thread for the consumer, running `TassisMessageConsumer.dispatch`. The dispatcher loops:
+
+. it takes one message with `Broker.receive`, waiting without limit;
+. it hands the delivery to `TassisSession.dispatch`, which takes the session's `listeners` lock, waits while the connection is stopped, calls `onMessage`, then settles the message or handles the failure.
+
+All the `onMessage` calls of a session go through `TassisSession.dispatch`. That lock is what makes the listeners of a session serial.
+
+If the consumer is closed or loses its listener while the dispatcher holds a message, the message goes back with `Broker.returnUndelivered`.
+
+=== The completion thread of a session
+
+The first asynchronous send of a session creates a single-thread executor on a virtual thread. `TassisSession.completed` queues the notification of each send on it, so the `onCompletion` callbacks of a session run one at a time, in send order. The send itself has already been made, in the caller's thread.
+
+The session counts the pending callbacks. `close`, `commit`, `rollback` and the `close` of a producer wait for that count to reach zero.
+
+=== Recognising a callback
+
+A session records which thread is currently inside one of its message listeners and which is inside one of its completion listeners. That is how the calls a callback may not make are refused (see xref:usage.adoc#listeners[Usage]), and how a session that is being closed stays usable by the listener the close is waiting for.
+
+== Locks and their order
+
+[cols="1,3",options="header"]
+|===
+| Lock | Guards
+
+| `TassisSession.listeners`
+| Held around every `onMessage` call of the session.
+
+| `TassisSession.work`
+| The session's unsettled deliveries, its uncommitted sends, and the bookkeeping of its completion callbacks.
+
+| The broker lock (`Broker.lock`)
+| All broker state, **and** the delivery-related state of its clients: whether a connection is started, whether a consumer is closed, which listener and dispatcher a consumer has.
+|===
+
+The only order in which they are taken is: **`listeners`, then `work`, then the broker lock**. Nothing that runs under the broker lock may take a session lock or call application code.
+
+Client state that delivery depends on is changed through `Broker.update(Runnable)`, which runs the change under the broker lock and then signals the condition every waiting receive listens to. Changing such a field without it can leave a receive asleep.
+
+Two other locks exist beside these three: `TassisContext.lifecycle`, which guards the lazily created session of a context and is never held while waiting for a callback to return, and `TassisConnection.identity`, which serialises setting a client identifier with releasing it on close.
+
+One broker lock is the simplest design that honours `stop()` and `close()`. Its known costs: every state change wakes every waiting receive of the broker, and a receive without a view scans past the messages that are delayed. Whether the lock must be split is left to the benchmarks of milestone M12.
+
+== `close()` versus `shut()`
+
+Closing has two entry points.
+
+* `close()` is the public method of the API. It applies the restrictions on callbacks: a session refuses to be closed by one of its own listeners, a producer waits for the completion callbacks.
+* `shut()` is what a parent uses to close a child: a connection shuts its sessions, a session shuts its producers, consumers and browsers (the `SessionChild` interface). It applies no restriction on the calling thread, never throws, may be called more than once, and returns only once the child is quiet.
+
+Creation and close can race. A session adds a new child to its list **first**, then checks whether it is closed, and shuts the child if so. A concurrent close therefore either sees the child in the list or has already raised the flag the creation checks. `TassisConnection` does the same for its sessions and its temporary destinations. `CloseRaceTest` is the regression test.
+
+== The simplified API
+
+`TassisContext`, `TassisJMSProducer` and `TassisJMSConsumer` hold no messaging behaviour. They delegate to the classic objects through `Unchecked`, which turns each checked `JMSException` into its unchecked counterpart. New behaviour goes in the classic classes.
+
+A context creates its session on first need, not in its constructor, so that `setClientID` still works on a new context. The contexts created from one another share a connection and a counter of open contexts; the connection is closed when the counter reaches zero.
+
+== House rules
+
+The rules of the repository's `CLAUDE.md` apply. The ones that shape the code described here:
+
+* `tassis-core` depends on nothing beyond `jakarta.jms-api`;
+* an API method that is not implemented throws `UnsupportedOperationException` with a pointer to the roadmap, never a stub that returns wrong data;
+* no `synchronized` around a blocking call, no `ThreadLocal`;
+* tests come first, cite the section of the specification they cover, and use JUnit with hand-written fixtures;
+* say **Java Modules**, never the abbreviation.

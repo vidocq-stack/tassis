@@ -1,0 +1,413 @@
+= Usage
+:description: Queues, topics and subscriptions, acknowledgement and transactions, redelivery, selectors, listeners, asynchronous send, temporary destinations, browsers and the simplified API with Tassis.
+
+[.lead]
+Everything on this page is the standard Jakarta Messaging 3.1 API. The only Tassis classes an application names are `TassisConnectionFactory`, `TassisQueue` and `TassisTopic`. Where the specification leaves a choice to the provider, this page says which one Tassis made.
+
+Unless stated otherwise the snippets use the classic API and assume a started `connection`, a `session` created by `connection.createSession()`, and that the enclosing method declares `throws JMSException`.
+
+== Queues
+
+A message sent to a queue waits there until one consumer takes it. If the queue has several consumers, each message goes to one of them only.
+
+[source,java]
+----
+Queue queue = session.createQueue("orders");
+MessageProducer producer = session.createProducer(queue);
+MessageConsumer consumer = session.createConsumer(queue);
+
+producer.send(session.createTextMessage("low"), DeliveryMode.PERSISTENT, 1, 0);
+producer.send(session.createTextMessage("high"), DeliveryMode.PERSISTENT, 9, 0);
+
+((TextMessage) consumer.receive(5_000)).getText();   // high
+((TextMessage) consumer.receive(5_000)).getText();   // low
+----
+
+* Messages are delivered by priority, highest first, then in the order they were sent.
+* A message with a time to live is not delivered after it has expired. A message with a delivery delay is not delivered before its delivery time.
+* `receive()` and `receive(0)` wait without limit, `receive(timeout)` waits that many milliseconds, `receiveNoWait()` does not wait. The last two return `null` when no message came in time, and a blocked `receive` returns `null` when its consumer is closed.
+* While the connection is stopped, nothing is delivered, but the timeout of a `receive` keeps running.
+* A producer created with `session.createProducer(null)` has no destination: each `send` names one. Naming a destination on a producer that already has one, or omitting it on a producer that has none, throws `UnsupportedOperationException`.
+* A send stores a copy of the message. Changing the message after the send has no effect on what is delivered, and the message a consumer receives is read-only.
+* `setDisableMessageID` and `setDisableMessageTimestamp` are recorded and ignored: every message gets an identifier and a timestamp.
+* `DeliveryMode.PERSISTENT` is accepted, and is the default, but no message survives the JVM yet: see xref:reference.adoc#limits[Limits].
+
+The legacy queue API (`QueueConnection`, `QueueSession`, `QueueSender`, `QueueReceiver`) is available through `createQueueConnection()`.
+
+== Topics and subscriptions
+
+A message published to a topic is copied into each subscription the topic has at that moment. A topic without a subscription drops what is published to it.
+
+[source,java]
+----
+Topic topic = session.createTopic("news");
+MessageConsumer first = session.createConsumer(topic);
+MessageConsumer second = session.createConsumer(topic);
+
+session.createProducer(topic).send(session.createTextMessage("headline"));
+
+((TextMessage) first.receive(5_000)).getText();    // headline
+((TextMessage) second.receive(5_000)).getText();   // headline
+----
+
+=== The four kinds of subscription
+
+[cols="2,3,2,3",options="header"]
+|===
+| Kind | Created by | Consumers | Ends
+
+| Unshared, non-durable
+| `createConsumer(topic)`
+| One: the consumer that created it
+| When that consumer is closed
+
+| Shared, non-durable
+| `createSharedConsumer(topic, name)`
+| Several, which share the messages
+| When its last consumer is closed
+
+| Unshared, durable
+| `createDurableConsumer(topic, name)`
+| One at a time
+| On `unsubscribe(name)`
+
+| Shared, durable
+| `createSharedDurableConsumer(topic, name)`
+| Several, which share the messages
+| On `unsubscribe(name)`
+|===
+
+The four methods exist on `Session` and on `JMSContext`, each with a variant that takes a message selector. `createDurableSubscriber` of the classic API creates an unshared durable subscription too.
+
+A durable subscription keeps receiving what is published while it has no consumer, and survives the connection that created it:
+
+[source,java]
+----
+Connection reader = factory.withClientID("reader").createConnection();
+reader.start();
+Session readerSession = reader.createSession();
+
+readerSession.createDurableConsumer(topic, "inbox").close();
+
+session.createProducer(topic).send(session.createTextMessage("while away"));
+
+MessageConsumer inbox = readerSession.createDurableConsumer(topic, "inbox");
+((TextMessage) inbox.receive(5_000)).getText();   // while away
+----
+
+Rules that apply to named subscriptions:
+
+* An **unshared durable** subscription needs a client identifier on its connection: without one, creating it throws `IllegalStateException`. A second consumer on it while the first is open throws `JMSException`.
+* A **shared** subscription, durable or not, needs no client identifier.
+* A subscription name is scoped by the client identifier of the connection. The same name used with two different client identifiers, or with and without one, designates two subscriptions.
+* Creating a consumer on an existing name with the same topic, the same selector and the same `noLocal` value reuses the subscription. Two selectors are the same when their texts are equal.
+* Creating a consumer on an existing name with another topic or another selector deletes the subscription, with its messages, and starts a new one. If the subscription has an open consumer at that moment, the call throws `JMSException` instead.
+* Shared and unshared durable subscriptions share one namespace: a name used by one kind cannot be used by the other, and the attempt throws `JMSException`. Shared non-durable subscriptions have a namespace of their own.
+* `unsubscribe(name)` deletes a durable subscription. It throws `JMSException` while the subscription has an open consumer, and `InvalidDestinationException` when no durable subscription has that name.
+
+Durable subscriptions are kept in the memory of the broker: they survive connections, not the JVM. See xref:reference.adoc#limits[Limits].
+
+=== Client identifiers
+
+There are two ways to give a connection its client identifier.
+
+`TassisConnectionFactory.withClientID` returns a factory whose connections are created with the identifier. The method is specific to Tassis, so `factory` must be declared as a `TassisConnectionFactory` to call it:
+
+[source,java]
+----
+try (Connection configured = factory.withClientID("configured").createConnection()) {
+    configured.getClientID();   // configured
+}
+----
+
+Such a connection rejects `setClientID` with `IllegalStateException`, and only one of them can be open at a time: creating a second one throws `InvalidClientIDException`.
+
+`Connection.setClientID` sets it on an existing connection, provided nothing else was done with the connection:
+
+[source,java]
+----
+try (Connection fresh = factory.createConnection()) {
+    fresh.setClientID("reader");
+}
+----
+
+* `setClientID` throws `IllegalStateException` once the connection has been used: after `createSession`, `start`, `stop`, `getMetaData`, `getExceptionListener` or `setExceptionListener`. `getClientID` does not count as a use.
+* It throws `IllegalStateException` if the identifier is already set, and `InvalidClientIDException` if the identifier is null, empty, or held by another open connection of the same broker.
+* The identifier is released when the connection is closed.
+
+On a `JMSContext`, `setClientID` works on a context newly created by the factory: the context creates its session on first need, and `createQueue`, `createTopic` and the methods that create messages do not need one.
+
+=== `noLocal`
+
+`createConsumer(topic, selector, true)` creates a subscription that ignores what its own connection publishes. When the connection has a client identifier, the comparison is made on the identifier, so a durable `noLocal` subscription keeps ignoring its owner after a reconnection. On a queue, `noLocal` is ignored.
+
+The legacy topic API (`TopicConnection`, `TopicSession`, `TopicPublisher`, `TopicSubscriber`) is available through `createTopicConnection()`. A `QueueSession` rejects the topic methods it inherits, and a `TopicSession` the queue methods, with `IllegalStateException`.
+
+== Acknowledgement modes and local transactions
+
+[cols="2,5",options="header"]
+|===
+| Session mode | Behaviour
+
+| `AUTO_ACKNOWLEDGE` (default)
+| A message returned by `receive` is acknowledged at once. A message given to a listener is acknowledged when `onMessage` returns.
+
+| `DUPS_OK_ACKNOWLEDGE`
+| Exactly the same as `AUTO_ACKNOWLEDGE`: Tassis does not acknowledge lazily, so it delivers no duplicate.
+
+| `CLIENT_ACKNOWLEDGE`
+| `Message.acknowledge()` acknowledges every message the session has consumed so far, not only the one it is called on. `Session.recover()` gives the unacknowledged messages back for redelivery.
+
+| `SESSION_TRANSACTED`
+| Sends are held until `commit()`. `rollback()` discards them and gives the consumed messages back for redelivery.
+|===
+
+[source,java]
+----
+try (Session transacted = connection.createSession(Session.SESSION_TRANSACTED)) {
+    transacted.createProducer(queue).send(transacted.createTextMessage("one"));
+    // nothing is on the queue yet
+    transacted.commit();
+    // "one" is on the queue
+}
+----
+
+* `createSession(true, anyMode)` creates a transacted session. `createSession(false, Session.SESSION_TRANSACTED)` and an unknown mode throw `JMSException`.
+* `commit` and `rollback` on a session that is not transacted throw `IllegalStateException`, as does `recover` on a transacted session.
+* A commit sends all the messages of the transaction or none. If one of them cannot be sent, because it names a temporary destination that was deleted since the send, the transaction is rolled back and `commit` throws `TransactionRolledBackException`.
+* Closing a transacted session rolls its transaction back. Closing a client-acknowledged session acknowledges nothing: its unacknowledged messages are given back.
+* `Message.acknowledge()` does nothing in the other modes, and throws `IllegalStateException` once its client-acknowledged session is closed.
+
+These are local transactions: they cover one session. XA is planned for milestone M13.
+
+== Redelivery
+
+A message is redelivered when the session that consumed it gives it back: `rollback`, `recover`, the close of a session that has unsettled messages, or a listener that throws in an automatically acknowledged session.
+
+[source,java]
+----
+try (Session transacted = connection.createSession(Session.SESSION_TRANSACTED)) {
+    MessageConsumer consumer = transacted.createConsumer(queue);
+    Message first = consumer.receive(5_000);
+    first.getJMSRedelivered();                    // false
+    first.getIntProperty("JMSXDeliveryCount");    // 1
+
+    transacted.rollback();
+
+    Message again = consumer.receive(5_000);
+    again.getJMSRedelivered();                    // true
+    again.getIntProperty("JMSXDeliveryCount");    // 2
+    transacted.commit();
+}
+----
+
+* `JMSXDeliveryCount` is set on every delivery, starting at 1. `JMSRedelivered` is true from the second delivery on.
+* A message given back returns to the place it had in its queue or subscription, ahead of the messages sent after it.
+* It is available again immediately: there is no redelivery delay.
+* There is no redelivery limit for `receive`, for client-acknowledged listeners or for transacted sessions: a message that is always rolled back is redelivered for ever. The one limit that exists concerns automatically acknowledged listeners, and is described under <<listeners>>.
+
+== Message selectors
+
+A selector is given when a consumer or a browser is created. Tassis implements the syntax of section 3.8.1.1 of the specification.
+
+[source,java]
+----
+MessageConsumer blue = session.createConsumer(queue, "color = 'blue'");
+
+TextMessage red = session.createTextMessage("red one");
+red.setStringProperty("color", "red");
+session.createProducer(queue).send(red);
+
+blue.receiveNoWait();   // null: the red message stays on the queue for another consumer
+----
+
+* **On a queue**, a message the selector rejects stays on the queue, available to the other consumers.
+* **On a topic**, a message the selector rejects never enters the subscription.
+* A null or blank selector means no selector, and `getMessageSelector()` then returns `null`.
+* An invalid selector is rejected with `InvalidSelectorException` when the consumer or the browser is created.
+* A selector can refer to six header fields: `JMSDeliveryMode`, `JMSPriority`, `JMSMessageID`, `JMSTimestamp`, `JMSCorrelationID` and `JMSType`. Any other name that starts with `JMS`, except the `JMSX` and `JMS_` properties, is rejected. `JMSDeliveryMode` is compared with the strings `'PERSISTENT'` and `'NON_PERSISTENT'`.
+* Tassis checks types when the selector is given, where the literals make it possible: `weight > 'foo'` and `TRUE = 0` are invalid selectors. The type of a property is only known per message; a mismatch there makes the comparison false, or unknown inside an arithmetic expression.
+* A property keeps its own type in a selector: no property conversion applies.
+* `JMSXDeliveryCount` in a selector is the count of the delivery being considered: `JMSXDeliveryCount = 1` selects first deliveries only.
+
+[#listeners]
+== Message listeners
+
+A consumer with a listener receives its messages asynchronously, on a virtual thread that Tassis creates for it.
+
+[source,java]
+----
+MessageConsumer consumer = session.createConsumer(queue);
+consumer.setMessageListener(message -> process(message));
+----
+
+* The listeners of one session are never called concurrently. Listeners of two different sessions can run at the same time.
+* No listener is called while the connection is stopped. `Connection.stop()` returns only once the listener in progress has returned, and so does the `close()` of a consumer whose listener is running.
+* A consumer that has a listener refuses `receive`, `receive(timeout)` and `receiveNoWait` with `IllegalStateException`. `setMessageListener(null)` stops the asynchronous delivery, after which the consumer can receive synchronously again.
+
+What happens when `onMessage` throws depends on the session mode:
+
+* **Automatically acknowledged session**: the message is redelivered at once, with `JMSRedelivered` set. If the listener still fails on a delivery whose `JMSXDeliveryCount` has reached 10, the message is **dropped** and an error is logged through `System.Logger`. There is no dead-letter queue. The number 10 is a constant of the code and cannot be configured.
+* **Client-acknowledged or transacted session**: the failure is logged and the session moves on to the next message. The message stays unacknowledged, or part of the transaction, and the application decides what to do with it.
+
+An `Error` thrown by a listener is handled like a `RuntimeException`.
+
+In an automatically acknowledged session, a listener that calls `session.recover()` gets the message it is processing redelivered, since that message is only acknowledged when `onMessage` returns.
+
+=== What a callback may not do
+
+From `onMessage`, these calls throw `IllegalStateException`:
+
+* `Session.close()` on the session the listener belongs to;
+* `Connection.stop()` and `Connection.close()` on the connection the listener belongs to.
+
+Of the two behaviours the specification permits for these calls, failing or completing, Tassis chose the one that cannot deadlock.
+
+A listener may close its own consumer, replace its own listener, and call `commit`, `rollback` and `recover` on its session.
+
+== Asynchronous send
+
+[source,java]
+----
+MessageProducer producer = session.createProducer(queue);
+TextMessage message = session.createTextMessage("async");
+
+producer.send(message, new CompletionListener() {
+    @Override
+    public void onCompletion(Message sent) {
+        // called on another thread, once the message is sent
+    }
+
+    @Override
+    public void onException(Message failed, Exception exception) {
+    }
+});
+----
+
+* With the in-VM broker a send is complete when it returns. The send itself is made in the calling thread, and a failure is thrown there, as for a synchronous send. Only the notification is asynchronous.
+* `onCompletion` is called on a virtual thread, never on the thread that called `send`, and the callbacks of one session are called one at a time, in the order of the sends.
+* `onException` is never called: nothing can fail after the send has returned.
+* A null completion listener throws `IllegalArgumentException`.
+* `Session.close()`, `commit()`, `rollback()` and `MessageProducer.close()` wait until the completion callbacks of the sends already made have returned.
+
+From a completion callback, these calls throw `IllegalStateException`: `commit`, `rollback` and `close` on its own session, `close` on a producer of that session, and `close` on its own connection. `Connection.stop()` is not refused from a completion callback: the specification only names message listeners there.
+
+With the simplified API, a `JMSProducer` sends asynchronously once `setAsync(completionListener)` has been called on it.
+
+== Temporary destinations
+
+A temporary queue or topic belongs to the connection that created it. Its typical use is the reply destination of a request:
+
+[source,java]
+----
+Queue requests = session.createQueue("requests");
+TemporaryQueue replies = session.createTemporaryQueue();
+
+TextMessage request = session.createTextMessage("ping");
+request.setJMSReplyTo(replies);
+session.createProducer(requests).send(request);
+
+// the service side
+Message received = session.createConsumer(requests).receive(5_000);
+session.createProducer(received.getJMSReplyTo()).send(session.createTextMessage("pong"));
+
+((TextMessage) session.createConsumer(replies).receive(5_000)).getText();   // pong
+----
+
+* Any connection of the same broker may send to a temporary destination. Only the connection that created it may consume from it: another one gets a `JMSException` when it creates the consumer.
+* `delete()` throws `JMSException` while the destination has a consumer.
+* A temporary destination is deleted when its connection is closed.
+* Using a deleted temporary destination throws `InvalidDestinationException`.
+
+== Queue browsers
+
+A browser looks at the messages of a queue without consuming them.
+
+[source,java]
+----
+try (QueueBrowser browser = session.createBrowser(queue)) {
+    Enumeration<?> messages = browser.getEnumeration();
+    while (messages.hasMoreElements()) {
+        TextMessage message = (TextMessage) messages.nextElement();
+    }
+}
+----
+
+* `getEnumeration()` returns a snapshot of the queue at the time of the call. A later call returns a new snapshot.
+* The snapshot holds read-only copies, in delivery order. It leaves out expired messages, messages whose delivery time has not come, and messages that a consumer has taken and not yet settled.
+* `createBrowser(queue, selector)` shows the messages the selector matches.
+
+== The simplified API
+
+`JMSContext`, `JMSProducer` and `JMSConsumer` offer everything described above with fewer objects. In Tassis they are a thin layer over the classic objects, so the behaviour is the same.
+
+[source,java]
+----
+try (JMSContext context = factory.createContext()) {
+    Queue queue = context.createQueue("orders");
+
+    context.createProducer()
+            .setPriority(8)
+            .setProperty("color", "blue")
+            .send(queue, "hello");
+
+    String body = context.createConsumer(queue, "color = 'blue'").receiveBody(String.class, 5_000);
+}
+----
+
+=== Session mode
+
+`factory.createContext()` creates an automatically acknowledged context. `createContext(int sessionMode)` takes one of the four `JMSContext` modes, and an unknown mode throws `JMSRuntimeException`. `JMSContext.acknowledge()` acknowledges the consumed messages of a client-acknowledged context and does nothing in the other modes. `commit()`, `rollback()` and `recover()` behave as on a session.
+
+=== Contexts that share a connection
+
+`context.createContext(sessionMode)` returns a new context on the **same connection**, with a session of its own. The connection is closed when the last of the contexts that share it is closed.
+
+[source,java]
+----
+JMSContext second = context.createContext(JMSContext.AUTO_ACKNOWLEDGE);
+TemporaryQueue temporary = context.createTemporaryQueue();
+
+context.close();
+// the connection, and its temporary queue, are still there
+second.createProducer().send(temporary, "still open");
+second.close();
+// now the connection is closed
+----
+
+A closed context cannot create another one: `createContext` then throws `IllegalStateRuntimeException`.
+
+=== Autostart
+
+A context starts its connection each time it creates a consumer. `setAutoStart(false)` turns this off for that context, and the application then calls `start()` itself:
+
+[source,java]
+----
+try (JMSContext manual = factory.createContext()) {
+    manual.setAutoStart(false);
+    JMSConsumer consumer = manual.createConsumer(queue);
+    // nothing is delivered yet
+    manual.start();
+}
+----
+
+=== `JMSProducer`
+
+A `JMSProducer` carries the send options (delivery mode, priority, time to live, delivery delay), the headers `JMSCorrelationID`, `JMSType` and `JMSReplyTo`, and message properties. It applies them to each message it sends. A property or a header set on the producer overrides the one the message already carries.
+
+`send` has one form per kind of body: `String`, `Map<String, Object>`, `byte[]`, `Serializable`, and `Message`.
+
+=== `receiveBody`
+
+`receiveBody(Class)`, `receiveBody(Class, timeout)` and `receiveBodyNoWait(Class)` return the body of the next message, or `null` if none arrives in time. They throw `MessageFormatRuntimeException` when the body cannot be returned as that type, when the message has no body, or when it is a plain `Message` or a `StreamMessage`.
+
+What happens to the message after such a failure depends on the session mode:
+
+* in an automatically acknowledged context the message stays exactly where it was: the next receive gets it, and it is not marked as redelivered;
+* in a client-acknowledged or transacted context the message counts as delivered, and the application gets it back through `recover()` or `rollback()`.
+
+=== Exceptions and callbacks
+
+Each checked exception of the classic API is reported as its unchecked counterpart, with the checked one as its cause: `IllegalStateRuntimeException`, `InvalidDestinationRuntimeException`, `InvalidSelectorRuntimeException`, `MessageFormatRuntimeException` and so on, or `JMSRuntimeException` when there is no specific counterpart.
+
+A message listener may not close or stop the context it runs on: `close()` and `stop()` throw `IllegalStateRuntimeException`, and the context stays open. A context that is being closed from another thread stays usable by its callbacks in progress, but creates nothing new.

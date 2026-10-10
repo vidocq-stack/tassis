@@ -1,0 +1,82 @@
+= Concepts
+:description: The in-VM broker and its names, destinations, subscriptions, delivery and message ownership, and the threading model of Tassis.
+
+[.lead]
+This page explains the model behind the API: where messages are, when a destination exists, what a subscription is, who is responsible for a message at each moment, and which threads run application code. The implementation is described in xref:internals.adoc[Internals].
+
+== The in-VM broker
+
+Tassis is a provider, not a client library for another broker: the broker is part of `tassis-core` and runs in the JVM of the application. Its queues, subscriptions and messages are Java objects in the heap of that JVM. Nothing is written to disk and nothing goes through the network.
+
+Two consequences follow, both listed among the xref:reference.adoc#limits[limits]:
+
+* a broker is only reachable from its own JVM (the network transport is milestone M11);
+* messages and durable subscriptions do not survive the JVM (the journal is milestone M10).
+
+=== Broker names
+
+A broker is identified by its name within the JVM. `new TassisConnectionFactory("billing")` designates the broker named `billing`, and `new TassisConnectionFactory()` the broker named `default`.
+
+* Factories created with the same name connect to the same broker: this is how two parts of an application exchange messages.
+* Brokers of different names share nothing: a queue `orders` of one broker is not the queue `orders` of another.
+* A broker is created the first time a factory connects to it. Nothing starts it and nothing stops it: once created, a broker stays in memory for the life of the JVM. An application that creates many brokers of different names keeps them all.
+
+== Destinations
+
+=== A destination exists on first use
+
+Nothing declares a queue or a topic. `new TassisQueue("orders")` and `session.createQueue("orders")` produce equal objects that name the same queue, and the broker creates the queue when a message is first sent to it or a consumer first attached to it.
+
+A queue that is not temporary is never deleted, and a message sent to a queue without a consumer waits there until a consumer takes it. A message that has expired is not delivered.
+
+=== A queue and a topic of the same name are different
+
+`new TassisQueue("news")` and `new TassisTopic("news")` are two destinations. A message sent to the queue is not seen by the subscribers of the topic, and the two objects are not equal.
+
+=== Only Tassis destinations
+
+A `Destination` object from another provider is not accepted: using one throws `InvalidDestinationException`. A `Message` object from another provider is accepted by `send`: Tassis rebuilds it as one of its own through the `jakarta.jms` interfaces.
+
+== Subscriptions
+
+A topic holds no message. What holds messages is a **subscription**: a named or unnamed store attached to one topic, fed by the publications to that topic.
+
+When a message is published, the broker adds it to each subscription the topic has at that moment, unless the subscription's selector rejects it or the subscription is `noLocal` and the message comes from its own connection. A topic without a subscription drops the message.
+
+From there on a subscription behaves like a queue: its consumers compete for its messages, and receive, acknowledgement, transactions and redelivery work the same way. The four kinds of subscription only differ in how many consumers they accept and in when they end: see xref:usage.adoc[Usage].
+
+A message published before a subscription existed is never part of it.
+
+== Delivery and ownership
+
+A message has one owner at each moment.
+
+. **The client**, until `send` returns. The send gives the broker a copy of the message, so the application's object and the stored message are independent from then on.
+. **The broker**, while the message waits in a queue or in a subscription. In a transacted session the copy stays with the session until `commit`, and reaches the broker only then.
+. **The session of the consumer**, from the moment one of its consumers takes the message. The message has left the queue: no other consumer and no browser sees it.
+
+The session then does one of two things with each message it owns:
+
+* it **settles** it: the message is gone for good. An automatically acknowledged session settles a message as it returns it from `receive`, or when `onMessage` returns. A client-acknowledged session settles on `acknowledge()`, a transacted session on `commit()`.
+* it **gives it back** to the broker: on `rollback()`, on `recover()`, when the session is closed with unsettled messages, or when a listener throws in an automatically acknowledged session. The message returns to its place and its next delivery is marked as a redelivery.
+
+Each delivery hands the application its own read-only copy of the message, with `JMSXDeliveryCount` set for that delivery.
+
+Within a queue or a subscription, messages are delivered by priority, highest first, then in the order the broker received them.
+
+== Threading model
+
+A session and what it creates (producers, consumers, messages) are meant to be used by one thread at a time, as the specification says. Tassis adds the following.
+
+**Synchronous calls run in the calling thread.** Outside a transaction, `send` stores the message in the broker before it returns. `receive` blocks the calling thread until a message is available, the timeout expires or the consumer is closed. Tassis waits on `java.util.concurrent` locks and has no `synchronized` block and no `ThreadLocal`, so it can be called from virtual threads as well as from platform threads.
+
+**Tassis creates two kinds of thread, both virtual:**
+
+* one **dispatcher** per consumer that has a message listener. It takes the messages for that consumer and calls `onMessage`;
+* one **completion thread** per session that has made an asynchronous send. It calls `onCompletion`, in the order of the sends.
+
+**Application callbacks run on those threads and nowhere else.** The message listeners of one session are called one at a time, whatever the number of consumers. So are the completion callbacks of one session.
+
+**A stopped connection delivers nothing.** A connection is created stopped. `start()` begins delivery, `stop()` pauses it and returns once the listener in progress has returned. Sending is not affected.
+
+**Closing waits.** `close()` on a consumer, a session or a connection returns once the receives and the callbacks in progress have completed. It may be called from any thread. That is why a callback may not close or stop what it runs on: see xref:usage.adoc#listeners[what a callback may not do].

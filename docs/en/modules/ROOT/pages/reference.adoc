@@ -1,0 +1,231 @@
+= Reference
+:description: Maven coordinates, Java modules, the administered objects of Tassis, the supported API surface and the limits a user must know.
+
+[.lead]
+This page lists what Tassis publishes, the three classes an application names, what of the Jakarta Messaging API is supported, and the limits of the current development line.
+
+== Maven coordinates
+
+Not released: build from source (see xref:getting-started.adoc[Getting started]). All artifacts share the version `{project-version}` under the group `io.vidocq.tassis`.
+
+[cols="2,3",options="header"]
+|===
+| Artifact | Role
+
+| `io.vidocq.tassis:tassis-core:{project-version}`
+| The provider. The one dependency an application declares.
+
+| `io.vidocq.tassis:tassis-api:{project-version}`
+| Aggregator of the specification API. A dependency of `tassis-core`; it brings `jakarta.jms:jakarta.jms-api:3.1.0`.
+
+| `io.vidocq.tassis:tassis-cdi-vauban:{project-version}`
+| Placeholder, empty until milestone M9 (`JMSContext` injection).
+|===
+
+== Java modules
+
+[cols="1,2",options="header"]
+|===
+| Module | Declares
+
+| `io.vidocq.tassis.api`
+| `requires transitive jakarta.messaging`. No package of its own.
+
+| `io.vidocq.tassis.core`
+| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported, and no package is opened.
+|===
+
+An application module declares `requires io.vidocq.tassis.core;`.
+
+== Administered objects
+
+The three public classes of the package `io.vidocq.tassis.core`. A Java SE application creates them with `new`. They are immutable.
+
+=== `TassisConnectionFactory`
+
+Implements `ConnectionFactory`, `QueueConnectionFactory` and `TopicConnectionFactory`.
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisConnectionFactory()`
+| A factory for the broker named `default`.
+
+| `TassisConnectionFactory(String brokerName)`
+| A factory for the broker of that name in this JVM, created on first use. Throws `NullPointerException` if the name is null.
+
+| `DEFAULT_BROKER`
+| The constant `"default"`: the name the no-argument constructor uses.
+
+| `TassisConnectionFactory withClientID(String clientId)`
+| Returns a new factory for the same broker whose connections are created with this client identifier. Such a connection rejects `setClientID`, and only one of them can be open at a time. Throws `NullPointerException` if the identifier is null.
+
+| `createConnection()`, `createConnection(userName, password)`
+| A connection for the classic API, created stopped.
+
+| `createQueueConnection(...)`, `createTopicConnection(...)`
+| A connection for the legacy domain-specific API.
+
+| `createContext()`, `createContext(userName, password)`
+| An automatically acknowledged `JMSContext` on a connection of its own.
+
+| `createContext(int sessionMode)`, `createContext(userName, password, sessionMode)`
+| A `JMSContext` in that session mode. An unknown mode throws `JMSRuntimeException`.
+|===
+
+Every form that takes a user name and a password ignores them: see <<limits>>.
+
+Every call creates a new connection. With a factory obtained from `withClientID`, creating a connection while another one is open throws `InvalidClientIDException` (`InvalidClientIDRuntimeException` from `createContext`).
+
+=== `TassisQueue`
+
+Implements `Queue`.
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisQueue(String name)`
+| The queue of that name. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
+
+| `getQueueName()`, `toString()`
+| The name.
+
+| `equals`, `hashCode`
+| Two `TassisQueue` objects are equal when their names are.
+|===
+
+`Session.createQueue(name)` and `JMSContext.createQueue(name)` return a `TassisQueue`.
+
+=== `TassisTopic`
+
+Implements `Topic`.
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisTopic(String name)`
+| The topic of that name. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
+
+| `getTopicName()`, `toString()`
+| The name.
+
+| `equals`, `hashCode`
+| Two `TassisTopic` objects are equal when their names are. A `TassisTopic` is never equal to a `TassisQueue`.
+|===
+
+`Session.createTopic(name)` and `JMSContext.createTopic(name)` return a `TassisTopic`.
+
+== Defaults
+
+[cols="2,3",options="header"]
+|===
+| Setting | Value
+
+| Broker name | `default` (`TassisConnectionFactory.DEFAULT_BROKER`)
+| Client identifier | None, unless the factory was obtained from `withClientID` or the application calls `setClientID`
+| Session mode | `AUTO_ACKNOWLEDGE`
+| Delivery mode | `Message.DEFAULT_DELIVERY_MODE`, which is `PERSISTENT`
+| Priority | `Message.DEFAULT_PRIORITY`; a priority outside 0 to 9 throws `JMSException`
+| Time to live | `Message.DEFAULT_TIME_TO_LIVE`: no expiration
+| Delivery delay | `Message.DEFAULT_DELIVERY_DELAY`: none
+| Maximum deliveries to a failing listener of an automatically acknowledged session | 10
+|===
+
+Only the first two can be set, and only in the code of the application. Configuration from outside the application is milestone M8c: see <<limits>>.
+
+`ConnectionMetaData` reports the Jakarta Messaging version `3.1` and the provider name `Tassis`. `getJMSXPropertyNames()` lists `JMSXDeliveryCount`, `JMSXGroupID` and `JMSXGroupSeq`. The first is set by Tassis on every delivery. The other two are carried like any property: Tassis attaches no delivery guarantee to them.
+
+== Supported API surface
+
+[cols="3,1",options="header"]
+|===
+| Jakarta Messaging API | Status
+
+| Classic API: `Connection`, `Session`, `MessageProducer`, `MessageConsumer` | Supported
+| Simplified API: `JMSContext`, `JMSProducer`, `JMSConsumer` | Supported
+| Legacy domain-specific API: `QueueConnection`, `QueueSession`, `QueueSender`, `QueueReceiver`, `TopicConnection`, `TopicSession`, `TopicPublisher`, `TopicSubscriber` | Supported
+| The five message body types and `Message` without a body; `getBody`, `isBodyAssignableTo` | Supported
+| Queues, topics, temporary queues and topics, `QueueBrowser` | Supported
+| Unshared and shared subscriptions, durable or not; `noLocal`; `unsubscribe` | Supported
+| The four session modes; local transactions; `recover` | Supported
+| Message selectors | Supported
+| `MessageListener`; asynchronous send with `CompletionListener` | Supported
+| Message expiration, delivery delay, priority | Supported
+| `ExceptionListener` | Stored and returned, never called: the in-VM broker has no connection to lose
+| `Session.setMessageListener`, `Session.getMessageListener`, `Session.run`, the `createConnectionConsumer` family | Not implemented: `UnsupportedOperationException`. They are the optional application server facilities of chapter 11 of the specification, and are not on the roadmap.
+| XA: `XAConnectionFactory`, `XAConnection`, `XASession`, `XAJMSContext` | Not implemented. Milestone M13.
+| `JMSContext` injection with CDI | Not implemented. Milestone M9.
+| Authentication | Not implemented. Milestone M11.
+|===
+
+[#limits]
+== Limits
+
+What a user must know before relying on Tassis. Each limit names the roadmap milestone that addresses it, where there is one. The milestones are described in `ROADMAP.md` at the root of the repository.
+
+=== Messages and durable subscriptions do not survive the JVM
+
+The broker keeps everything in memory. When the JVM stops, every message is lost, whatever its delivery mode, and so is every durable subscription. `DeliveryMode.PERSISTENT` is accepted but changes nothing today. A durable subscription survives the connection that created it, not the JVM.
+
+Addressed by milestone M10 (journal).
+
+=== Any user name and password are accepted
+
+`createConnection(userName, password)`, `createContext(userName, password)` and the other forms that take credentials ignore them. Tassis has no user registry and never throws `JMSSecurityException`.
+
+Addressed by milestone M11 (authentication comes with the network transport).
+
+=== The broker is only reachable from its own JVM
+
+A broker lives in the JVM that created it. Two processes cannot exchange messages through Tassis: each one has its own brokers, even under the same name.
+
+Addressed by milestone M11 (network transport).
+
+=== No connection pool
+
+Every `createConnection()` and every `createContext()` builds a new connection, and nothing reuses one. With the in-VM broker a connection is a small object and opens no socket.
+
+Addressed by milestone M11b.
+
+=== Nothing is configurable from outside the application
+
+Tassis reads no property file, no system property, no environment variable and no connection URL. The broker name and the client identifier are set in the code of the application, and nothing else can be set.
+
+Addressed by milestone M8c.
+
+=== A message is dropped after 10 failed deliveries to a listener
+
+In an automatically acknowledged session, a message whose listener throws is redelivered at once. When the listener throws on a delivery whose `JMSXDeliveryCount` has reached 10, the message is dropped and an error is logged through `System.Logger`. There is **no dead-letter queue**: the message is gone. The number is a constant of the code.
+
+In the other cases there is no limit at all: a message that is always rolled back or recovered is redelivered for ever, with no delay between two deliveries.
+
+No milestone addresses this today. The M8c milestone plans a configuration key for the number of deliveries.
+
+=== No XA
+
+Transactions are local to one session. A Tassis session cannot take part in a transaction coordinated from outside, with a database for example, and the XA interfaces of the API are not implemented.
+
+Addressed by milestone M13.
+
+=== No JNDI
+
+The administered objects cannot be bound in or looked up from a JNDI context: they are created with `new`. The resource definition annotations of Jakarta EE (`@JMSConnectionFactoryDefinition`, `@JMSDestinationDefinition`) are not processed. No milestone plans it.
+
+=== No message-driven beans
+
+Tassis is a Java SE provider. It has no message-driven beans, and CDI message listeners are out of the scope of its roadmap. Asynchronous consumption is done with `MessageConsumer.setMessageListener`.
+
+=== Other choices to be aware of
+
+* `DUPS_OK_ACKNOWLEDGE` behaves exactly like `AUTO_ACKNOWLEDGE`.
+* `ObjectMessage` deserialises its body with a plain `ObjectInputStream`, without a deserialization filter.
+* A broker, once created, is never removed, and neither is a queue that is not temporary.
+* Expired messages are only removed from a queue or a subscription when a consumer of a started connection receives from it. Until then they stay in memory, undelivered.
+
+== Bugs and benchmarks
+
+* `BUG.md`, at the root of the repository: reproducible bugs. It has no entry today.
+* `BENCH.md`, at the root of the repository: benchmark runs. It has no entry today; benchmarks are milestone M12.

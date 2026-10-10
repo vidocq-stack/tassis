@@ -1,0 +1,107 @@
+= Migration
+:description: Nothing to migrate between Tassis versions yet; notes for an application that comes from another Jakarta Messaging provider.
+
+[.lead]
+Tassis is at `{project-version}` and **has never been released**. There is no earlier version of Tassis to migrate from. This page is for someone who comes from another Jakarta Messaging provider and wants to know what to expect.
+
+== Between Tassis versions
+
+Nothing to migrate: no version has been published. This section will get its first entry with the first release.
+
+== From another Jakarta Messaging provider
+
+Migrating a production application is premature: read the xref:reference.adoc#limits[limits] first. Messages do not survive the JVM, and the broker is only reachable from the JVM it runs in.
+
+=== What stays the same
+
+Code written against the standard `jakarta.jms` API keeps working as it is: the classic API, the simplified API and the legacy domain-specific API, the five message types, selectors, the four session modes, local transactions, durable and shared subscriptions, message listeners and asynchronous send. Details and provider-specific choices are in xref:usage.adoc[Usage].
+
+=== What changes: administered objects
+
+Tassis has no JNDI. Where an application looks up its connection factory and its destinations, it creates them instead:
+
+[cols="1,1",options="header"]
+|===
+| With a JNDI lookup | With Tassis
+
+| `(ConnectionFactory) context.lookup("...")`
+| `new TassisConnectionFactory()` or `new TassisConnectionFactory("brokerName")`
+
+| `(Queue) context.lookup("...")`
+| `new TassisQueue("orders")`, or `session.createQueue("orders")`
+
+| `(Topic) context.lookup("...")`
+| `new TassisTopic("news")`, or `session.createTopic("news")`
+
+| A connection factory configured with a client identifier
+| `new TassisConnectionFactory().withClientID("reader")`
+|===
+
+These three classes are the only Tassis types the application names. Keeping their creation in one place keeps the rest of the code on the standard API.
+
+Destinations need no declaration on the broker: a queue or a topic exists from its first use. Tassis has no administration tool and no broker configuration file.
+
+`Destination` objects of another provider are not accepted by Tassis; `Message` objects of another provider are accepted by `send`.
+
+=== What is not there yet
+
+[cols="2,3,1",options="header"]
+|===
+| If the application relies on | With Tassis today | Milestone
+
+| Messages or durable subscriptions surviving a restart
+| Everything is in memory and is lost with the JVM
+| M10
+
+| A broker shared by several processes or machines
+| The broker is in the JVM of the application, and only there
+| M11
+
+| Authentication
+| Any user name and password are accepted
+| M11
+
+| Being told of a lost connection through `ExceptionListener`
+| The listener is stored and never called: there is no connection to lose
+| M11
+
+| A connection pool
+| None: each call creates a connection, which is cheap with the in-VM broker
+| M11b
+
+| Configuration by URL, property file or system property
+| None: the broker name and the client identifier are set in code
+| M8c
+
+| `@Inject JMSContext`
+| Not available
+| M9
+
+| XA, or a transaction shared with a database
+| Local transactions only
+| M13
+
+| A dead-letter queue, a redelivery delay, a configurable redelivery limit
+| None. A message whose automatically acknowledged listener fails on its 10th delivery is dropped; in the other modes redelivery has no limit
+| None
+
+| Message-driven beans, `@JMSConnectionFactoryDefinition`, `@JMSDestinationDefinition`
+| Not available: Tassis is a Java SE provider
+| None
+
+| Extensions specific to the previous provider (its own classes, URLs, destination options, management API)
+| No equivalent
+| None
+|===
+
+=== Behaviour to check
+
+Points where the specification lets providers differ, and where Tassis may not do what the previous provider did:
+
+* `Session.close()`, `Connection.close()` and `Connection.stop()` called from a message listener on its own session or connection throw `IllegalStateException`.
+* A consumer that has a message listener refuses the synchronous `receive` methods.
+* `DUPS_OK_ACKNOWLEDGE` is the same as `AUTO_ACKNOWLEDGE`.
+* A selector with a type error that the literals make visible, such as `weight > 'foo'`, is rejected when the consumer is created.
+* `setDisableMessageID` and `setDisableMessageTimestamp` have no effect.
+
+See xref:tck.adoc[TCK status] for where conformance stands: compatibility with the specification is not claimed yet.

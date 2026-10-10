@@ -1,0 +1,118 @@
+= Getting started
+:description: Build Tassis from source, declare it in a Java Modules project, then send and receive a first message with the simplified API and with the classic API.
+
+[.lead]
+Tassis is not released, so getting started means building it from source once. After that it is used like any Jakarta Messaging provider, except for one thing: the connection factory and the destinations are created with `new`, not looked up in JNDI.
+
+== Prerequisites
+
+* **Java 25** (Temurin).
+* **Maven 3.9.16**. Both are pinned by the `.sdkmanrc` file of the repository: `sdk env`.
+* **`io.vidocq:vidocq-parent:0.4.0-SNAPSHOT` installed in your local Maven repository.** The Tassis reactor inherits from it with an empty `relativePath`, so a fresh checkout does not build without it.
+
+== Step 1: build from source
+
+From a checkout of the Tassis repository:
+
+[source,bash]
+----
+sdk env
+./mvnw -ntp clean install
+----
+
+This installs the `{project-version}` artifacts into your local Maven repository. The build neither downloads nor runs the TCK: the TCK runner only joins the reactor under the `tck` Maven profile (see xref:tck.adoc[TCK status]).
+
+== Step 2: Maven coordinates
+
+[source,xml,subs=attributes+]
+----
+<dependency>
+    <groupId>io.vidocq.tassis</groupId>
+    <artifactId>tassis-core</artifactId>
+    <version>{project-version}</version>
+</dependency>
+----
+
+This version is **not released**: it exists only in the local repository of whoever built it.
+
+`tassis-core` is the only dependency to declare. It depends on `tassis-api`, which depends on `jakarta.jms:jakarta.jms-api:3.1.0`, so the Jakarta Messaging API comes with it.
+
+== Step 3: declare the module
+
+[source,java]
+----
+module com.acme.orders {
+    requires io.vidocq.tassis.core;
+}
+----
+
+`io.vidocq.tassis.core` declares `requires transitive io.vidocq.tassis.api`, which declares `requires transitive jakarta.messaging`. One `requires` therefore lets your module read both the Tassis classes (package `io.vidocq.tassis.core`) and the Jakarta Messaging API (package `jakarta.jms`).
+
+== Step 4: send and receive with the simplified API
+
+[source,java]
+----
+import io.vidocq.tassis.core.TassisConnectionFactory;
+import jakarta.jms.ConnectionFactory;
+import jakarta.jms.JMSContext;
+import jakarta.jms.Queue;
+
+ConnectionFactory factory = new TassisConnectionFactory();
+
+try (JMSContext context = factory.createContext()) {
+    Queue queue = context.createQueue("orders");
+
+    context.createProducer().send(queue, "hello");
+
+    String body = context.createConsumer(queue).receiveBody(String.class, 5_000);
+    System.out.println(body);   // hello
+}
+----
+
+What happens:
+
+* `new TassisConnectionFactory()` designates the broker named `default` of this JVM. The broker is created the first time a factory connects to it.
+* The queue `orders` is not declared anywhere. It exists from its first use.
+* Creating the consumer starts the connection of the context, so no `start()` is needed.
+* `receiveBody(String.class, 5_000)` waits up to five seconds and returns the body of the message, or `null` if none arrives in time.
+
+== Step 5: the same with the classic API
+
+[source,java]
+----
+import io.vidocq.tassis.core.TassisConnectionFactory;
+import jakarta.jms.Connection;
+import jakarta.jms.ConnectionFactory;
+import jakarta.jms.MessageConsumer;
+import jakarta.jms.MessageProducer;
+import jakarta.jms.Queue;
+import jakarta.jms.Session;
+import jakarta.jms.TextMessage;
+
+ConnectionFactory factory = new TassisConnectionFactory();
+
+try (Connection connection = factory.createConnection()) {
+    Session session = connection.createSession();
+    Queue queue = session.createQueue("orders");
+    MessageProducer producer = session.createProducer(queue);
+    MessageConsumer consumer = session.createConsumer(queue);
+    connection.start();
+
+    producer.send(session.createTextMessage("hello"));
+
+    TextMessage received = (TextMessage) consumer.receive(5_000);
+    System.out.println(received.getText());   // hello
+}
+----
+
+The differences with the simplified API:
+
+* A connection is created stopped. Its consumers receive nothing until `connection.start()`. Sending does not need a started connection.
+* The methods throw the checked `JMSException`, where the simplified API throws `JMSRuntimeException` and its subclasses.
+* Closing the connection closes its sessions, producers and consumers.
+
+== Next steps
+
+* xref:usage.adoc[Usage]: topics and subscriptions, acknowledgement and transactions, selectors, listeners.
+* xref:concepts.adoc[Concepts]: the broker, destinations, subscriptions, delivery.
+* xref:reference.adoc#limits[Limits]: what Tassis does not do yet.
