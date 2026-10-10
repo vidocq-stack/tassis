@@ -72,6 +72,7 @@ a milestone.
 5. **No `synchronized` around blocking calls, no `ThreadLocal`** — virtual threads first.
 6. **Out of scope by decision** (see ROADMAP): XA, a `vidocq` runtime extension, CDI message
    listeners. Do not start on them without a roadmap change.
+   **Authentication is deferred to M11**: until then any user name and password are accepted.
 7. **JUnit 6** (`org.junit:junit-bom`, managed by `vidocq-parent`) for all tests — no Mockito;
    hand-written fixtures only.
 8. **Language** — commit messages, Javadoc, comments and all `.md` content in **English**.
@@ -115,6 +116,14 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
   uses to close a child, with none. A `shut()` never throws and returns once the child is quiet.
 - A dispatcher that cannot deliver the message it took gives it back with
   `Broker.returnUndelivered`, not `redeliver`: the application never saw it.
+
+## Simplified API
+
+`TassisContext`, `TassisJMSProducer` and `TassisJMSConsumer` are a thin layer over the classic
+objects: put behaviour in the classic classes and only delegate from these, through `Unchecked`,
+which turns each checked `JMSException` into its unchecked counterpart. A context creates its
+session on first need, not in its constructor, so that `setClientID` still works on a new one.
+Contexts created from one another share a connection, closed with the last of them.
 
 ## Selectors (`internal.selector`)
 

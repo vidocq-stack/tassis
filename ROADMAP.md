@@ -333,15 +333,54 @@ Choices and limits:
 - **Still one broker lock.** Listeners and the index did not need it split, and no benchmark has
   asked for it yet: the decision stays with M12.
 
-### M7 — Simplified API
+### M7 — Simplified API ✅
 
-`JMSContext`, `JMSProducer`, `JMSConsumer` (§2.8), `JMSRuntimeException` mapping (§10),
-autostart. Tests mirror M2 to M6.
+- [x] `JMSContext` (§2.8): a connection and a session in one object; contexts created from one
+      another share the connection, closed with the last of them; autostart
+- [x] `JMSProducer`: send options, headers and properties carried by the producer, a `send`
+      method per kind of body, asynchronous send through `setAsync`
+- [x] `JMSConsumer`, including `receiveBody` and its rules when the body cannot be converted
+- [x] Unchecked exceptions (§10.2): each `JMSException` reported as its runtime counterpart
+- [x] `ConnectionFactory.createContext` in its four forms
+
+**Deliverable:** `SimplifiedApiTest` (19 tests), 255 unit tests in all, and **901 / 901** on the
+TCK selection: the whole of `core` and of `core20`, 61 packages, two tests negated until M11
+(see `TCK.md`).
+
+How it works: the three classes are a thin layer over the classic objects. `TassisContext` holds
+the connection, a count of the contexts sharing it, and a session it creates on first need, so
+that `setClientID` still works on a new context. `Unchecked` maps the exceptions.
+
+The `virtual-threads-reviewer` pass found a deadlock, fixed here with its regression test:
+`JMSContext.close()` kept the context's lock while waiting for the listeners, and a listener
+using that context needed the same lock. Fixing it exposed a defect dating from M6, also fixed:
+a session being closed refused the calls of the very listener the close was waiting for. Three
+smaller ones went with it: `createContext` racing with the close of the last context, a
+delivery lost when `receiveBody` failed otherwise than on the body type, and a correlation ID
+given as bytes sent as a string.
+
+Choices and limits:
+
+- **`receiveBody` on a message it cannot convert**, in an automatically acknowledged context,
+  leaves the message exactly where it was: the next receive gets it, not marked as redelivered.
+  In the other modes it counts as delivered, as the Javadoc prescribes.
+- **A context being closed stays usable by its callbacks in progress**, but creates nothing new.
+- **`createQueue`, `createTopic` and the message factory methods need no session**, so they do
+  not count as a use of the connection for `setClientID`.
+- **Any credentials are accepted** by the `createContext(user, password)` forms: see M11.
+- **No `XAJMSContext`**: XA is out of scope.
 
 ### M8 — TCK complete
 
-905 / 905 on `core` + `core20`, plus the signature test against `jakarta.jms.sig`. Any
-challenge (disabled test, spec-interpretation divergence) goes in a `TCK.md` with the spec
+The TCK selection grew with each milestone instead of waiting for this one, so what is left is
+small:
+
+- the **signature test** against `jakarta.jms.sig`, which only ships in the JavaTest zip of the
+  TCK (see spike 2): check that `tassis-api` exposes exactly the `jakarta.jms` API;
+- a pass over `TCK.md` to state the final score and what stays out of reach (`ee`, `ee20`);
+- the two authentication tests of `core20/connectionfactorytests`, which wait for M11.
+
+Any challenge (disabled test, spec-interpretation divergence) goes in `TCK.md` with the spec
 citation and a reactivation plan.
 
 ### M9 — CDI through Vauban
@@ -357,10 +396,25 @@ module-path integration tests.
 subscriptions survive a broker stop, with crash-injection tests. Until then `PERSISTENT` is
 accepted but not durable across restarts; this is a documented limitation.
 
-### M11 — Network transport
+### M11 — Network transport, and authentication
 
 Broker server on virtual threads, wire protocol, client/broker module split. The protocol
 (home-grown or a standard one) is chosen by a dedicated study when the milestone opens.
+
+**Authentication** (§6.1.1) is part of this milestone, decided on 2026-10-10: it only means
+something once a client is no longer in the broker's JVM. Today `createConnection(user, password)`
+and `createContext(user, password)` accept any credentials. To deliver:
+
+- a user registry on the broker and the way to administer it (a public API to design: nothing
+  public exists for broker administration yet);
+- `JMSSecurityException` / `JMSSecurityRuntimeException` when a user name and password are
+  rejected (§10.3), and what a connection without credentials is allowed to do;
+- the two TCK tests negated until then:
+  `core20/connectionfactorytests/ClientIT#createConnectionExceptionTests` and
+  `#createJMSContextExceptionTests`, which expect `("invalid", "invalid")` to be refused.
+
+The `ExceptionListener` (§6.1.7), stored and never called so far, also gets its purpose here: a
+lost connection.
 
 ### M12 — Benchmarks and documentation
 

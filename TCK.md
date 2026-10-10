@@ -21,23 +21,32 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M6
+## Status — M7
 
-**642 TCK tests passed / 0 failed**: the whole of `core`, its 46 packages including the 11
-`appclient` ones, with no test negated (2026-10-09, `./mvnw -ntp -Ptck clean install`; the run
-reports 643 because it also executes `PortingSmokeTest`).
+**901 TCK tests passed / 0 failed** on the selection of `tck.test`: the whole of `core` (642
+tests, 46 packages) and of `core20` (259 of its 261 tests, 15 packages). The run reports 902
+because it also executes `PortingSmokeTest`, and takes about 13 minutes: many `core20` tests
+wait on purpose (2026-10-10, `./mvnw -ntp -Ptck clean install`).
+
+Two tests are negated in the `tck.test` property of `tassis-tck/pom.xml`, both waiting for
+authentication, which is part of M11:
+
+| Class | Tests | Needs |
+|---|---|---|
+| `core20/connectionfactorytests/ClientIT` | `createConnectionExceptionTests`, `createJMSContextExceptionTests` | `JMSSecurityException` for the credentials `("invalid", "invalid")`; Tassis accepts any credentials today |
+
+Out of reach: `ee` and `ee20` (255 annotations), which need EJB, MDB or a web container.
+
+History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37; M6 642 on 46 (all of
+`core`); M7 901 on 61 (`core` + `core20`).
 
 `core` has 644 `@Test` annotations but 642 tests: in `QueueHeaderTestsIT` and
 `TopicHeaderTestsIT` the annotation also sits on a private helper taking a parameter
 (`chkMessageID(String)`), which JUnit does not run. The 905 of the spike for `core` + `core20`
-was a count of annotations.
+was a count of annotations; the real total is 903.
 
-Not selected yet: `core20`, 15 packages and 261 annotations (simplified API, M7).
-
-History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37; M6 642 on 46.
-
-Every `appclient` package of `core` runs as-is in `standalone` mode, which closes the open point
-of spike 2 for `core`.
+The `core20` tests read one more system property, `vehicle`, to tell a container from a Java SE
+client: `tassis-tck` sets it to `standalone`.
 
 The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
 `DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite

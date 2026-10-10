@@ -22,10 +22,14 @@ package io.vidocq.tassis.core;
 import io.vidocq.tassis.core.internal.broker.Broker;
 import io.vidocq.tassis.core.internal.client.Domain;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
+import io.vidocq.tassis.core.internal.client.TassisContext;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.InvalidClientIDException;
+import jakarta.jms.InvalidClientIDRuntimeException;
 import jakarta.jms.JMSContext;
 import jakarta.jms.JMSException;
+import jakarta.jms.JMSRuntimeException;
 import jakarta.jms.QueueConnection;
 import jakarta.jms.QueueConnectionFactory;
 import jakarta.jms.TopicConnection;
@@ -108,23 +112,37 @@ public final class TassisConnectionFactory
         return connect(Domain.TOPIC);
     }
 
+    // ---- simplified API ---------------------------------------------------
+
+    private JMSContext context(int sessionMode) {
+        TassisContext.checkSessionMode(sessionMode);
+        try {
+            return new TassisContext(connect(Domain.UNIFIED), sessionMode);
+        } catch (JMSException e) {
+            JMSRuntimeException unchecked = e instanceof InvalidClientIDException
+                    ? new InvalidClientIDRuntimeException(e.getMessage(), e.getErrorCode(), e)
+                    : new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
+            throw unchecked;
+        }
+    }
+
     @Override
     public JMSContext createContext() {
-        throw new UnsupportedOperationException("createContext(): see ROADMAP M7");
+        return context(JMSContext.AUTO_ACKNOWLEDGE);
     }
 
     @Override
     public JMSContext createContext(String userName, String password) {
-        throw new UnsupportedOperationException("createContext(userName, password): see ROADMAP M7");
+        return context(JMSContext.AUTO_ACKNOWLEDGE);
     }
 
     @Override
     public JMSContext createContext(String userName, String password, int sessionMode) {
-        throw new UnsupportedOperationException("createContext(userName, password, sessionMode): see ROADMAP M7");
+        return context(sessionMode);
     }
 
     @Override
     public JMSContext createContext(int sessionMode) {
-        throw new UnsupportedOperationException("createContext(sessionMode): see ROADMAP M7");
+        return context(sessionMode);
     }
 }

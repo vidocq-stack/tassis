@@ -20,14 +20,17 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.message.TassisMessage;
 import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.Destination;
 import jakarta.jms.IllegalStateException;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
+import jakarta.jms.MessageFormatException;
 import jakarta.jms.MessageListener;
 import jakarta.jms.Queue;
 import jakarta.jms.QueueReceiver;
+import jakarta.jms.StreamMessage;
 import jakarta.jms.Topic;
 import jakarta.jms.TopicSubscriber;
 import java.util.concurrent.TimeUnit;
@@ -109,6 +112,42 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     public Message receiveNoWait() throws JMSException {
         checkSynchronous();
         return session.delivered(session.broker().receive(attachment, 0));
+    }
+
+    /**
+     * Receives the next message and returns its body as a {@code c}
+     * ({@code JMSConsumer.receiveBody}), or {@code null} if no message comes in time.
+     *
+     * @throws MessageFormatException if the message has no body of that type. An automatically
+     *         acknowledged session then behaves as if the call had not been made: the message
+     *         stays where it was. In the other modes the message counts as delivered.
+     */
+    <T> T receiveBody(Class<T> c, long timeoutNanos) throws JMSException {
+        checkSynchronous();
+        Broker.Delivery delivery = session.broker().receive(attachment, timeoutNanos);
+        if (delivery == null) {
+            return null;
+        }
+        TassisMessage message = delivery.message();
+        T body;
+        try {
+            if (message.getClass() == TassisMessage.class || message instanceof StreamMessage) {
+                throw new MessageFormatException("this kind of message has no body to receive");
+            }
+            body = message.getBody(c);
+            if (body == null) {
+                throw new MessageFormatException("the message has no body");
+            }
+        } catch (JMSException | RuntimeException failure) {
+            // Whatever went wrong, the delivery must end up somewhere.
+            if (session.automaticallyAcknowledged()) {
+                session.broker().returnUndelivered(delivery);
+            } else {
+                session.delivered(delivery);
+            }
+            throw failure;
+        }
+        return session.delivered(delivery) == null ? null : body;
     }
 
     private void checkSynchronous() throws IllegalStateException {

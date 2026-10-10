@@ -164,6 +164,14 @@ public final class TassisSession implements QueueSession, TopicSession {
         return delivery.message();
     }
 
+    /** {@code JMSContext.acknowledge()}: does nothing unless the session is client-acknowledged. */
+    void acknowledge() throws IllegalStateException {
+        checkOpen();
+        if (acknowledgeMode == CLIENT_ACKNOWLEDGE) {
+            acknowledgeAll();
+        }
+    }
+
     /** {@code Message.acknowledge()}: acknowledges everything this session has consumed (§6.2.10). */
     private void acknowledgeAll() throws IllegalStateException {
         work.lock();
@@ -175,7 +183,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         }
     }
 
-    private boolean automaticallyAcknowledged() {
+    boolean automaticallyAcknowledged() {
         return !transacted && acknowledgeMode != CLIENT_ACKNOWLEDGE;
     }
 
@@ -212,8 +220,13 @@ public final class TassisSession implements QueueSession, TopicSession {
         children.remove(child);
     }
 
+    /**
+     * A session being closed stays usable by its listener in progress, which the close is
+     * waiting for: "all the facilities of the connection and its sessions must remain available
+     * to those listeners until they return control" (Connection.close).
+     */
     void checkOpen() throws IllegalStateException {
-        if (closed) {
+        if (closed && !inOwnListener()) {
             throw new IllegalStateException("the session is closed");
         }
     }

@@ -47,7 +47,7 @@
         <!--
             What the TCK run executes: the packages Tassis is expected to pass. A test of one
             of them that needs a later milestone is negated here by name (!Class#method) and
-            listed in TCK.md; there is none at the moment.
+            listed in TCK.md.
             Override with -Dtck.test=... to run something else.
         -->
         <tck.test>
@@ -87,7 +87,12 @@
             **/core/exceptiontests/*IT,
             **/core/selectorQueue/*IT,
             **/core/selectorTopic/*IT,
-            **/core/appclient/*/*IT
+            **/core/appclient/*/*IT,
+            **/core20/*/*IT,
+            **/core20/appclient/*/*IT,
+            <!-- M11: authentication, which arrives with the network transport -->
+            !com.sun.ts.tests.jms.core20.connectionfactorytests.ClientIT#createConnectionExceptionTests,
+            !com.sun.ts.tests.jms.core20.connectionfactorytests.ClientIT#createJMSContextExceptionTests
         </tck.test>
     </properties>
 
@@ -187,6 +192,8 @@
                         <java.io.tmpdir>${project.build.directory}/tck-tmp</java.io.tmpdir>
                         <user.name>tassis</user.name>
                         <platform.mode>standalone</platform.mode>
+                        <!-- Read by the simplified API tests to tell a container from a Java SE client. -->
+                        <vehicle>standalone</vehicle>
                         <jms_timeout>${tck.jms.timeout}</jms_timeout>
                         <user>j2ee</user>
                         <password>j2ee</password>
