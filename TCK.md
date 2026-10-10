@@ -1,5 +1,20 @@
 # Tassis — Jakarta Messaging TCK
 
+## Result
+
+| | |
+|---|---|
+| Specification | Jakarta Messaging 3.1 |
+| TCK | `jakarta.tck:jms-tck:11.0.3`, with `jakarta.tck:common:11.0.8` (see Deviations) |
+| JDK | Temurin 25 |
+| Functional tests | **901 passed, 0 failed** out of 903: all of `core` (642) and `core20` (259 of 261) |
+| Signature test | **passed**: `jakarta.jms` of `jakarta.jms-api:3.1.0` against `jakarta.jms.sig` |
+| Not passed | 2 tests, negated: authentication, due with M11 (see Status) |
+| Not applicable | `ee` and `ee20`, 255 annotations: they need EJB, MDB or a web container |
+
+Tassis does not claim compatibility: two tests of the applicable set are not passed yet, and
+this file is a working record, not a certification request.
+
 ## Runner
 
 | Item | Value |
@@ -51,6 +66,26 @@ client: `tassis-tck` sets it to `standalone`.
 The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
 `DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite
 never calls `Connection.setClientID` itself in `core`.
+
+## Signature test
+
+`./run-official-tck-messaging-3.1.sh signature` checks that the API `tassis-api` exposes is
+exactly the `jakarta.jms` API of the specification. It runs `jakarta.tck:sigtest-maven-plugin`
+2.7 in static mode on the classes of `jakarta.jms-api:3.1.0`, against the TCK's `jakarta.jms.sig`.
+
+- The signature file is published in the JavaTest distribution of the TCK only
+  (`jakarta-messaging-tck-3.1.0.zip`), under the Eclipse Foundation TCK License. It is not kept
+  in this repository: the script downloads the distribution into
+  `tassis-tck/target/tck-distribution` and extracts the file.
+- One class is ignored, `java.lang.Object`: the file was recorded on a JDK where
+  `Object.finalize()` was not yet deprecated for removal, a difference every class inherits and
+  which is the JDK's. Without that option the test reports 52 "added annotations", all of them
+  this one; with it, none.
+- Control: run against `jakarta.jms-api:3.0.0` the test fails, on exactly what 3.1 added (the
+  three-argument exception constructors and the repeatable resource definition annotations).
+
+`tassis-api` adds nothing to the upstream artifact, so the test passes by construction. It is
+there because a compatible implementation has to pass it, and it would catch a fork of the API.
 
 ## Deviations from the TCK as published
 

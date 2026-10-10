@@ -29,6 +29,9 @@ sdk env
 # Official TCK: the tests Tassis is expected to pass today (see TCK.md)
 ./run-official-tck-messaging-3.1.sh
 
+# The signature test of the API (downloads the TCK's JavaTest distribution, 14 MB)
+./run-official-tck-messaging-3.1.sh signature
+
 # Another TCK selection
 ./run-official-tck-messaging-3.1.sh -Dtck.test='**/core/selectorQueue/*IT'
 ```

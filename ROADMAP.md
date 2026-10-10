@@ -370,18 +370,25 @@ Choices and limits:
 - **Any credentials are accepted** by the `createContext(user, password)` forms: see M11.
 - **No `XAJMSContext`**: XA is out of scope.
 
-### M8 — TCK complete
+### M8 — TCK complete ✅
 
-The TCK selection grew with each milestone instead of waiting for this one, so what is left is
-small:
+- [x] **Signature test** against `jakarta.jms.sig`: `./run-official-tck-messaging-3.1.sh signature`,
+      profile `signature` of `tassis-tck`. Passed, and shown to fail on the 3.0.0 API.
+- [x] `TCK.md` opens with the result: 901 of 903 functional tests, the signature test, what is
+      not passed and what does not apply.
 
-- the **signature test** against `jakarta.jms.sig`, which only ships in the JavaTest zip of the
-  TCK (see spike 2): check that `tassis-api` exposes exactly the `jakarta.jms` API;
-- a pass over `TCK.md` to state the final score and what stays out of reach (`ee`, `ee20`);
-- the two authentication tests of `core20/connectionfactorytests`, which wait for M11.
+**Deliverable:** the TCK selection grew with each milestone since M2, so nothing functional was
+left for this one.
 
-Any challenge (disabled test, spec-interpretation divergence) goes in `TCK.md` with the spec
-citation and a reactivation plan.
+What stays open, and where it is due:
+
+- the two authentication tests of `core20/connectionfactorytests`: M11;
+- `ee` and `ee20`, out of reach without EJB, MDB or a web container;
+- compatibility is **not claimed**: it needs every applicable test passed, hence M11 first.
+
+The signature file is under the Eclipse Foundation TCK License and is downloaded by the script,
+not stored here; the `sigtest-maven-plugin` is a build-time plugin of the `signature` profile
+only.
 
 ### M8b — Documentation
 
