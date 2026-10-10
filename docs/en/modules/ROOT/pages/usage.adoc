@@ -411,3 +411,116 @@ What happens to the message after such a failure depends on the session mode:
 Each checked exception of the classic API is reported as its unchecked counterpart, with the checked one as its cause: `IllegalStateRuntimeException`, `InvalidDestinationRuntimeException`, `InvalidSelectorRuntimeException`, `MessageFormatRuntimeException` and so on, or `JMSRuntimeException` when there is no specific counterpart.
 
 A message listener may not close or stop the context it runs on: `close()` and `stop()` throw `IllegalStateRuntimeException`, and the context stays open. A context that is being closed from another thread stays usable by its callbacks in progress, but creates nothing new.
+
+[#injection]
+== Injecting `JMSContext` with CDI
+
+An application that runs on Vauban can have its contexts injected instead of creating them (§12.4 of the specification). It adds the artifact `io.vidocq.tassis:tassis-cdi-vauban` and one line to its module descriptor:
+
+[source,java]
+----
+module com.acme.orders {
+    requires io.vidocq.tassis.cdi.vauban;   // brings io.vidocq.tassis.core
+    requires jakarta.cdi;
+    requires jakarta.inject;
+}
+----
+
+[source,java]
+----
+@Dependent
+public class OrderDesk {
+
+    @Inject
+    JMSContext orders;
+
+    @Inject
+    @JMSConnectionFactory("audit")
+    @JMSSessionMode(JMSContext.CLIENT_ACKNOWLEDGE)
+    JMSContext audit;
+
+    public void place(String order) {
+        orders.createProducer().send(orders.createQueue("orders"), order);
+        audit.createProducer().send(audit.createQueue("trail"), "placed " + order);
+    }
+}
+----
+
+The bean neither creates nor closes anything. The container must be given the two beans of the integration, which `TassisCdi.BEANS` lists:
+
+[source,java]
+----
+var builder = VaubanContainer.builder();
+TassisCdi.BEANS.forEach(builder::addBeanClass);
+try (VaubanContainer container = builder.addBeanClass(OrderDesk.class).build()) {
+    ...
+}
+----
+
+That is the one discovery mode Tassis is tested with. The artifact carries no Vauban bean index, so the scanning modes of Vauban are not known to find these two beans.
+
+=== The life of an injected context
+
+An injected context belongs to the **request** in progress:
+
+* it is created the first time the request uses it, not at injection;
+* within a request, the injection points that carry the same annotations share one context, whatever the bean they are in. A message sent through one is received through the other, and they see the same temporary destinations;
+* it is closed when the request ends, with its consumers and its unacknowledged messages, which go back to their queue;
+* the next request gets a new context.
+
+Used outside a request, an injected context throws the container's `ContextNotActiveException`. That includes a message listener, which runs on a thread of its own: a listener works with the message it is given, not with an injected context. The transaction scope of the specification comes with JTA in milestone M13.
+
+A request that runs subtasks in parallel shares its contexts with them. Like any `JMSContext`, an injected context is used by one thread at a time.
+
+=== The three annotations
+
+[cols="2,3",options="header"]
+|===
+| Annotation | Effect
+
+| `@JMSConnectionFactory("name")`
+| The connection factory to use. Without it, the default one.
+
+| `@JMSSessionMode(mode)`
+| The session mode, `AUTO_ACKNOWLEDGE` without it.
+
+| `@JMSPasswordCredential(userName = ..., password = ...)`
+| The credentials the connection is created with. Any are accepted until authentication exists (milestone M11).
+|===
+
+Two injection points share a context when the three give the same values.
+
+=== Where the connection factories come from
+
+The application may supply its factories as beans. The bean without `@Named` is the default factory, and the bean with `@Named("audit")` is the one `@JMSConnectionFactory("audit")` designates:
+
+[source,java]
+----
+@Dependent
+public class Factories {
+
+    @Produces
+    @Dependent
+    public ConnectionFactory orders() {
+        return new TassisConnectionFactory("orders");
+    }
+
+    @Produces
+    @Dependent
+    @Named("audit")
+    public ConnectionFactory audit() {
+        return TassisConnectionFactory.fromUrl("tassis:vm:audit");
+    }
+}
+----
+
+Without such a bean, the factory is the one the xref:reference.adoc#configuration[settings] describe, read from the **system properties**: `-Dtassis.broker=orders` for the default factory, `-Dtassis.factory.audit.broker=audit` for the factory `audit`. With no bean and no property, an injected context connects to the broker `default`. Two beans for one name throw `JMSRuntimeException` at the first use.
+
+=== What an injected context refuses
+
+Other beans share it and the container manages it, so the methods that would change it for everybody throw `IllegalStateRuntimeException` (§12.4.5): `setClientID`, `setExceptionListener`, `start`, `stop`, `setAutoStart`, `close`, `commit`, `rollback`, `recover` and `acknowledge`.
+
+Two consequences:
+
+* a `SESSION_TRANSACTED` injected context cannot commit what it sends, so that mode is of no use before milestone M13;
+* the messages a `CLIENT_ACKNOWLEDGE` injected context consumes cannot be acknowledged, and are redelivered once the request ends. Consume with the default mode.

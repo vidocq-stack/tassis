@@ -89,9 +89,10 @@ The TCK exists in two shapes:
 ```
 tassis-api         ← Aggregator re-exposing jakarta.jms-api: a module descriptor, no class
 tassis-core        ← The provider: administered objects, client API, in-VM broker, messages, selectors
-tassis-cdi-vauban  ← Placeholder (a module descriptor only): JMSContext injection (M9)
+tassis-cdi-vauban  ← JMSContext injection (§12.4) for applications on Vauban
+tassis-cdi-vauban-module-it ← Its proof on the module path; never published
 tassis-bench       ← Placeholder, no sources: JMH (M12)
-tassis-examples    ← Placeholder, no sources
+tassis-examples    ← The examples of the documentation, compiled and run by the build
 tassis-tck         ← The official TCK runner: in-reactor behind the `tck` profile, class path,
                      test scope only (porting class `TassisJmsObjects`, `PortingSmokeTest`)
 ```
@@ -519,12 +520,56 @@ A rule for the milestones that follow: each new setting comes with its key, its 
 and its line in that table, in the same change. Expected: the journal directory (M10), host,
 port and credentials (M11), pool size and timeouts (M11b).
 
-### M9 — CDI through Vauban
+### M9 — CDI through Vauban ✅
 
-`tassis-cdi-vauban`: `@Inject JMSContext` with `@JMSConnectionFactory`, `@JMSSessionMode`,
-`@JMSPasswordCredential` and the scopes of §12.4, through a `BuildCompatibleExtension`.
-**Not covered by the TCK** (its CDI tests need EJB or a web container): proven by our own
-module-path integration tests.
+`tassis-cdi-vauban`: `@Inject JMSContext` (§12.4) for an application on Vauban. **Not covered
+by the TCK** (its CDI tests need EJB or a web container): proven by our own tests.
+
+- [x] **`@Inject JMSContext`**, alone or with `@JMSConnectionFactory`, `@JMSSessionMode` and
+      `@JMSPasswordCredential` (§12.4.1 to §12.4.3). What is injected is a facade
+      (`InjectedJMSContext`) that finds the real context at each call.
+- [x] **Request scope** (§12.4.4): one context per request for each distinct combination of
+      factory, credentials and session mode, shared by the injection points that ask for it,
+      created on first use and closed when the request ends.
+- [x] **The restrictions of §12.4.5**: `setClientID`, `setExceptionListener`, `start`, `stop`,
+      `setAutoStart`, `close`, `commit`, `rollback`, `recover` and `acknowledge` throw
+      `IllegalStateRuntimeException` on an injected context.
+- [x] **Connection factories**: a `ConnectionFactory` bean of the application when there is one
+      (the bean with `@Named("name")` for `@JMSConnectionFactory("name")`, the bean without
+      `@Named` for the default), and otherwise the factory the settings of M8c describe, read
+      from the system properties (`tassis.broker`, `tassis.factory.<name>.<key>`).
+- [x] **No reflection, nothing opened**: the two beans are wired by the component provider
+      Vauban's annotation processor generates at build time, declared by the module descriptor.
+      They live in a package that is not exported; `TassisCdi` is the only public class.
+      CDI and Vauban are `requires static`: the module adds nothing to an application that does
+      not inject.
+
+**Deliverable:** `JmsContextInjectionTest` (9 tests), `RequestContextsTest` (2 tests: a request
+on several threads, a context that fails to close) and the module-path proof
+`tassis-cdi-vauban-module-it` (`JmsContextInjectionModulePathTest`): an application as a Java
+module, its beans processed at build time, injects two contexts while no package is opened to
+the container, and the annotations of its injection points reach the producer.
+
+Choices and limits:
+
+- **No `BuildCompatibleExtension`**, which the plan announced: two plain beans are enough, and
+  Vauban wires them through the generated `VaubanComponentProvider`.
+- **The application registers the two beans** (`TassisCdi.BEANS`, with `addBeanClass`). The
+  artifact has no Vauban bean index (`META-INF/vauban-beans.list`, written by Vauban's Maven
+  plugin), so discovery by `scanClasspath()` is neither provided nor tested. To do if a use
+  for it appears.
+- **Outside a request, an injected context fails** (`ContextNotActiveException` from the
+  container), as §12.4.4 leaves no other scope without a transaction. The transaction scope
+  comes with JTA in M13.
+- **The credentials of `@JMSPasswordCredential` are passed to the factory**, which accepts any
+  until M11. They are part of what distinguishes two contexts.
+- **`SESSION_TRANSACTED` is of no use on an injected context before M13**: §12.4.5 forbids
+  `commit` and `rollback`, so nothing can commit what it sends.
+- **This is the one place where Tassis reads the system properties by itself**: with injection
+  the application does not create the factory, so it cannot hand over its settings. An
+  application that wants another source supplies a `ConnectionFactory` bean.
+- **Vauban only.** The beans are plain CDI and hold nothing specific to Vauban, but only the
+  Vauban wiring is generated and tested.
 
 ### M10 — Journal
 

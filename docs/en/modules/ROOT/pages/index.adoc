@@ -42,7 +42,7 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 |===
 | Implemented spec | https://jakarta.ee/specifications/messaging/3.1/jakarta-messaging-spec-3.1.html[Jakarta Messaging 3.1]
 | Java | 25
-| Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`. A third one, `io.vidocq.tassis.cdi.vauban`, is an empty placeholder until milestone M9.
+| Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, and `io.vidocq.tassis.cdi.vauban` for the injection of `JMSContext`.
 | Runtime dependencies | None beyond the `jakarta.messaging` API module
 | Broker | In the JVM of the application, held in memory. A journal is planned for milestone M10, a network transport for M11.
 | Status | In development, not released
@@ -57,7 +57,7 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 
 == Position in the ecosystem
 
-Tassis depends on no other Vidocq brick. Two integrations are planned and neither exists today: the injection of `JMSContext` with CDI through Vauban (milestone M9), and XA with JTA enlistment through `mansart-transactions` (milestone M13). A `vidocq` runtime extension and CDI message listeners are out of the scope of the roadmap.
+`tassis-core` depends on no other Vidocq brick. One integration exists, in a module of its own: the xref:usage.adoc#injection[injection of `JMSContext`] with CDI through Vauban. Another is planned: XA with JTA enlistment through `mansart-transactions` (milestone M13). A `vidocq` runtime extension and CDI message listeners are out of the scope of the roadmap.
 
 == Quick links
 

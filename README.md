@@ -148,7 +148,36 @@ try (JMSContext context = factory.createContext()) {
 }
 ```
 
-The runnable versions are in
+### Injection with CDI
+
+On [Vauban](https://codefloe.com/Vidocq/vauban), a bean has its contexts injected instead of
+creating them. Add `io.vidocq.tassis:tassis-cdi-vauban` and
+`requires io.vidocq.tassis.cdi.vauban;`, and give the container the beans of `TassisCdi.BEANS`:
+
+```java
+@Dependent
+public class OrderDesk {
+
+    @Inject
+    JMSContext orders;
+
+    @Inject
+    @JMSConnectionFactory("audit")
+    JMSContext audit;
+
+    public void place(String order) {
+        orders.createProducer().send(orders.createQueue("orders"), order);
+        audit.createProducer().send(audit.createQueue("trail"), "placed " + order);
+    }
+}
+```
+
+An injected context lives for the request in progress: created on first use, shared by the
+injection points that carry the same annotations, closed when the request ends. Its connection
+factory is a `ConnectionFactory` bean of the application, or else the settings below read from
+the system properties.
+
+The runnable versions of the first three examples are in
 [tassis-examples](tassis-examples/src/main/java/io/vidocq/tassis/examples); the build compiles
 and runs them.
 
@@ -185,7 +214,7 @@ graph TB
     APP[Application] --> CORE
     subgraph "Runtime"
         CORE[tassis-core<br/><i>client API + in-VM broker</i>] --> API[tassis-api<br/><i>jakarta.messaging</i>]
-        CDI[tassis-cdi-vauban<br/><i>planned, M9</i>] -.-> CORE
+        CDI[tassis-cdi-vauban<br/><i>JMSContext injection</i>] --> CORE
     end
     subgraph "Testing"
         TCK[tassis-tck<br/><i>901/903</i>]
@@ -202,7 +231,8 @@ tassis/
 ├── tassis-api            Aggregator: re-exposes jakarta.jms-api, a Java module upstream
 ├── tassis-core           The provider: administered objects, client API, in-VM broker,
 │                         message model, selectors
-├── tassis-cdi-vauban     Placeholder: JMSContext injection through Vauban (M9)
+├── tassis-cdi-vauban     JMSContext injection (§12.4) for applications on Vauban
+├── tassis-cdi-vauban-module-it   Its proof on the module path; never published
 ├── tassis-examples       The examples of the documentation, compiled and run by the build
 ├── tassis-bench          Placeholder: JMH benchmarks (M12)
 └── tassis-tck            Official TCK runner, in-reactor behind the `tck` Maven profile
@@ -235,7 +265,8 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Priority, expiration, delivery delay | ✅ |
 | Persistence across a restart | M10 |
 | Network transport, authentication | M11 |
-| `JMSContext` injection with CDI | M9 |
+| `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
+| `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |
 
 ## TCK Validation

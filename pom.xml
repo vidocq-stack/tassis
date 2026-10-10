@@ -63,6 +63,13 @@
         <!-- Jakarta Messaging 3.1 spec API: already modular upstream (module jakarta.messaging,
              package jakarta.jms), no Vidocq fork needed. -->
         <jakarta.jms.version>3.1.0</jakarta.jms.version>
+
+        <!-- CDI integration (tassis-cdi-vauban) -->
+        <jakarta.cdi.version>4.1.0</jakarta.cdi.version>
+        <jakarta.inject.version>2.0.1</jakarta.inject.version>
+        <jakarta.annotation.version>3.0.0</jakarta.annotation.version>
+        <!-- Vidocq upstream, by property so that a cross-repo PR can override it -->
+        <vauban.version>0.4.0-SNAPSHOT</vauban.version>
     </properties>
 
     <!--
@@ -75,6 +82,7 @@
         <module>tassis-api</module>
         <module>tassis-core</module>
         <module>tassis-cdi-vauban</module>
+        <module>tassis-cdi-vauban-module-it</module>
         <module>tassis-bench</module>
         <module>tassis-examples</module>
     </modules>
@@ -86,6 +94,38 @@
                 <groupId>jakarta.jms</groupId>
                 <artifactId>jakarta.jms-api</artifactId>
                 <version>${jakarta.jms.version}</version>
+            </dependency>
+
+            <!-- CDI -->
+            <dependency>
+                <groupId>jakarta.enterprise</groupId>
+                <artifactId>jakarta.enterprise.cdi-api</artifactId>
+                <version>${jakarta.cdi.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>jakarta.inject</groupId>
+                <artifactId>jakarta.inject-api</artifactId>
+                <version>${jakarta.inject.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>jakarta.annotation</groupId>
+                <artifactId>jakarta.annotation-api</artifactId>
+                <version>${jakarta.annotation.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.vauban</groupId>
+                <artifactId>vauban-api</artifactId>
+                <version>${vauban.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.vauban</groupId>
+                <artifactId>vauban-core</artifactId>
+                <version>${vauban.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.vauban</groupId>
+                <artifactId>vauban-classloader-spi</artifactId>
+                <version>${vauban.version}</version>
             </dependency>
 
             <!-- Internal Tassis modules -->

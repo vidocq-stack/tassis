@@ -77,8 +77,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | None
 
 | `@Inject JMSContext`
-| Not available
-| M9
+| Available on Vauban, within a request. Not within a JTA transaction outside a request
+| M13
 
 | XA, or a transaction shared with a database
 | Local transactions only

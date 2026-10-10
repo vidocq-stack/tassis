@@ -19,7 +19,7 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | Aggregator of the specification API. A dependency of `tassis-core`; it brings `jakarta.jms:jakarta.jms-api:3.1.0`.
 
 | `io.vidocq.tassis:tassis-cdi-vauban:{project-version}`
-| Placeholder, empty until milestone M9 (`JMSContext` injection).
+| The injection of `JMSContext` with CDI, for an application on Vauban. Declared in addition to `tassis-core` by the applications that inject. See xref:usage.adoc#injection[Usage].
 |===
 
 == Java modules
@@ -33,9 +33,12 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 
 | `io.vidocq.tassis.core`
 | `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported, and no package is opened.
+
+| `io.vidocq.tassis.cdi.vauban`
+| `requires transitive io.vidocq.tassis.core`, `requires static` the CDI, injection and annotation APIs and `io.vidocq.vauban.api`, `exports io.vidocq.tassis.cdi`, and provides a `VaubanComponentProvider`. No package is opened.
 |===
 
-An application module declares `requires io.vidocq.tassis.core;`.
+An application module declares `requires io.vidocq.tassis.core;`, and `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`.
 
 == Administered objects
 
@@ -240,7 +243,7 @@ No milestone plans these today.
 | `ExceptionListener` | Stored and returned, never called: the in-VM broker has no connection to lose
 | `Session.setMessageListener`, `Session.getMessageListener`, `Session.run`, the `createConnectionConsumer` family | Not implemented: `UnsupportedOperationException`. They are the optional application server facilities of chapter 11 of the specification, and are not on the roadmap.
 | XA: `XAConnectionFactory`, `XAConnection`, `XASession`, `XAJMSContext` | Not implemented. Milestone M13.
-| `JMSContext` injection with CDI | Not implemented. Milestone M9.
+| `JMSContext` injection with CDI (§12.4) | Supported on Vauban, in the request scope. The transaction scope is milestone M13.
 | Authentication | Not implemented. Milestone M11.
 |===
 

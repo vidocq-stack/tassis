@@ -49,9 +49,10 @@ tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, 
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
                      TassisTopic),
                      internal.message, internal.broker, internal.client, internal.selector
-tassis-cdi-vauban  ← Placeholder — JMSContext injection (M9)
+tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
+tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
 tassis-bench       ← Placeholder — JMH (M12)
-tassis-examples    ← Placeholder — usage examples
+tassis-examples    ← The examples of the documentation, compiled and run by the build
 tassis-tck         ← Official TCK runner, in-reactor behind `tck`, class path, test scope only
 ```
 
@@ -129,8 +130,8 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
 `Settings` is the one description of what configures a connection factory. A new setting is
 added there once, as a key (`tassis.<name>`) **and** as a URL parameter, with its default and
 its validation, and gets its line in the tables of `README.md`, of the `TassisConnectionFactory`
-Javadoc and of the Antora `reference` page in the same change. Tassis reads no file and no
-system property by itself: the application hands over a `Map` or `Properties`.
+Javadoc and of the Antora `reference` page in the same change. `tassis-core` reads no file and
+no system property by itself: the application hands over a `Map` or `Properties`.
 
 ## Simplified API
 
@@ -139,6 +140,27 @@ objects: put behaviour in the classic classes and only delegate from these, thro
 which turns each checked `JMSException` into its unchecked counterpart. A context creates its
 session on first need, not in its constructor, so that `setClientID` still works on a new one.
 Contexts created from one another share a connection, closed with the last of them.
+
+## CDI injection (`tassis-cdi-vauban`)
+
+`io.vidocq.tassis.cdi` exports `TassisCdi` only; the rest is in `io.vidocq.tassis.cdi.internal`.
+`@Inject JMSContext` gives an `InjectedJMSContext`: a facade that asks `RequestContexts`, a
+request-scoped bean, for the real context at each call. A `ContextKey` (factory name,
+credentials, session mode, read from the annotations of the injection point) says which one;
+equal keys share a context within a request. Rules:
+
+- **Behaviour stays in `tassis-core`.** The facade only delegates, or refuses what §12.4.5
+  forbids. A new `JMSContext` method is one delegation there.
+- **CDI and Vauban are `requires static`**, and the beans are wired by the generated
+  `_VaubanComponents`: no reflection, no `opens`. The tests' own beans live in the package
+  `io.vidocq.tassis.cdi.app`, the only one surefire opens.
+- **A request may run on several threads** (structured subtasks inherit its scope):
+  `RequestContexts` guards its map with a lock, and its `@PreDestroy` logs instead of throwing.
+- **Factory resolution is in `RequestContexts.factory`**: a `ConnectionFactory` bean of the
+  application, else the settings read from the system properties. This is the only place where
+  Tassis reads system properties by itself.
+- A change here is proven twice: `JmsContextInjectionTest`, and the module-path vehicle
+  `tassis-cdi-vauban-module-it`, which must keep passing with nothing opened.
 
 ## Selectors (`internal.selector`)
 

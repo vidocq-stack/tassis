@@ -12,9 +12,10 @@ For contributors: where the code lives and the rules it obeys. Users do not need
 
 | `tassis-api` | Aggregator: `requires transitive jakarta.messaging`. It holds no class of its own; the API artifact `jakarta.jms-api` is a Java module upstream and is not forked.
 | `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
-| `tassis-cdi-vauban` | Placeholder: a module descriptor and nothing else. `JMSContext` injection is milestone M9.
+| `tassis-cdi-vauban` | The injection of `JMSContext`: a producer, a request-scoped holder of the contexts of a request, and the facade that is injected. See <<injection>>.
+| `tassis-cdi-vauban-module-it` | The proof of the above on the module path: an application module whose beans are processed at build time. Never published.
 | `tassis-bench` | Placeholder without sources. JMH benchmarks are milestone M12.
-| `tassis-examples` | Placeholder without sources.
+| `tassis-examples` | The examples of xref:getting-started.adoc[Getting started], compiled and run by the build.
 | `tassis-tck` | The runner of the official TCK. It joins the reactor only under the `tck` Maven profile, runs on the class path and is never published. See xref:tck.adoc[TCK status].
 |===
 
@@ -155,6 +156,19 @@ Creation and close can race. A session adds a new child to its list **first**, t
 `TassisContext`, `TassisJMSProducer` and `TassisJMSConsumer` hold no messaging behaviour. They delegate to the classic objects through `Unchecked`, which turns each checked `JMSException` into its unchecked counterpart. New behaviour goes in the classic classes.
 
 A context creates its session on first need, not in its constructor, so that `setClientID` still works on a new context. The contexts created from one another share a connection and a counter of open contexts; the connection is closed when the counter reaches zero.
+
+[#injection]
+== Injection of `JMSContext`
+
+`tassis-cdi-vauban` holds four classes in a package that is not exported, and `TassisCdi`, which names the two beans for a container built by hand.
+
+* `JmsContextProducer` produces what `@Inject JMSContext` receives. The three Messaging annotations are not CDI qualifiers, so one producer serves every injection point and reads them from its `InjectionPoint` into a `ContextKey`.
+* What it produces is an `InjectedJMSContext`: a facade with no state of its own, which refuses the methods of §12.4.5 and delegates the others to the context that `RequestContexts` gives for its key **at each call**.
+* `RequestContexts` is request scoped. The facade holds its client proxy, so the same injected object reaches the contexts of whichever request is in progress. It creates a context on first use, under a lock, as the subtasks of a request share its scope; it closes them all in its `@PreDestroy`, logging a close that fails so that the others are still closed.
+
+Nothing is reflective. Vauban's annotation processor generates, in the package of the beans, a `VaubanComponentProvider` that instantiates and injects them from inside the module, and the module descriptor declares it. That is why the package is neither exported nor opened. CDI and Vauban are `requires static`: the application that injects has them on its module path through Vauban, and the module asks nothing of an application that does not.
+
+`tassis-cdi-vauban-module-it` proves it: an application module, its bean processed at build time, runs on the module path with no `--add-opens` and checks that the annotations of its injection points reached the producer.
 
 == House rules
 
