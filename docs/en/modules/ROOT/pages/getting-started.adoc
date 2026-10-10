@@ -111,6 +111,25 @@ The differences with the simplified API:
 * The methods throw the checked `JMSException`, where the simplified API throws `JMSRuntimeException` and its subclasses.
 * Closing the connection closes its sessions, producers and consumers.
 
+== Step 6: configure the factory from outside the code
+
+The two examples name their broker in the code, implicitly: `new TassisConnectionFactory()` is the broker `default`. A factory can also take its settings from the application's environment, which lets one build of an application connect to different brokers:
+
+[source,java]
+----
+// reads the keys under "tassis." and ignores the others
+ConnectionFactory factory = TassisConnectionFactory.from(System.getProperties());
+----
+
+Started with `-Dtassis.broker=orders -Dtassis.clientId=reader`, the application connects to the broker `orders` with the client identifier `reader`. The same settings fit in one string, a connection URL:
+
+[source,java]
+----
+ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:vm:orders?clientId=reader");
+----
+
+Tassis reads nothing by itself: the application decides where the settings come from, and hands over a `Map` or `Properties`. The keys are listed in the xref:reference.adoc#configuration[reference].
+
 == Next steps
 
 * xref:usage.adoc[Usage]: topics and subscriptions, acknowledgement and transactions, selectors, listeners.

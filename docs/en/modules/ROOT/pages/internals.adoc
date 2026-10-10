@@ -39,6 +39,9 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 
 | `internal.selector`
 | `Selector` (a compiled selector), `SelectorParser` (a hand-written lexer and recursive-descent parser, with the grammar as a comment) and `Expression` (the tree and its evaluation, where `null` stands for SQL's unknown).
+
+| `internal.settings`
+| `Settings`, one record: what configures a connection factory, read from keys or from a connection URL, with the defaults and the validation. A new setting is added there once, as a key and as a URL parameter.
 |===
 
 There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The journal (milestone M10) and the network transport (milestone M11) will each introduce the seam they need.

@@ -2,7 +2,7 @@
 
 > Jakarta Messaging 3.1 provider in the Vidocq style: zero third-party dependency,
 > JDK 25, virtual threads, strict Java Modules. Tassis is a *provider*, so it ships its
-> own broker: in-VM first, network transport later behind a transport SPI.
+> own broker: in-VM today, a network transport later (M11).
 >
 > Spec reference: [Jakarta Messaging 3.1](https://jakarta.ee/specifications/messaging/3.1/jakarta-messaging-spec-3.1.html).
 > API artifact: `jakarta.jms:jakarta.jms-api:3.1.0`, module `jakarta.messaging`, package `jakarta.jms`.
@@ -450,14 +450,28 @@ What is missing:
 - [ ] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
       site's own pages that list the bricks. The published playbook clones from Codefloe, so
       this needs the `Vidocq/tassis` repository to exist there.
-- [ ] **`tassis-examples`**: at least one runnable example per API (classic, simplified), which
-      `getting-started` can quote. The module is still empty.
-- [ ] **A usage snippet in `README.md`**.
-- [ ] **Javadoc review** of the exported package, and a `package-info.java` for it.
+- [x] **`tassis-examples`**: `SimplifiedHello`, `ClassicHello` and `ConfiguredHello`, a Java
+      module with a test that runs them. `getting-started` quotes them.
+- [x] **A usage snippet in `README.md`**.
+- [x] **Javadoc review** of the exported package, and a `package-info.java` for it.
 
 Exit criterion: the Antora site builds locally with the Tassis component
 (`vidocq-docs/antora-playbook-local.yml`), every page was checked against the code as it is, and
 no statement of this file contradicts the code.
+
+**State on 2026-10-10: done, except the two items that wait on something outside this
+repository.**
+
+- Every page was read against the code, then updated for M8c, which landed while they were
+  being written. The code of `getting-started` is compiled and run by the build
+  (`tassis-examples`, 3 tests).
+- **The component builds**: Antora 3.1 on the eight pages, warnings treated as failures, no
+  warning; every cross-reference and anchor resolves. That build used a playbook holding this
+  component alone and Antora's default UI, **not** the `vidocq-docs` playbook: Tassis is not
+  registered there yet, so the first half of the exit criterion is not met to the letter.
+- Still open: the **logo**, which the maintainer supplies, and the **registration in
+  `vidocq-docs`**, which is a change in another repository and, for the published playbook,
+  needs `Vidocq/tassis` to exist on Codefloe.
 
 ### M8c — Configuration ✅
 
@@ -514,7 +528,7 @@ module-path integration tests.
 
 ### M10 — Journal
 
-`MessageStore` backed by an append-only journal: `PERSISTENT` messages and durable
+An append-only journal behind the broker's storage: `PERSISTENT` messages and durable
 subscriptions survive a broker stop, with crash-injection tests. Until then `PERSISTENT` is
 accepted but not durable across restarts; this is a documented limitation.
 

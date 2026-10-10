@@ -111,7 +111,7 @@ Durable subscriptions are kept in the memory of the broker: they survive connect
 
 There are two ways to give a connection its client identifier.
 
-`TassisConnectionFactory.withClientID` returns a factory whose connections are created with the identifier. The method is specific to Tassis, so `factory` must be declared as a `TassisConnectionFactory` to call it:
+`TassisConnectionFactory.withClientID` returns a factory whose connections are created with the identifier; the setting `tassis.clientId` does the same from outside the code (see xref:reference.adoc#configuration[Configuration]). The method is specific to Tassis, so `factory` must be declared as a `TassisConnectionFactory` to call it:
 
 [source,java]
 ----
@@ -247,7 +247,7 @@ consumer.setMessageListener(message -> process(message));
 
 What happens when `onMessage` throws depends on the session mode:
 
-* **Automatically acknowledged session**: the message is redelivered at once, with `JMSRedelivered` set. If the listener still fails on a delivery whose `JMSXDeliveryCount` has reached 10, the message is **dropped** and an error is logged through `System.Logger`. There is no dead-letter queue. The number 10 is a constant of the code and cannot be configured.
+* **Automatically acknowledged session**: the message is redelivered at once, with `JMSRedelivered` set. If the listener still fails on a delivery whose `JMSXDeliveryCount` has reached 10, the message is **dropped** and an error is logged through `System.Logger`. There is no dead-letter queue. The number 10 is the default of the setting `tassis.listener.maxDeliveries`: see xref:reference.adoc#configuration[Configuration].
 * **Client-acknowledged or transacted session**: the failure is logged and the session moves on to the next message. The message stays unacknowledged, or part of the transaction, and the application decides what to do with it.
 
 An `Error` thrown by a listener is handled like a `RuntimeException`.

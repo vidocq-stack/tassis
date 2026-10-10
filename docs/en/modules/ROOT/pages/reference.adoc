@@ -1,8 +1,8 @@
 = Reference
-:description: Maven coordinates, Java modules, the administered objects of Tassis, the supported API surface and the limits a user must know.
+:description: Maven coordinates, Java modules, the administered objects of Tassis, its configuration keys, the supported API surface and the limits a user must know.
 
 [.lead]
-This page lists what Tassis publishes, the three classes an application names, what of the Jakarta Messaging API is supported, and the limits of the current development line.
+This page lists what Tassis publishes, the three classes an application names, the settings of a connection factory, what of the Jakarta Messaging API is supported, and the limits of the current development line.
 
 == Maven coordinates
 
@@ -53,13 +53,28 @@ Implements `ConnectionFactory`, `QueueConnectionFactory` and `TopicConnectionFac
 | A factory for the broker named `default`.
 
 | `TassisConnectionFactory(String brokerName)`
-| A factory for the broker of that name in this JVM, created on first use. Throws `NullPointerException` if the name is null.
+| A factory for the broker of that name in this JVM, created on first use. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
+
+| `static from(Map<String, String> settings)`, `static from(Properties properties)`
+| A factory configured by the settings whose key starts with `tassis.`; the other entries are ignored. See <<configuration>>.
+
+| `static named(String name, Map<String, String> settings)`, `static named(String name, Properties properties)`
+| The factory of that name: its settings are the keys `tassis.factory.<name>.<key>`, completed by the settings that carry no name.
+
+| `static fromUrl(String url)`
+| A factory configured by a connection URL.
+
+| `String toUrl()`, `toString()`
+| The connection URL of the factory. `fromUrl` of that string gives an equivalent factory.
 
 | `DEFAULT_BROKER`
 | The constant `"default"`: the name the no-argument constructor uses.
 
 | `TassisConnectionFactory withClientID(String clientId)`
-| Returns a new factory for the same broker whose connections are created with this client identifier. Such a connection rejects `setClientID`, and only one of them can be open at a time. Throws `NullPointerException` if the identifier is null.
+| Returns a new factory for the same broker whose connections are created with this client identifier. Such a connection rejects `setClientID`, and only one of them can be open at a time. Throws `NullPointerException` if the identifier is null, `IllegalArgumentException` if it is empty.
+
+| `TassisConnectionFactory withMaxListenerDeliveries(int maximum)`
+| Returns a new factory whose sessions deliver a message at most that many times to a listener that keeps failing. Throws `IllegalArgumentException` below 1.
 
 | `createConnection()`, `createConnection(userName, password)`
 | A connection for the classic API, created stopped.
@@ -134,7 +149,75 @@ Implements `Topic`.
 | Maximum deliveries to a failing listener of an automatically acknowledged session | 10
 |===
 
-Only the first two can be set, and only in the code of the application. Configuration from outside the application is milestone M8c: see <<limits>>.
+The broker name, the client identifier and the maximum number of deliveries are settings of the connection factory: see <<configuration>>. The others are the defaults of the Jakarta Messaging API, set per producer or per send.
+
+[#configuration]
+== Configuration
+
+A connection factory is configured in code, by settings, or by a connection URL. The three say the same things.
+
+[cols="2,2,1,3",options="header"]
+|===
+| Key | In a URL | Default | Meaning
+
+| `tassis.url`
+|
+|
+| A connection URL holding the settings below. A setting given by its own key overrides what the URL says.
+
+| `tassis.broker`
+| `tassis:vm:<broker>`
+| `default`
+| The name of the in-VM broker.
+
+| `tassis.clientId`
+| `clientId`
+| none
+| The client identifier of the connections the factory creates.
+
+| `tassis.listener.maxDeliveries`
+| `listener.maxDeliveries`
+| `10`
+| How many times a message is delivered to a listener that keeps failing, in an automatically acknowledged session, before the message is dropped. At least 1.
+|===
+
+=== Settings by key
+
+`TassisConnectionFactory.from` takes a `Map<String, String>` or a `java.util.Properties`.
+
+* Only the keys that start with `tassis.` are read. The system properties, or a property file that holds other things, can therefore be passed as they are: `TassisConnectionFactory.from(System.getProperties())`.
+* Among the `tassis.` keys, an unknown key or an invalid value throws `IllegalArgumentException` with the name of the key.
+* Tassis reads nothing by itself. It looks up no file and consults no system property: the application chooses the source and hands it over.
+
+=== Connection URL
+
+`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]`
+
+* `vm` is the transport: the broker of this JVM. It is the only one today; another transport is rejected.
+* Values are percent-encoded.
+* An unknown parameter, a parameter given twice or a value that is not valid throws `IllegalArgumentException`.
+
+=== Named factories
+
+Several factories can be defined in one set of settings, under `tassis.factory.<name>.<key>`:
+
+[source,properties]
+----
+tassis.broker=orders
+tassis.factory.audit.broker=audit
+tassis.factory.audit.listener.maxDeliveries=2
+tassis.factory.reader.clientId=reader
+----
+
+`TassisConnectionFactory.named("audit", settings)` connects to the broker `audit`; `named("reader", settings)` connects to `orders` with the client identifier `reader`, because a named factory takes from the settings that carry no name those it does not define itself. `from(settings)` ignores the `tassis.factory.` keys.
+
+=== What is not configurable
+
+* **Environment variables** are not read, and their names could not be the keys above, which contain dots.
+* **MicroProfile Config** is not integrated.
+* **Destinations** have no configuration: a queue or a topic exists from its first use and is its name.
+
+No milestone plans these today.
 
 `ConnectionMetaData` reports the Jakarta Messaging version `3.1` and the provider name `Tassis`. `getJMSXPropertyNames()` lists `JMSXDeliveryCount`, `JMSXGroupID` and `JMSXGroupSeq`. The first is set by Tassis on every delivery. The other two are carried like any property: Tassis attaches no delivery guarantee to them.
 
@@ -190,19 +273,13 @@ Every `createConnection()` and every `createContext()` builds a new connection, 
 
 Addressed by milestone M11b.
 
-=== Nothing is configurable from outside the application
-
-Tassis reads no property file, no system property, no environment variable and no connection URL. The broker name and the client identifier are set in the code of the application, and nothing else can be set.
-
-Addressed by milestone M8c.
-
 === A message is dropped after 10 failed deliveries to a listener
 
-In an automatically acknowledged session, a message whose listener throws is redelivered at once. When the listener throws on a delivery whose `JMSXDeliveryCount` has reached 10, the message is dropped and an error is logged through `System.Logger`. There is **no dead-letter queue**: the message is gone. The number is a constant of the code.
+In an automatically acknowledged session, a message whose listener throws is redelivered at once. When the listener throws on a delivery whose `JMSXDeliveryCount` has reached 10, the message is dropped and an error is logged through `System.Logger`. There is **no dead-letter queue**: the message is gone. The number is the setting `tassis.listener.maxDeliveries` (see <<configuration>>); it cannot be made unlimited.
 
 In the other cases there is no limit at all: a message that is always rolled back or recovered is redelivered for ever, with no delay between two deliveries.
 
-No milestone addresses this today. The M8c milestone plans a configuration key for the number of deliveries.
+No milestone plans a dead-letter queue or a redelivery delay today.
 
 === No XA
 

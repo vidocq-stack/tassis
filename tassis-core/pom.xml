@@ -12,7 +12,7 @@
 
     <artifactId>tassis-core</artifactId>
     <name>Tassis :: Core</name>
-    <description>Jakarta Messaging 3.1 provider: in-VM broker, client API, message model, selectors, message store</description>
+    <description>Jakarta Messaging 3.1 provider: in-VM broker, client API, message model, selectors, settings</description>
 
     <dependencies>
         <dependency>

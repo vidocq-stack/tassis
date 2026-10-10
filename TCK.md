@@ -23,7 +23,7 @@ this file is a working record, not a certification request.
 | Module | `tassis-tck`, in-reactor behind the `tck` Maven profile, test scope only, class path |
 | Script | `./run-official-tck-messaging-3.1.sh` (report in `tassis-tck/target/tck-report.txt`) |
 | Porting class | `io.vidocq.tassis.tck.TassisJmsObjects` (`TSJMSObjectsInterface`): no JNDI |
-| Scope | `core` + `core20` (905 tests). `ee` / `ee20` (255 tests) need EJB, MDB or a web container |
+| Scope | `core` + `core20` (903 tests). `ee` / `ee20` (255 `@Test` annotations) need EJB, MDB or a web container |
 
 How the wiring works:
 
@@ -36,7 +36,7 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M7
+## Status — M7 (unchanged by M8, M8b and M8c)
 
 **901 TCK tests passed / 0 failed** on the selection of `tck.test`: the whole of `core` (642
 tests, 46 packages) and of `core20` (259 of its 261 tests, 15 packages). The run reports 902

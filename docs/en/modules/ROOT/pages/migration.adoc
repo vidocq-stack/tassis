@@ -35,11 +35,14 @@ Tassis has no JNDI. Where an application looks up its connection factory and its
 
 | A connection factory configured with a client identifier
 | `new TassisConnectionFactory().withClientID("reader")`
+
+| A connection factory configured outside the code
+| `TassisConnectionFactory.from(settings)` or `TassisConnectionFactory.fromUrl("tassis:vm:orders?clientId=reader")`
 |===
 
 These three classes are the only Tassis types the application names. Keeping their creation in one place keeps the rest of the code on the standard API.
 
-Destinations need no declaration on the broker: a queue or a topic exists from its first use. Tassis has no administration tool and no broker configuration file.
+Destinations need no declaration on the broker: a queue or a topic exists from its first use. Tassis has no administration tool and no broker configuration file; what can be configured is the connection factory (see xref:reference.adoc#configuration[Configuration]).
 
 `Destination` objects of another provider are not accepted by Tassis; `Message` objects of another provider are accepted by `send`.
 
@@ -69,9 +72,9 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | None: each call creates a connection, which is cheap with the in-VM broker
 | M11b
 
-| Configuration by URL, property file or system property
-| None: the broker name and the client identifier are set in code
-| M8c
+| Configuration by environment variables or MicroProfile Config
+| Not read. Settings come from a `Map` or `Properties` the application provides, or from a connection URL
+| None
 
 | `@Inject JMSContext`
 | Not available
@@ -81,8 +84,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | Local transactions only
 | M13
 
-| A dead-letter queue, a redelivery delay, a configurable redelivery limit
-| None. A message whose automatically acknowledged listener fails on its 10th delivery is dropped; in the other modes redelivery has no limit
+| A dead-letter queue, a redelivery delay
+| None. A message whose automatically acknowledged listener keeps failing is dropped after a configurable number of deliveries, 10 by default; in the other modes redelivery has no limit
 | None
 
 | Message-driven beans, `@JMSConnectionFactoryDefinition`, `@JMSDestinationDefinition`

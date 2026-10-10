@@ -12,7 +12,7 @@
 
     <artifactId>tassis-examples</artifactId>
     <name>Tassis :: Examples</name>
-    <description>Jakarta Messaging usage examples with Tassis (placeholder)</description>
+    <description>Runnable Jakarta Messaging examples with Tassis, quoted by the documentation</description>
 
     <properties>
         <!-- Never released as a dependency: skip every release-time attachment. -->
@@ -27,6 +27,11 @@
         <dependency>
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

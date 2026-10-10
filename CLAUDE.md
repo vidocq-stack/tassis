@@ -98,7 +98,8 @@ consumer closed):
 change such state only through `Broker.update(...)`, which also wakes the waiting receives. A
 send hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
 `Destinations.resolve(...)` is the one place that decides which `Destination` objects are ours.
-The subscription rules of §8.3 (reuse, replacement, conflicts) are all in `Broker.named`.
+The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the private
+`Broker.named(Subscribing)`, not to be confused with the registry lookup `Broker.named(String)`.
 
 `Broker.receive` returns a `Delivery`; from then on the consumer's **session owns it** and must
 either settle it (commit, acknowledge, or automatic acknowledgement on delivery) or hand it back
@@ -116,8 +117,10 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
   `listeners` lock: that is what makes them serial. Never call a listener from elsewhere.
 - Lock order: `listeners`, then `work`, then the broker lock. Nothing running under the broker
   lock may take a session lock or call application code.
-- `close()` is the public method, with the restrictions on callbacks; `shut()` is what a parent
-  uses to close a child, with none. A `shut()` never throws and returns once the child is quiet.
+- `close()` is the public method, with the restrictions on callbacks where the spec has some
+  (session, connection, producer; a consumer or a browser may be closed from anywhere, so their
+  `close()` is their `shut()`). `shut()` is what a parent uses to close a child, with no
+  restriction. A `shut()` never throws and returns once the child is quiet.
 - A dispatcher that cannot deliver the message it took gives it back with
   `Broker.returnUndelivered`, not `redeliver`: the application never saw it.
 
@@ -169,7 +172,7 @@ packages expected to pass, then negated tests grouped by the milestone that will
 Finishing a milestone means deleting its lines there and updating `TCK.md`. When every TCK test
 fails at once, run `PortingSmokeTest`: TCK tests swallow the exception of a failed setup.
 
-**Release discipline (once M8 lands):** no structural merge on `tassis-core` without TCK
+**Release discipline:** no structural merge on `tassis-core` without TCK
 PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivation plan.
 
 ## AI Principles — Collaboration on This Repository
@@ -183,8 +186,16 @@ PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivati
 
 ## Documentation (Antora) conventions
 
-Not created yet (ROADMAP M8b). Follow `AGENTS.md`: `docs/en` component, Vauban as the
-reference layout, `tck` then `performance` sections.
+The component is `docs/en`, on Vauban's layout and under the rules of `AGENTS.md`: `index`,
+`getting-started`, `usage`, `concepts`, `internals`, `tck`, `reference`, `migration`. There is no
+`performance` page before M12 and its `BENCH.md` entries, and no logo yet.
+
+- A page states what the code does today. What is planned is named as planned, with its
+  milestone, and the `reference` page lists the limits a user must know.
+- `tck.adoc` follows `TCK.md`, and the configuration table of `reference.adoc` follows
+  `Settings`: change them together.
+- The code of `getting-started` is the code of `tassis-examples`, which the build compiles and
+  runs: change the example first, then the page.
 
 ## Terminology
 

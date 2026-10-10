@@ -8,10 +8,11 @@
 
 ## Status
 
-🚧 **M7** — the classic and simplified APIs on an in-VM broker: queues and topics, acknowledgement
-modes, local transactions, durable and shared subscriptions, selectors, message listeners,
-asynchronous send, `JMSContext`. Messages live in memory, authentication and the network transport
-are not implemented yet; see [ROADMAP.md](ROADMAP.md) and [TCK.md](TCK.md).
+🚧 **In development, not released.** The classic and simplified APIs work on an in-VM broker:
+queues and topics, acknowledgement modes, local transactions, durable and shared subscriptions,
+selectors, message listeners, asynchronous send, `JMSContext`, configuration by settings or URL.
+Messages live in memory; authentication and the network transport are not implemented yet. See
+[ROADMAP.md](ROADMAP.md) for the milestones and [TCK.md](TCK.md) for where conformance stands.
 
 ## Ecosystem rules
 
@@ -20,6 +21,28 @@ are not implemented yet; see [ROADMAP.md](ROADMAP.md) and [TCK.md](TCK.md).
 - **TDD** — test (or TCK scenario) first, then code.
 - **Virtual threads** for any I/O.
 - Bugs tracked in [BUG.md](BUG.md), benchmarks in [BENCH.md](BENCH.md).
+
+## Usage
+
+Not released: build it from source first (see [Build](#build)). An application declares one
+dependency, `io.vidocq.tassis:tassis-core`, and one `requires io.vidocq.tassis.core;`.
+
+```java
+ConnectionFactory factory = new TassisConnectionFactory();
+
+try (JMSContext context = factory.createContext()) {
+    Queue queue = context.createQueue("orders");
+
+    context.createProducer().send(queue, "hello");
+
+    String body = context.createConsumer(queue).receiveBody(String.class, 5_000);
+}
+```
+
+The connection factory and the destinations are created with `new`, not looked up in JNDI; the
+rest is the standard `jakarta.jms` API. The runnable version of this code, its classic-API twin
+and a configured one are in [tassis-examples](tassis-examples/src/main/java/io/vidocq/tassis/examples).
+The documentation is the Antora component under [docs/en](docs/en/modules/ROOT/pages).
 
 ## Configuration
 
