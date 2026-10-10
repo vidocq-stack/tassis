@@ -45,7 +45,7 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 | `Settings`, one record: what configures a connection factory, read from keys or from a connection URL, with the defaults and the validation. A new setting is added there once, as a key and as a URL parameter.
 |===
 
-There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The journal (milestone M10) and the network transport (milestone M11) will each introduce the seam they need.
+There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The broker is in memory by decision, so there will be no store; the network transport (milestone M11) will introduce the seam it needs.
 
 == Storage and subscriptions
 

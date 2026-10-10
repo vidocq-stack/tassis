@@ -254,9 +254,9 @@ What a user must know before relying on Tassis. Each limit names the roadmap mil
 
 === Messages and durable subscriptions do not survive the JVM
 
-The broker keeps everything in memory. When the JVM stops, every message is lost, whatever its delivery mode, and so is every durable subscription. `DeliveryMode.PERSISTENT` is accepted but changes nothing today. A durable subscription survives the connection that created it, not the JVM.
+The broker keeps everything in memory. When the JVM stops, every message is lost, whatever its delivery mode, and so is every durable subscription. `DeliveryMode.PERSISTENT` is accepted but changes nothing. A durable subscription survives the connection that created it, not the JVM.
 
-Addressed by milestone M10 (journal).
+This is a design decision: the broker is entirely in memory and writes nothing to the file system. No milestone will change it, and the memory of the JVM bounds what a broker holds. An application that needs its messages to survive a restart needs another provider.
 
 === Any user name and password are accepted
 

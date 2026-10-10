@@ -44,7 +44,7 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 | Java | 25
 | Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, and `io.vidocq.tassis.cdi.vauban` for the injection of `JMSContext`.
 | Runtime dependencies | None beyond the `jakarta.messaging` API module
-| Broker | In the JVM of the application, held in memory. A journal is planned for milestone M10, a network transport for M11.
+| Broker | In the JVM of the application, entirely in memory: nothing is written to the file system, by design. A network transport is planned for milestone M11.
 | Status | In development, not released
 | Jakarta Messaging TCK | 901 of the 903 applicable functional tests pass, and the signature test passes. Compatibility is **not claimed**: see xref:tck.adoc[TCK status].
 |===

@@ -53,8 +53,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | If the application relies on | With Tassis today | Milestone
 
 | Messages or durable subscriptions surviving a restart
-| Everything is in memory and is lost with the JVM
-| M10
+| Everything is in memory and is lost with the JVM, by design
+| None
 
 | A broker shared by several processes or machines
 | The broker is in the JVM of the application, and only there

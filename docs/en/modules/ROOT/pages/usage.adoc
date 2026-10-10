@@ -30,7 +30,7 @@ producer.send(session.createTextMessage("high"), DeliveryMode.PERSISTENT, 9, 0);
 * A producer created with `session.createProducer(null)` has no destination: each `send` names one. Naming a destination on a producer that already has one, or omitting it on a producer that has none, throws `UnsupportedOperationException`.
 * A send stores a copy of the message. Changing the message after the send has no effect on what is delivered, and the message a consumer receives is read-only.
 * `setDisableMessageID` and `setDisableMessageTimestamp` are recorded and ignored: every message gets an identifier and a timestamp.
-* `DeliveryMode.PERSISTENT` is accepted, and is the default, but no message survives the JVM yet: see xref:reference.adoc#limits[Limits].
+* `DeliveryMode.PERSISTENT` is accepted, and is the default, but no message survives the JVM: the broker is in memory by design. See xref:reference.adoc#limits[Limits].
 
 The legacy queue API (`QueueConnection`, `QueueSession`, `QueueSender`, `QueueReceiver`) is available through `createQueueConnection()`.
 

@@ -61,8 +61,8 @@ the Italian *Tasso* and the German *Taxis*.
 
 - **Zero third-party dependency**: `tassis-core` compiles against `jakarta.jms-api` and nothing
   else. No CDI, no JNDI, no library; the message selector parser is written by hand.
-- **A broker of its own**: in the JVM and in memory today, with a journal (M10) and a network
-  transport (M11) on the roadmap.
+- **A broker of its own**, in the JVM and entirely in memory: it writes nothing to the file
+  system, by design. A network transport (M11) is on the roadmap.
 - **Java Modules-first**: every artifact is an explicit Java module. `io.vidocq.tassis.core`
   exports one package, which holds the three classes an application names, and opens none.
 - **Virtual threads**: the threads Tassis creates, for message listeners and completion
@@ -72,8 +72,9 @@ the Italian *Tasso* and the German *Taxis*.
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. Messages live in memory;
-authentication and the network transport are not implemented yet. [ROADMAP.md](ROADMAP.md) has
+🚧 **In development, not released.** No artifact is published. Authentication and the network
+transport are not implemented yet. Messages live in memory and do not survive the JVM: that
+one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
 the milestones, and the limits a user must know are in the
 [reference](docs/en/modules/ROOT/pages/reference.adoc).
 
@@ -263,7 +264,7 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Message selectors | ✅ |
 | `MessageListener`, asynchronous send with `CompletionListener` | ✅ |
 | Priority, expiration, delivery delay | ✅ |
-| Persistence across a restart | M10 |
+| Persistence across a restart | Not planned: the broker is in memory by design |
 | Network transport, authentication | M11 |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |

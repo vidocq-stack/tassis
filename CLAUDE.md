@@ -42,7 +42,8 @@ sdk env
 ## Architecture
 
 Tassis is a **Jakarta Messaging 3.1 provider** with **zero third-party dependency**. Being a
-provider, it ships its own broker: in-VM today, network transport later (ROADMAP M11).
+provider, it ships its own broker: in-VM and entirely in memory, network transport later
+(ROADMAP M11).
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
@@ -75,8 +76,9 @@ a milestone.
    compile time.
 5. **No `synchronized` around blocking calls, no `ThreadLocal`** — virtual threads first.
 6. **Out of scope by decision** (see ROADMAP): a `vidocq` runtime extension, CDI message
-   listeners. Do not start on them without a roadmap change. XA and JTA are ROADMAP M13, and
-   stay out of `tassis-core`'s dependencies.
+   listeners, and **any persistence on the file system**: the broker is entirely in memory
+   (M10 is abandoned). Do not start on them without a roadmap change. XA and JTA are ROADMAP
+   M13, and stay out of `tassis-core`'s dependencies.
    **Authentication is deferred to M11**: until then any user name and password are accepted.
 7. **JUnit 6** (`org.junit:junit-bom`, managed by `vidocq-parent`) for all tests — no Mockito;
    hand-written fixtures only.

@@ -12,10 +12,10 @@
 | Topic | Decision |
 |---|---|
 | Nature | Home-grown broker, **in-VM** today: the client objects call the `Broker` object of their JVM directly. No transport SPI exists. The network transport is a later milestone (M11), which introduces the seam it needs. |
-| Persistence | **In-memory**: messages live in the broker's memory, in `Broker.Storage`. No store SPI exists. A home-grown **append-only journal** is a later milestone (M10), which introduces the seam it needs. |
+| Persistence | **In-memory, by decision** (2026-10-10): messages live in the broker's memory, in `Broker.Storage`, and the broker writes nothing to the file system. No store SPI exists. The journal that M10 planned is abandoned. |
 | Integrations | **CDI through Vauban** only (`JMSContext` injection, M9). |
 | Transactions | **Local transactions** in `tassis-core` (M3). **XA and JTA** through `mansart-transactions` are a later milestone (M13), outside `tassis-core`'s dependencies. |
-| Out of scope | A `vidocq` runtime extension, CDI message listeners (MDB substitute). Not on this roadmap. |
+| Out of scope | A `vidocq` runtime extension, CDI message listeners (MDB substitute), persistence on the file system. Not on this roadmap. |
 | Zero third-party dependency | `tassis-core` compiles against `jakarta.jms-api` only. |
 | Virtual threads | No `synchronized` around blocking calls, no `ThreadLocal`. Session delivery runs on virtual threads. |
 | Strict TDD | Red → green → refactor, each test citing the spec section it covers. |
@@ -63,7 +63,7 @@ The TCK exists in two shapes:
   classes of `core` the annotation also sits on a private helper that JUnit does not run (see
   `TCK.md`).*
 - **No XA and no restart** in `core` / `core20`: no reference to `XAConnection`, `XASession`
-  or `XAResource`, no broker-restart test. The journal (M10) does not gate the TCK.
+  or `XAResource`, no broker-restart test. An in-memory broker is therefore enough for the TCK.
 - **Constraints read from `JmsTool`**: `createConnection(user, password)` is used throughout
   (system properties `user`, `password`, `jms_timeout`, `platform.mode`), and a
   `DURABLE_SUB_CONNECTION_FACTORY` implies a connection factory with a preconfigured client ID.
@@ -106,7 +106,7 @@ class: queues, subscriptions, client identifiers, delivery), `selector` (lexer, 
 
 There is no `store` and no `transport` package, and no SPI for either, although the plan of M0
 had them. Messages live in the broker's memory, in `Broker.Storage`, and the client objects call
-the `Broker` directly. M10 (journal) and M11 (network transport) each introduce the seam they need.
+the `Broker` directly. M11 (network transport) introduces the seam it needs.
 
 ## Phases
 
@@ -212,7 +212,7 @@ back with `Broker.redeliver`. An automatically acknowledged session settles on d
 Choices and limits:
 
 - **Acknowledging is forgetting.** With an in-memory store, a settled message needs no broker
-  call. M10 (journal) will have to record settlement.
+  call.
 - **`DUPS_OK_ACKNOWLEDGE` behaves exactly like `AUTO_ACKNOWLEDGE`**: no lazy acknowledgement, so
   no duplicates.
 - **`JMSXGroupID` and `JMSXGroupSeq`** are listed as supported and carried like any property.
@@ -245,7 +245,7 @@ Choices and limits:
 
 - **A topic with no subscription drops what is published to it**, which is the pub/sub model.
 - **Durable subscriptions live in the broker's memory**: they survive connections, not the JVM.
-  Durability across restarts is M10.
+  Nothing survives the JVM, by decision (see M10).
 - **`noLocal` compares client identifiers** when the connection has one, the connection object
   otherwise, so that a durable `noLocal` subscription keeps ignoring its owner after a reconnect.
 - **`setClientID` is too late** after `createSession`, `start`, `stop`, `getMetaData` or the
@@ -517,7 +517,7 @@ Choices and limits:
 - **`fromUrl` rejects what it does not know**, including a transport other than `vm`.
 
 A rule for the milestones that follow: each new setting comes with its key, its URL parameter
-and its line in that table, in the same change. Expected: the journal directory (M10), host,
+and its line in that table, in the same change. Expected: host,
 port and credentials (M11), pool size and timeouts (M11b).
 
 ### M9 — CDI through Vauban ✅
@@ -571,11 +571,25 @@ Choices and limits:
 - **Vauban only.** The beans are plain CDI and hold nothing specific to Vauban, but only the
   Vauban wiring is generated and tested.
 
-### M10 — Journal
+### M10 — Journal: abandoned
 
-An append-only journal behind the broker's storage: `PERSISTENT` messages and durable
-subscriptions survive a broker stop, with crash-injection tests. Until then `PERSISTENT` is
-accepted but not durable across restarts; this is a documented limitation.
+Decided by the maintainer on 2026-10-10: **the broker stays entirely in memory** and writes
+nothing to the file system. The append-only journal this milestone planned is not built. The
+number is kept so that the other milestones keep theirs.
+
+What follows from it, and is documented as such for users:
+
+- `DeliveryMode.PERSISTENT` is accepted, since it is the default of the API, and changes
+  nothing: no message survives the JVM, whatever its delivery mode.
+- A durable subscription survives the connections that use it, not the JVM.
+- The memory of the JVM bounds what a broker holds.
+- Applications that need messages to survive a restart need another provider.
+
+A journal was prototyped before the decision and discarded without being merged. If the
+decision is ever revisited, what the prototype taught is worth knowing: the session must tell
+the broker what it acknowledges (today acknowledging is only forgetting), a commit must be one
+record, a compaction must describe the state after the change it follows, and the file must not
+be written through an interruptible channel, since the threads of consumers are interrupted.
 
 ### M11 — Network transport, and authentication
 
@@ -654,17 +668,20 @@ does not coordinate itself, typically a message and a database row committed tog
       `isSameRM`, transaction timeout
 - [ ] Prepared branches: the sends and the consumed messages of a prepared branch are held by the
       broker, neither visible nor redelivered, until the coordinator decides
-- [ ] `XAResource.recover`: prepared branches written to the journal and listed after a restart
+- [ ] `XAResource.recover`: the prepared branches the broker holds. They are in memory like
+      everything else (see M10), so a branch does not survive the JVM of the broker
 - [ ] JTA enlistment with `mansart-transactions`: a session created inside a transaction enlists
       itself, so `@Transactional` and `UserTransaction` cover its sends and receives; §12.3 for the
       session parameters that are then ignored
 - [ ] `JMSContext` injection (M9) inside a transaction: the `@TransactionScoped` context of §12.4.4
 
-**Depends on:** M10 for recovery (a prepared branch must survive a broker stop) and M9 for the
-injected context. The `XAResource` itself needs neither and can be built on the in-memory store.
+**Depends on:** M9 for the injected context. With the broker in memory by decision (M10), a
+prepared branch is lost with the JVM: two-phase commit then protects against the failure of the
+other resources and of the coordinator's decision, not against the loss of the broker's JVM. To
+be stated plainly in the documentation of this milestone.
 
 **Not covered by the TCK**: `core` and `core20` have no XA test (spike 2). Proven by our own
-tests, including crash injection between `prepare` and `commit`.
+tests, including a coordinator that fails between `prepare` and `commit`.
 
 To settle when the milestone opens:
 
