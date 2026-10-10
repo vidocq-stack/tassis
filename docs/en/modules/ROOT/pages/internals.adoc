@@ -23,7 +23,7 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 
 == Packages of `tassis-core`
 
-`io.vidocq.tassis.core` is the only exported package. It holds `TassisConnectionFactory`, `TassisQueue` and `TassisTopic`: what a client must name. Everything else is under `io.vidocq.tassis.core.internal` and is not exported.
+`io.vidocq.tassis.core` is the only exported package. It holds `TassisConnectionFactory`, `TassisQueue` and `TassisTopic`, what a client must name, and `TassisBroker`, the administration of a broker. Everything else is under `io.vidocq.tassis.core.internal` and is not exported.
 
 [cols="1,3",options="header"]
 |===
@@ -33,7 +33,7 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 | `TassisMessage` (header fields, properties, the template for a body) and one subclass per body type: text, object, map, bytes, stream. `ValueConversions` is the single conversion table for properties, `MapMessage` and `StreamMessage`. `Messages.snapshot` turns any `Message`, including another provider's, into an independent Tassis copy.
 
 | `internal.broker`
-| `Broker`, one class: the registry of brokers by name, queues, subscriptions, client identifiers, temporary destinations, and the delivery of messages.
+| `Broker`: the registry of brokers by name, queues, subscriptions, client identifiers, temporary destinations, and the delivery of messages. `Users`: the user registry of a broker and the check of the credentials a connection is created with. It guards itself and is never touched under the broker lock; a password is kept as a salted SHA-256 digest and compared in constant time.
 
 | `internal.client`
 | The API objects: `TassisConnection`, `TassisSession`, `TassisMessageProducer`, `TassisMessageConsumer`, `TassisQueueBrowser`, the temporary destinations, and the simplified API (`TassisContext`, `TassisJMSProducer`, `TassisJMSConsumer`). `Destinations.resolve` is the one place that decides which `Destination` objects belong to Tassis.
@@ -45,7 +45,7 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 | `Settings`, one record: what configures a connection factory, read from keys or from a connection URL, with the defaults and the validation. A new setting is added there once, as a key and as a URL parameter.
 |===
 
-There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The broker is in memory by decision, so there will be no store; the network transport (milestone M11) will introduce the seam it needs.
+There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The broker is in memory by decision, so there will be no store; the network transport (milestone M11.3, over AMQP 1.0) needs a seam there, which milestone M11.2 introduces.
 
 == Storage and subscriptions
 

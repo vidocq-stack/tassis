@@ -42,7 +42,7 @@ An application module declares `requires io.vidocq.tassis.core;`, and `requires 
 
 == Administered objects
 
-The three public classes of the package `io.vidocq.tassis.core`. A Java SE application creates them with `new`. They are immutable.
+Three of the four public classes of the package `io.vidocq.tassis.core`; the fourth is <<tassis-broker,`TassisBroker`>>. A Java SE application creates them with `new`. They are immutable.
 
 === `TassisConnectionFactory`
 
@@ -135,6 +135,40 @@ Implements `Topic`.
 |===
 
 `Session.createTopic(name)` and `JMSContext.createTopic(name)` return a `TassisTopic`.
+
+[#tassis-broker]
+== `TassisBroker`
+
+The administration of a broker: its user registry. See xref:usage.adoc#authentication[Authentication] for the rules. Unlike the administered objects it is a handle on shared state: two `TassisBroker` of the same name administer the same broker. Its methods may be called from any thread.
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisBroker.named(String name)`
+| The administration of the broker of that name in this JVM, which is created if nothing has used it yet. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
+
+| `name()`
+| The name of the broker.
+
+| `addUser(String userName, String password)`
+| Declares a user, which secures the broker, or changes the password of a user already declared. Returns the `TassisBroker`. Throws `NullPointerException` if either is null, `IllegalArgumentException` if either is empty.
+
+| `removeUser(String userName)`
+| Removes a user and says whether there was one. Its open connections stay open; the broker stays secured.
+
+| `users()`
+| The names of the declared users, as an immutable copy.
+
+| `isSecured()`
+| Whether a user has ever been declared, so that credentials are checked.
+
+| `allowAnonymous(boolean allowed)`
+| Whether a secured broker accepts the connections created without credentials. It does not by default. Returns the `TassisBroker`.
+
+| `isAnonymousAllowed()`
+| What `allowAnonymous` last said.
+|===
 
 == Defaults
 
@@ -244,7 +278,7 @@ No milestone plans these today.
 | `Session.setMessageListener`, `Session.getMessageListener`, `Session.run`, the `createConnectionConsumer` family | Not implemented: `UnsupportedOperationException`. They are the optional application server facilities of chapter 11 of the specification, and are not on the roadmap.
 | XA: `XAConnectionFactory`, `XAConnection`, `XASession`, `XAJMSContext` | Not implemented. Milestone M13.
 | `JMSContext` injection with CDI (§12.4) | Supported on Vauban, in the request scope. The transaction scope is milestone M13.
-| Authentication | Not implemented. Milestone M11.
+| Authentication (§6.1.1) | Supported: a user registry per broker, administered with `TassisBroker`. No authorization.
 |===
 
 [#limits]
@@ -258,17 +292,19 @@ The broker keeps everything in memory. When the JVM stops, every message is lost
 
 This is a design decision: the broker is entirely in memory and writes nothing to the file system. No milestone will change it, and the memory of the JVM bounds what a broker holds. An application that needs its messages to survive a restart needs another provider.
 
-=== Any user name and password are accepted
+=== A broker accepts anyone until a user is declared
 
-`createConnection(userName, password)`, `createContext(userName, password)` and the other forms that take credentials ignore them. Tassis has no user registry and never throws `JMSSecurityException`.
+A broker nobody administers is open: `createConnection(userName, password)`, `createContext(userName, password)` and the other forms that take credentials accept any, and never throw `JMSSecurityException`. Declaring a user with `TassisBroker` secures the broker: see xref:usage.adoc#authentication[Authentication].
 
-Addressed by milestone M11 (authentication comes with the network transport).
+=== Authentication without authorization
+
+A secured broker checks who connects, and gives every user the same rights: there is no permission by destination, and no milestone plans one. A password is kept in memory as a salted digest, never written anywhere.
 
 === The broker is only reachable from its own JVM
 
 A broker lives in the JVM that created it. Two processes cannot exchange messages through Tassis: each one has its own brokers, even under the same name.
 
-Addressed by milestone M11 (network transport).
+Addressed by milestone M11.3 (network transport, over AMQP 1.0).
 
 === No connection pool
 

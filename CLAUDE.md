@@ -42,13 +42,13 @@ sdk env
 ## Architecture
 
 Tassis is a **Jakarta Messaging 3.1 provider** with **zero third-party dependency**. Being a
-provider, it ships its own broker: in-VM and entirely in memory, network transport later
-(ROADMAP M11).
+provider, it ships its own broker: in-VM and entirely in memory, network transport later,
+over AMQP 1.0 (ROADMAP M11.3).
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
-                     TassisTopic),
+                     TassisTopic), broker administration (TassisBroker),
                      internal.message, internal.broker, internal.client, internal.selector
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
@@ -65,9 +65,9 @@ a milestone.
 
 1. **`tassis-core` depends on nothing beyond `jakarta.jms-api`** — no CDI, no JNDI, no
    third-party library.
-2. **`io.vidocq.tassis.core` is the only exported package**, and holds only what a client
-   must name (the administered objects). Everything else lives under
-   `io.vidocq.tassis.core.internal.*`.
+2. **`io.vidocq.tassis.core` is the only exported package**, and holds only what an
+   application must name (the administered objects, and `TassisBroker`). Everything else
+   lives under `io.vidocq.tassis.core.internal.*`.
 3. **Unimplemented API methods throw `UnsupportedOperationException` with a ROADMAP
    pointer** (`"...: see ROADMAP M2"`), never a stub that silently returns wrong data.
    Replace the exception only when implementing the milestone.
@@ -79,7 +79,8 @@ a milestone.
    listeners, and **any persistence on the file system**: the broker is entirely in memory
    (M10 is abandoned). Do not start on them without a roadmap change. XA and JTA are ROADMAP
    M13, and stay out of `tassis-core`'s dependencies.
-   **Authentication is deferred to M11**: until then any user name and password are accepted.
+   **Authorization** is out of scope too: a broker authenticates (M11.1) and gives every user
+   the same rights.
 7. **JUnit 6** (`org.junit:junit-bom`, managed by `vidocq-parent`) for all tests — no Mockito;
    hand-written fixtures only.
 8. **Language** — commit messages, Javadoc, comments and all `.md` content in **English**.
@@ -103,6 +104,12 @@ send hands the broker a snapshot (`Messages.snapshot`), never the client's own m
 `Destinations.resolve(...)` is the one place that decides which `Destination` objects are ours.
 The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the private
 `Broker.named(Subscribing)`, not to be confused with the registry lookup `Broker.named(String)`.
+
+`Users` is the user registry of a broker (§6.1.1), administered through the public
+`TassisBroker`. It guards itself: never read or write it under the broker lock. The check is
+made by `TassisConnectionFactory.connect`, before anything is taken from the broker, so that a
+rejected client holds nothing (no client identifier). A broker is open until a first user is
+declared and secured for good afterwards: do not make removing the last user reopen it.
 
 `Broker.receive` returns a `Delivery`; from then on the consumer's **session owns it** and must
 either settle it (commit, acknowledge, or automatic acknowledgement on delivery) or hand it back

@@ -58,15 +58,19 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 
 | A broker shared by several processes or machines
 | The broker is in the JVM of the application, and only there
-| M11
+| M11.3
 
 | Authentication
-| Any user name and password are accepted
-| M11
+| Supported once users are declared on the broker with `TassisBroker`; until then any user name and password are accepted. Users live in memory and are declared by the application, not in a file
+| Done
+
+| Permissions by destination
+| None: every user of a broker has the same rights
+| None
 
 | Being told of a lost connection through `ExceptionListener`
 | The listener is stored and never called: there is no connection to lose
-| M11
+| M11.3
 
 | A connection pool
 | None: each call creates a connection, which is cheap with the in-VM broker
@@ -107,4 +111,4 @@ Points where the specification lets providers differ, and where Tassis may not d
 * A selector with a type error that the literals make visible, such as `weight > 'foo'`, is rejected when the consumer is created.
 * `setDisableMessageID` and `setDisableMessageTimestamp` have no effect.
 
-See xref:tck.adoc[TCK status] for where conformance stands: compatibility with the specification is not claimed yet.
+See xref:tck.adoc[TCK status] for where conformance stands: every applicable test passes, and compatibility with the specification is not claimed.

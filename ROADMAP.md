@@ -11,7 +11,8 @@
 
 | Topic | Decision |
 |---|---|
-| Nature | Home-grown broker, **in-VM** today: the client objects call the `Broker` object of their JVM directly. No transport SPI exists. The network transport is a later milestone (M11), which introduces the seam it needs. |
+| Nature | Home-grown broker, **in-VM** today: the client objects call the `Broker` object of their JVM directly. No transport SPI exists. The network transport (M11) speaks **AMQP 1.0**, decided on 2026-10-10, and introduces the seam it needs. |
+| Authentication | A user registry on each broker, administered with `TassisBroker` (M11.1). A broker is open until a first user is declared, then secured for good. No authorization: every user has the same rights. |
 | Persistence | **In-memory, by decision** (2026-10-10): messages live in the broker's memory, in `Broker.Storage`, and the broker writes nothing to the file system. No store SPI exists. The journal that M10 planned is abandoned. |
 | Integrations | **CDI through Vauban** only (`JMSContext` injection, M9). |
 | Transactions | **Local transactions** in `tassis-core` (M3). **XA and JTA** through `mansart-transactions` are a later milestone (M13), outside `tassis-core`'s dependencies. |
@@ -98,7 +99,8 @@ tassis-tck         ← The official TCK runner: in-reactor behind the `tck` prof
 ```
 
 `tassis-core` exports one package, `io.vidocq.tassis.core`, which holds the administered objects
-(`TassisConnectionFactory`, `TassisQueue`, `TassisTopic`). Its internal packages
+(`TassisConnectionFactory`, `TassisQueue`, `TassisTopic`) and the administration of a broker
+(`TassisBroker`). Its internal packages
 (`io.vidocq.tassis.core.internal.*`, not exported) are four:
 `message` (the message types and their conversions), `client` (Connection / Session / Producer /
 Consumer / QueueBrowser, temporary destinations, and the simplified API), `broker` (the `Broker`
@@ -387,7 +389,7 @@ Choices and limits:
 - **A context being closed stays usable by its callbacks in progress**, but creates nothing new.
 - **`createQueue`, `createTopic` and the message factory methods need no session**, so they do
   not count as a use of the connection for `setClientID`.
-- **Any credentials are accepted** by the `createContext(user, password)` forms: see M11.
+- **Any credentials are accepted** by the `createContext(user, password)` forms, until M11.1.
 - **No `XAJMSContext`** yet: XA is M13.
 
 ### M8 — TCK complete ✅
@@ -402,9 +404,10 @@ left for this one.
 
 What stays open, and where it is due:
 
-- the two authentication tests of `core20/connectionfactorytests`: M11;
+- the two authentication tests of `core20/connectionfactorytests`: passed since M11.1;
 - `ee` and `ee20`, out of reach without EJB, MDB or a web container;
-- compatibility is **not claimed**: it needs every applicable test passed, hence M11 first.
+- compatibility is **not claimed**: every applicable test passes since M11.1, but a claim is a
+  certification request to the Eclipse Foundation, which is the maintainer's to make.
 
 The signature file is under the Eclipse Foundation TCK License and is downloaded by the script,
 not stored here; the `sigtest-maven-plugin` is a build-time plugin of the `signature` profile
@@ -593,23 +596,95 @@ be written through an interruptible channel, since the threads of consumers are 
 
 ### M11 — Network transport, and authentication
 
-Broker server on virtual threads, wire protocol, client/broker module split. The protocol
-(home-grown or a standard one) is chosen by a dedicated study when the milestone opens.
+Broker server on virtual threads, wire protocol, and authentication (§6.1.1), which only means
+something once a client is no longer in the broker's JVM.
 
-**Authentication** (§6.1.1) is part of this milestone, decided on 2026-10-10: it only means
-something once a client is no longer in the broker's JVM. Today `createConnection(user, password)`
-and `createContext(user, password)` accept any credentials. To deliver:
+Decided with the maintainer on 2026-10-10, after the study that opened the milestone:
 
-- a user registry on the broker and the way to administer it (a public API to design: nothing
-  public exists for broker administration yet);
-- `JMSSecurityException` / `JMSSecurityRuntimeException` when a user name and password are
-  rejected (§10.3), and what a connection without credentials is allowed to do;
-- the two TCK tests negated until then:
-  `core20/connectionfactorytests/ClientIT#createConnectionExceptionTests` and
-  `#createJMSContextExceptionTests`, which expect `("invalid", "invalid")` to be refused.
+| Topic | Decision |
+|---|---|
+| Wire protocol | **AMQP 1.0** (OASIS, ISO/IEC 19464), preferred to a home-grown binary protocol: it opens a Tassis broker to clients that are not Tassis, and not Java. STOMP and MQTT were ruled out (no typed messages, transactions or queue browsing for one, no queues for the other), as was HTTP/2 through Chappe (a first dependency on another brick, for a protocol ill-suited to pushed delivery). |
+| Access | **Open while empty**: a broker with no declared user accepts anyone, as before. Declaring a user secures it: credentials are checked, and a connection without any is refused unless anonymous connections are explicitly allowed. |
+| Password on the wire | **Optional TLS**, with the JDK's own. The password travels inside the channel (SASL PLAIN); without TLS it travels in clear, and the documentation says so plainly. |
 
-The `ExceptionListener` (§6.1.7), stored and never called so far, also gets its purpose here: a
-lost connection.
+The cost of AMQP 1.0 is accepted knowingly: with no third-party dependency the type system, the
+framing, sessions, links, credit and SASL are all written here, which makes this the largest
+milestone of the roadmap. It is cut in three, each merged on its own with the TCK green.
+
+#### M11.1 — Authentication on the in-VM broker ✅
+
+- [x] `TassisBroker`, the first public API of broker administration: `addUser`, `removeUser`,
+      `users`, `allowAnonymous`, `isSecured`. It lives in the exported package.
+- [x] `internal.broker.Users`: the registry, which guards itself and is never touched under the
+      broker lock. A password is kept as a salted SHA-256 digest and compared in constant time;
+      an unknown user and a wrong password get the same answer.
+- [x] `JMSSecurityException` from every `create...Connection`, `JMSSecurityRuntimeException`
+      from every `createContext` (§10.3). The check comes before the client identifier is
+      claimed, so a rejected client holds nothing.
+- [x] A broker stays secured once it has been: removing its last user does not reopen it.
+- [x] The two TCK tests negated since M7 are back in the selection: the porting class declares
+      the user of the TCK's configuration and allows anonymous connections, which is what the
+      suite expects of a provider.
+
+Not in this slice, and why:
+
+- **Authorization.** The spec asks for none, and nothing distinguishes two users today.
+- **Default credentials of a factory** (a `user` and a `password` setting): they come with the
+  connection URL of the network transport, in M11.3.
+- **A stronger password hash.** Nothing is written out, so the digest only keeps the password
+  out of a memory dump; a slow hash would be paid at each connection.
+
+#### M11.2 — The seam between client and broker
+
+Today the client objects call `Broker` directly, and three things in that contract do not
+survive a network:
+
+- **The broker forgets a message when it delivers it.** `Broker.receive` removes it and the
+  session keeps it; acknowledging is only forgetting. A client that dies would take its
+  unacknowledged messages with it. The broker must hold the unsettled deliveries of each
+  connection and requeue them when the connection is lost. (The discarded journal prototype
+  had reached the same conclusion: see M10.)
+- **The broker reads client state under its lock**: whether the connection is started, whether
+  the consumer is closed. Those become things the client tells the broker.
+- **Identity is an object reference** (`Outgoing.publisher`, `Subscribing.subscriber`), for
+  `noLocal`. It becomes a connection identifier.
+
+To deliver: one interface per connection between `internal.client` and the broker, shaped by
+AMQP's model (see below) rather than by today's calls, with the in-VM broker behind it and no
+change of behaviour. Proof: the unit tests and the whole TCK, unchanged.
+
+#### M11.3 — AMQP 1.0
+
+To open with a study of its own, since several of the points below are recalled from the
+specifications and not yet checked against them:
+
+- the AMQP 1.0 core (types, framing, transport, messaging, transactions, security) and how much
+  of it a broker must implement to be a conforming container;
+- the **JMS mapping**. AMQP 1.0 defines no queue, topic, selector or durable subscription; the
+  conventions that give JMS its semantics (destination and message type annotations, selector
+  and no-local filters, shared subscriptions, temporary destinations as dynamic nodes, delivery
+  delay) come from the OASIS AMQP JMS Mapping, which to our knowledge never left working-draft
+  status, and from what existing brokers and Apache Qpid JMS agreed on in practice;
+- **delivery by credit**: AMQP pushes messages against the credit a receiver grants. A
+  synchronous `receive` on top of it means either a credit of one per call, or a prefetch whose
+  messages another consumer cannot see meanwhile. To be settled with the TCK in hand, then
+  measured in M12;
+- local transactions through the transaction coordinator, and what M13 (XA) can expect, since
+  AMQP 1.0 leaves distributed transactions largely unspecified.
+
+To deliver:
+
+- [ ] The codec, the server on virtual threads, and the client transport, selected by the
+      connection URL beside `tassis:vm:`.
+- [ ] SASL PLAIN and ANONYMOUS over the registry of M11.1; optional TLS.
+- [ ] Where the server lives: a module of its own (`tassis-server`), `tassis-core` keeping the
+      client and the in-VM broker. To be confirmed in plan mode, as any new module.
+- [ ] The `ExceptionListener` (§6.1.7), stored and never called so far, gets its purpose: a
+      lost connection. Heartbeats, to notice one.
+- [ ] **Proof: the whole TCK replayed through the network transport**, besides the in-VM run.
+- [ ] Interoperability with a client that is not Tassis, as a test outside the reactor: it is
+      the reason AMQP was chosen, and it needs a third-party client that must not become a
+      dependency.
 
 ### M11b — Connection pool
 
@@ -696,8 +771,11 @@ To settle when the milestone opens:
 ## Known risks
 
 - **TCK standalone coverage** is proven: every package of `core` and `core20` runs in
-  `standalone` mode, and 901 of their 903 tests pass (see `TCK.md`). What remains is the two
-  authentication tests, due with M11; `ee` and `ee20` stay out of reach.
+  `standalone` mode, and their 903 tests pass (see `TCK.md`); `ee` and `ee20` stay out of
+  reach.
+- **AMQP 1.0 without a dependency** (M11.3) is a large body of protocol code to write and to
+  keep correct, and its JMS mapping rests on conventions rather than on a standard. The slice
+  opens with a study, and interoperability is tested against a real third-party client.
 - **No JNDI in Vidocq**: `@JMSConnectionFactoryDefinition` / `@JMSDestinationDefinition` are
   Jakarta EE resource definitions and stay unimplemented unless a milestone is opened for them.
 - **`requires static transitive java.transaction.xa`** in the API module: the XA types are

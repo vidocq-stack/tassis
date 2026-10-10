@@ -31,6 +31,8 @@ import jakarta.jms.InvalidClientIDRuntimeException;
 import jakarta.jms.JMSContext;
 import jakarta.jms.JMSException;
 import jakarta.jms.JMSRuntimeException;
+import jakarta.jms.JMSSecurityException;
+import jakarta.jms.JMSSecurityRuntimeException;
 import jakarta.jms.QueueConnection;
 import jakarta.jms.QueueConnectionFactory;
 import jakarta.jms.TopicConnection;
@@ -66,8 +68,9 @@ import java.util.Properties;
  * is dropped (§8.7)</td></tr>
  * </table>
  *
- * <p>The in-VM broker has no user registry: the methods taking a user name and a
- * password accept any (§6.1.1 leaves authentication to the provider).
+ * <p>The user name and the password a connection is created with are checked by the broker
+ * once users are declared on it, with {@link TassisBroker}; until then any are accepted
+ * (§6.1.1 leaves authentication to the provider).
  */
 public final class TassisConnectionFactory
         implements ConnectionFactory, QueueConnectionFactory, TopicConnectionFactory {
@@ -168,72 +171,81 @@ public final class TassisConnectionFactory
         return toUrl();
     }
 
-    private TassisConnection connect(Domain domain) throws JMSException {
-        return new TassisConnection(Broker.named(settings.broker()), domain, settings.clientId(),
-                settings.maxListenerDeliveries());
+    /**
+     * @param userName the user name the connection is created with, or {@code null} for none
+     * @throws JMSSecurityException if the broker rejects the credentials (§6.1.1, §10.3)
+     */
+    private TassisConnection connect(Domain domain, String userName, String password) throws JMSException {
+        Broker broker = Broker.named(settings.broker());
+        // Before anything is taken from the broker: a rejected client holds no client identifier.
+        broker.users().check(userName, password);
+        return new TassisConnection(broker, domain, settings.clientId(), settings.maxListenerDeliveries());
     }
 
     @Override
     public Connection createConnection() throws JMSException {
-        return connect(Domain.UNIFIED);
+        return connect(Domain.UNIFIED, null, null);
     }
 
     @Override
     public Connection createConnection(String userName, String password) throws JMSException {
-        return connect(Domain.UNIFIED);
+        return connect(Domain.UNIFIED, userName, password);
     }
 
     @Override
     public QueueConnection createQueueConnection() throws JMSException {
-        return connect(Domain.QUEUE);
+        return connect(Domain.QUEUE, null, null);
     }
 
     @Override
     public QueueConnection createQueueConnection(String userName, String password) throws JMSException {
-        return connect(Domain.QUEUE);
+        return connect(Domain.QUEUE, userName, password);
     }
 
     @Override
     public TopicConnection createTopicConnection() throws JMSException {
-        return connect(Domain.TOPIC);
+        return connect(Domain.TOPIC, null, null);
     }
 
     @Override
     public TopicConnection createTopicConnection(String userName, String password) throws JMSException {
-        return connect(Domain.TOPIC);
+        return connect(Domain.TOPIC, userName, password);
     }
 
     // ---- simplified API ---------------------------------------------------
 
-    private JMSContext context(int sessionMode) {
+    private JMSContext context(String userName, String password, int sessionMode) {
         TassisContext.checkSessionMode(sessionMode);
         try {
-            return new TassisContext(connect(Domain.UNIFIED), sessionMode);
+            return new TassisContext(connect(Domain.UNIFIED, userName, password), sessionMode);
         } catch (JMSException e) {
-            JMSRuntimeException unchecked = e instanceof InvalidClientIDException
-                    ? new InvalidClientIDRuntimeException(e.getMessage(), e.getErrorCode(), e)
-                    : new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
-            throw unchecked;
+            String reason = e.getMessage();
+            String code = e.getErrorCode();
+            throw switch (e) {
+                case InvalidClientIDException x -> new InvalidClientIDRuntimeException(reason, code, e);
+                case JMSSecurityException x -> new JMSSecurityRuntimeException(reason, code, e);
+                default -> new JMSRuntimeException(reason, code, e);
+            };
         }
     }
 
     @Override
     public JMSContext createContext() {
-        return context(JMSContext.AUTO_ACKNOWLEDGE);
+        return context(null, null, JMSContext.AUTO_ACKNOWLEDGE);
     }
 
     @Override
     public JMSContext createContext(String userName, String password) {
-        return context(JMSContext.AUTO_ACKNOWLEDGE);
+        return context(userName, password, JMSContext.AUTO_ACKNOWLEDGE);
     }
 
     @Override
     public JMSContext createContext(String userName, String password, int sessionMode) {
-        return context(sessionMode);
+        return context(userName, password, sessionMode);
     }
 
     @Override
     public JMSContext createContext(int sessionMode) {
-        return context(sessionMode);
+        return context(null, null, sessionMode);
     }
 }

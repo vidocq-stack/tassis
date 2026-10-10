@@ -29,12 +29,14 @@ import io.vidocq.tassis.cdi.app.Billing;
 import io.vidocq.tassis.cdi.app.Factories;
 import io.vidocq.tassis.cdi.app.Orders;
 import io.vidocq.tassis.cdi.app.TwoDefaultFactories;
+import io.vidocq.tassis.core.TassisBroker;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.vauban.core.container.VaubanContainer;
 import jakarta.enterprise.context.ContextNotActiveException;
 import jakarta.jms.IllegalStateRuntimeException;
 import jakarta.jms.JMSContext;
 import jakarta.jms.JMSRuntimeException;
+import jakarta.jms.JMSSecurityRuntimeException;
 import jakarta.jms.Queue;
 import jakarta.jms.TemporaryQueue;
 import java.util.List;
@@ -109,6 +111,25 @@ class JmsContextInjectionTest {
 
             assertEquals("hello", body.get());
         }
+    }
+
+    @Test
+    void aSecuredBrokerChecksTheCredentialsOfTheInjectionPoint() {
+        // §12.4.3: @JMSPasswordCredential gives the credentials; §6.1.1: the broker checks them.
+        TassisBroker.named(broker).addUser("user", "secret");
+        try (VaubanContainer container = container(Orders.class)) {
+            Orders orders = container.select(Orders.class);
+
+            container.requestContext().runInScope(() -> {
+                assertNotNull(orders.withCredentials.createQueue("orders"));
+                orders.withCredentials.createProducer().send(orders.withCredentials.createQueue("orders"), "paid");
+
+                assertThrows(JMSSecurityRuntimeException.class, () -> orders.context.createProducer(),
+                        "an injection point without credentials connects without any");
+            });
+        }
+        TassisBroker.named(broker).allowAnonymous(true);
+        assertEquals("paid", received(broker, "orders"));
     }
 
     @Test

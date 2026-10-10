@@ -412,6 +412,46 @@ Each checked exception of the classic API is reported as its unchecked counterpa
 
 A message listener may not close or stop the context it runs on: `close()` and `stop()` throw `IllegalStateRuntimeException`, and the context stays open. A context that is being closed from another thread stays usable by its callbacks in progress, but creates nothing new.
 
+[#authentication]
+== Authentication
+
+A broker checks who connects once users are declared on it. `TassisBroker` is the administration of a broker, found by the name a connection factory uses:
+
+[source,java]
+----
+TassisBroker.named("orders").addUser("billing", password);
+
+ConnectionFactory factory = new TassisConnectionFactory("orders");
+try (Connection connection = factory.createConnection("billing", password)) {
+    // ...
+}
+----
+
+A broker is in one of two states.
+
+[cols="1,3",options="header"]
+|===
+| State | Who connects
+
+| Open: no user has ever been declared
+| Anyone. Any user name and password are accepted, and so are the connections created without any. This is the state of a broker nobody administers, which keeps tests and embedded uses free of configuration.
+
+| Secured: from the first `addUser`
+| A declared user with its password. A connection created without credentials, with `createConnection()` or `createContext()`, is refused, unless the broker allows anonymous connections: `TassisBroker.named("orders").allowAnonymous(true)`.
+|===
+
+A refused connection fails with `JMSSecurityException`, or with `JMSSecurityRuntimeException` from the `createContext` methods. The message does not say whether the user name or the password was wrong.
+
+What to know:
+
+* **A secured broker stays secured.** `removeUser` on its last user does not reopen it to anyone: nobody connects until a user is declared again, anonymous connections aside.
+* **A connection already open outlives its user.** Removing a user, or changing its password with a second `addUser`, closes nothing.
+* **Users are in memory**, like everything a broker holds: declare them each time the application starts, before the first connection.
+* **Every user has the same rights.** Authentication says who may connect; there is no permission by destination.
+* **Declare the users before the code that connects runs.** Whoever can call `TassisBroker` in the JVM administers the broker: the registry protects a broker from its clients, which matters once they are remote (milestone M11.3), not from the application that hosts it.
+
+With CDI, `@JMSPasswordCredential` gives the credentials of an injected context. An injection point without it connects without credentials, which a secured broker refuses unless it allows anonymous connections.
+
 [#injection]
 == Injecting `JMSContext` with CDI
 
@@ -485,7 +525,7 @@ A request that runs subtasks in parallel shares its contexts with them. Like any
 | The session mode, `AUTO_ACKNOWLEDGE` without it.
 
 | `@JMSPasswordCredential(userName = ..., password = ...)`
-| The credentials the connection is created with. Any are accepted until authentication exists (milestone M11).
+| The credentials the connection is created with, checked by the broker once it is secured: see <<authentication>>.
 |===
 
 Two injection points share a context when the three give the same values.

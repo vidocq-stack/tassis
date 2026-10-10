@@ -62,7 +62,7 @@ the Italian *Tasso* and the German *Taxis*.
 - **Zero third-party dependency**: `tassis-core` compiles against `jakarta.jms-api` and nothing
   else. No CDI, no JNDI, no library; the message selector parser is written by hand.
 - **A broker of its own**, in the JVM and entirely in memory: it writes nothing to the file
-  system, by design. A network transport (M11) is on the roadmap.
+  system, by design. A network transport over AMQP 1.0 (M11.3) is on the roadmap.
 - **Java Modules-first**: every artifact is an explicit Java module. `io.vidocq.tassis.core`
   exports one package, which holds the three classes an application names, and opens none.
 - **Virtual threads**: the threads Tassis creates, for message listeners and completion
@@ -72,8 +72,8 @@ the Italian *Tasso* and the German *Taxis*.
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. Authentication and the network
-transport are not implemented yet. Messages live in memory and do not survive the JVM: that
+🚧 **In development, not released.** No artifact is published. The network transport is not
+implemented yet. Messages live in memory and do not survive the JVM: that
 one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
 the milestones, and the limits a user must know are in the
 [reference](docs/en/modules/ROOT/pages/reference.adoc).
@@ -208,6 +208,25 @@ Several factories can be defined by name, `tassis.factory.<name>.<key>`, and obt
 `TassisConnectionFactory.named(name, settings)`; a named factory inherits the settings that carry
 no name. An unknown key or an invalid value is an error that names the key.
 
+### Authentication
+
+A broker accepts anyone until a user is declared on it. From then on it is secured: a connection
+needs the name and the password of a declared user.
+
+```java
+TassisBroker.named("orders").addUser("billing", password);
+
+ConnectionFactory factory = new TassisConnectionFactory("orders");
+try (JMSContext context = factory.createContext("billing", password)) {
+    // ...
+}
+factory.createContext("billing", "wrong");   // JMSSecurityRuntimeException
+factory.createContext();                      // refused too, unless allowAnonymous(true)
+```
+
+Users live in memory and every user has the same rights: see
+[Authentication](docs/en/modules/ROOT/pages/usage.adoc) in the documentation.
+
 ## Architecture
 
 ```mermaid
@@ -240,7 +259,7 @@ tassis/
 ```
 
 Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectionFactory`,
-`TassisQueue`, `TassisTopic`). The rest is internal:
+`TassisQueue`, `TassisTopic`, and `TassisBroker` to administer a broker). The rest is internal:
 
 | Package | Role |
 |---|---|
@@ -265,7 +284,8 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | `MessageListener`, asynchronous send with `CompletionListener` | ✅ |
 | Priority, expiration, delivery delay | ✅ |
 | Persistence across a restart | Not planned: the broker is in memory by design |
-| Network transport, authentication | M11 |
+| Authentication (user registry per broker, `TassisBroker`) | ✅ |
+| Network transport, over AMQP 1.0 | M11.3 |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |
@@ -275,12 +295,12 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 Tassis runs the official Jakarta Messaging TCK (`jakarta.tck:jms-tck:11.0.3`) from its reactor.
 
 ```
-Functional tests :  901/903 of the applicable set (core 642/642, core20 259/261)
+Functional tests :  903/903 of the applicable set (core 642/642, core20 261/261)
 Signature test   :  passed
 ```
 
-The two tests not passed are about authentication, due with M11. The `ee` tests need EJB or a
-web container and do not apply to a Java SE provider. **Compatibility is not claimed**:
+The `ee` tests need EJB or a web container and do not apply to a Java SE provider.
+**Compatibility is not claimed**, which would take a certification request:
 [TCK.md](TCK.md) is the working record.
 
 ```bash

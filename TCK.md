@@ -7,13 +7,13 @@
 | Specification | Jakarta Messaging 3.1 |
 | TCK | `jakarta.tck:jms-tck:11.0.3`, with `jakarta.tck:common:11.0.8` (see Deviations) |
 | JDK | Temurin 25 |
-| Functional tests | **901 passed, 0 failed** out of 903: all of `core` (642) and `core20` (259 of 261) |
+| Functional tests | **903 passed, 0 failed** out of 903: all of `core` (642) and of `core20` (261) |
 | Signature test | **passed**: `jakarta.jms` of `jakarta.jms-api:3.1.0` against `jakarta.jms.sig` |
-| Not passed | 2 tests, negated: authentication, due with M11 (see Status) |
+| Not passed | None |
 | Not applicable | `ee` and `ee20`, 255 annotations: they need EJB, MDB or a web container |
 
-Tassis does not claim compatibility: two tests of the applicable set are not passed yet, and
-this file is a working record, not a certification request.
+Tassis does not claim compatibility: every test of the applicable set passes, but this file is
+a working record, not a certification request, and none has been made.
 
 ## Runner
 
@@ -22,7 +22,7 @@ this file is a working record, not a certification request.
 | TCK | `jakarta.tck:jms-tck:11.0.3` (JUnit 5, "Jakarta Messaging Outside container"), compiled against `jakarta.jms-api:3.1.0` |
 | Module | `tassis-tck`, in-reactor behind the `tck` Maven profile, test scope only, class path |
 | Script | `./run-official-tck-messaging-3.1.sh` (report in `tassis-tck/target/tck-report.txt`) |
-| Porting class | `io.vidocq.tassis.tck.TassisJmsObjects` (`TSJMSObjectsInterface`): no JNDI |
+| Porting class | `io.vidocq.tassis.tck.TassisJmsObjects` (`TSJMSObjectsInterface`): no JNDI. It also declares the TCK's user on the broker |
 | Scope | `core` + `core20` (903 tests). `ee` / `ee20` (255 `@Test` annotations) need EJB, MDB or a web container |
 
 How the wiring works:
@@ -36,24 +36,25 @@ How the wiring works:
 - `PortingSmokeTest` exercises the wiring outside any TCK test. Run it first when everything
   fails at once: the TCK tests swallow the exception of a failed setup.
 
-## Status — M7 (unchanged by M8, M8b and M8c)
+## Status — M11.1
 
-**901 TCK tests passed / 0 failed** on the selection of `tck.test`: the whole of `core` (642
-tests, 46 packages) and of `core20` (259 of its 261 tests, 15 packages). The run reports 902
-because it also executes `PortingSmokeTest`, and takes about 13 minutes: many `core20` tests
-wait on purpose (2026-10-10, `./mvnw -ntp -Ptck clean install`).
+**903 TCK tests passed / 0 failed** on the selection of `tck.test`: the whole of `core` (642
+tests, 46 packages) and of `core20` (261 tests, 15 packages). The run reports 904 because it
+also executes `PortingSmokeTest`, and takes about 13 minutes: many `core20` tests wait on
+purpose (2026-10-10, `./run-official-tck-messaging-3.1.sh`).
 
-Two tests are negated in the `tck.test` property of `tassis-tck/pom.xml`, both waiting for
-authentication, which is part of M11:
-
-| Class | Tests | Needs |
-|---|---|---|
-| `core20/connectionfactorytests/ClientIT` | `createConnectionExceptionTests`, `createJMSContextExceptionTests` | `JMSSecurityException` for the credentials `("invalid", "invalid")`; Tassis accepts any credentials today |
+Nothing is negated in the `tck.test` property of `tassis-tck/pom.xml` any more. The two tests
+that were, until M11.1, are `createConnectionExceptionTests` and
+`createJMSContextExceptionTests` of `core20/connectionfactorytests/ClientIT`: they expect a
+`JMSSecurityException` for the credentials `("invalid", "invalid")` (§6.1.1, §10.3), while the
+rest of the suite connects without credentials, or with the `user` and `password` of its
+configuration. `TassisJmsObjects` sets the broker up accordingly: it declares that user with
+`TassisBroker.addUser`, which secures the broker, and allows anonymous connections.
 
 Out of reach: `ee` and `ee20` (255 annotations), which need EJB, MDB or a web container.
 
 History: M2 199 on 16 packages; M3 219 on 18; M4 458 on 35; M5 598 on 37; M6 642 on 46 (all of
-`core`); M7 901 on 61 (`core` + `core20`).
+`core`); M7 901 on 61 (`core` + `core20`); M11.1 903 on 61.
 
 `core` has 644 `@Test` annotations but 642 tests: in `QueueHeaderTestsIT` and
 `TopicHeaderTestsIT` the annotation also sits on a private helper taking a parameter

@@ -20,6 +20,7 @@
 package io.vidocq.tassis.tck;
 
 import com.sun.ts.lib.porting.TSJMSObjectsInterface;
+import io.vidocq.tassis.core.TassisBroker;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.tassis.core.TassisQueue;
 import io.vidocq.tassis.core.TassisTopic;
@@ -32,13 +33,22 @@ import jakarta.jms.TopicConnectionFactory;
 /**
  * The TCK's porting class: hands the test suite the administered objects it asks
  * for by name. Selected by the property {@code porting.ts.jmsObjects.class.1} of the
- * harness. Every factory connects to the default in-VM broker, and a destination is
- * whatever name the TCK asks for, since Tassis creates destinations on first use.
+ * harness. Every factory connects to the default in-VM broker, secured with the user of the
+ * TCK's configuration, and a destination is whatever name the TCK asks for, since Tassis
+ * creates destinations on first use.
  */
 public final class TassisJmsObjects implements TSJMSObjectsInterface {
 
     /** The factory the TCK expects to come with a client identifier, for durable subscriptions. */
     private static final String DURABLE_FACTORY = "DURABLE_SUB_CONNECTION_FACTORY";
+
+    static {
+        // The TCK creates most of its connections without credentials, some with the user of its
+        // configuration, and expects ("invalid", "invalid") to be refused (§6.1.1).
+        TassisBroker.named(TassisConnectionFactory.DEFAULT_BROKER)
+                .addUser(System.getProperty("user", "j2ee"), System.getProperty("password", "j2ee"))
+                .allowAnonymous(true);
+    }
 
     private static TassisConnectionFactory factory(String name) {
         TassisConnectionFactory factory = new TassisConnectionFactory();

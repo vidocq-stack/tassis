@@ -259,9 +259,16 @@ public final class Broker {
     private final AtomicLong messageIds = new AtomicLong();
     private final AtomicLong temporaryIds = new AtomicLong();
     private long sequence;
+    private final Users users;
 
     private Broker(String name) {
         this.name = name;
+        this.users = new Users(name);
+    }
+
+    /** The user registry, which guards itself: it is neither read nor written under the broker lock. */
+    public Users users() {
+        return users;
     }
 
     /** Returns the broker of that name in this JVM, creating it on first use. */

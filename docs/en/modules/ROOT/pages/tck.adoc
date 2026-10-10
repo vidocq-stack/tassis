@@ -2,7 +2,7 @@
 :description: Where Tassis stands against the Jakarta Messaging 3.1 TCK: the runner, the current result, the tests not passed yet and the documented deviations.
 
 [.lead]
-Tassis has run the official Jakarta Messaging TCK at each milestone since M2. 901 of the 903 functional tests that apply to a Java SE provider pass, and the signature test passes. Two tests are not passed yet, so **Tassis does not claim compatibility**.
+Tassis has run the official Jakarta Messaging TCK at each milestone since M2. The 903 functional tests that apply to a Java SE provider pass, and the signature test passes. **Tassis does not claim compatibility**: that takes a certification request, which has not been made.
 
 The source of this page is `TCK.md` at the root of the repository, which is updated with each run. If the two differ, `TCK.md` is right.
 
@@ -14,9 +14,9 @@ The source of this page is `TCK.md` at the root of the repository, which is upda
 | TCK | `jakarta.tck:jms-tck:11.0.3`, with `jakarta.tck:common:11.0.8` (see <<deviations>>)
 | JDK | Temurin 25
 | Last run | 2026-10-10
-| Functional tests | **901 passed, 0 failed** out of 903: all of `core` (642 tests) and 259 of the 261 tests of `core20`
+| Functional tests | **903 passed, 0 failed** out of 903: all of `core` (642 tests) and of `core20` (261 tests)
 | Signature test | **Passed**: the package `jakarta.jms` of `jakarta.jms-api:3.1.0` against the TCK's `jakarta.jms.sig`
-| Not passed | 2 tests, excluded from the run: authentication, due with milestone M11
+| Not passed | None
 | Not applicable | The `ee` and `ee20` parts of the TCK, 255 test annotations: they need EJB, message-driven beans or a web container
 |===
 
@@ -52,20 +52,11 @@ The selection run by default is the property `tck.test` of `tassis-tck/pom.xml`:
 
 The tests read `jms_timeout`, how long they wait for a message, from a system property. `tassis-tck` sets it to 3000 ms; the default of the TCK is 10000.
 
-A full run reports 902 tests, because it also executes `PortingSmokeTest`, a test of the wiring itself. It takes about 13 minutes: many `core20` tests wait on purpose.
+A full run reports 904 tests, because it also executes `PortingSmokeTest`, a test of the wiring itself. It takes about 13 minutes: many `core20` tests wait on purpose.
 
-== Tests not passed
+== Authentication
 
-Two tests are excluded from the run. Both expect a user name and a password to be refused:
-
-[cols="2,2,3",options="header"]
-|===
-| Class | Tests | What they need
-
-| `core20/connectionfactorytests/ClientIT`
-| `createConnectionExceptionTests`, `createJMSContextExceptionTests`
-| A `JMSSecurityException` for the credentials `("invalid", "invalid")`. Tassis accepts any credentials today. Authentication is part of milestone M11.
-|===
+Two tests of `core20/connectionfactorytests/ClientIT`, `createConnectionExceptionTests` and `createJMSContextExceptionTests`, expect the credentials `("invalid", "invalid")` to be refused with a `JMSSecurityException`, while most of the suite connects without credentials and some of it with the user of its configuration. The porting class therefore secures the broker the way the suite expects a provider to be set up: it declares that user and allows anonymous connections. These two tests were excluded from the run until milestone M11.1.
 
 == Signature test
 

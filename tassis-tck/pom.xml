@@ -90,10 +90,7 @@
             **/core/selectorTopic/*IT,
             **/core/appclient/*/*IT,
             **/core20/*/*IT,
-            **/core20/appclient/*/*IT,
-            <!-- M11: authentication, which arrives with the network transport -->
-            !com.sun.ts.tests.jms.core20.connectionfactorytests.ClientIT#createConnectionExceptionTests,
-            !com.sun.ts.tests.jms.core20.connectionfactorytests.ClientIT#createJMSContextExceptionTests
+            **/core20/appclient/*/*IT
         </tck.test>
     </properties>
 
