@@ -466,6 +466,45 @@ and `createContext(user, password)` accept any credentials. To deliver:
 The `ExceptionListener` (§6.1.7), stored and never called so far, also gets its purpose here: a
 lost connection.
 
+### M11b — Connection pool
+
+Added on 2026-10-10. Tassis has no connection pool: every `createConnection()` and
+`createContext()` builds a new connection and nothing reuses one. With the in-VM broker that is
+harmless, since a connection is a small object and opens no socket. It stops being so with the
+network transport, where a connection is a socket, a handshake and an authentication: hence the
+place of this milestone, right after M11, and its number, which leaves M12 its own.
+
+The spec does not define pooling: in Jakarta EE it is the application server's job. Vidocq has
+no such layer for messaging, so Tassis provides it.
+
+To deliver:
+
+- [ ] A pooling `ConnectionFactory` that wraps a `TassisConnectionFactory`, probably in a module
+      of its own (`tassis-pool`) so that `tassis-core` keeps doing one thing. `close()` on what it
+      hands out returns the physical connection to the pool instead of closing it.
+- [ ] **What a logical close must undo**, so that the next borrower gets a clean connection: its
+      sessions, producers, consumers and browsers closed, its transactions rolled back, its
+      temporary destinations deleted, the connection stopped, its `ExceptionListener` removed.
+- [ ] **Client identifiers.** A client identifier belongs to one open connection at a time
+      (§6.1.2), and durable unshared subscriptions depend on it. Decide what a pooled connection
+      does with `setClientID` (refuse it, or dedicate the connection) and how a factory made
+      with `withClientID` pools, since it can only ever have one connection.
+- [ ] **Sizing and lifetime**: maximum size, what a borrower does when the pool is exhausted
+      (wait with a timeout, fail), idle eviction, and validation of a connection before it is
+      handed out, with the `ExceptionListener` as the signal that one was lost.
+- [ ] **The simplified API**: `createContext` served from the pool, with the connection shared
+      by the contexts created from one another counted as one borrowed connection.
+- [ ] **Virtual threads**: no `synchronized` around a wait, no `ThreadLocal`; a borrower blocked
+      on an exhausted pool must not pin its carrier.
+- [ ] Whether sessions are pooled too. To be decided by measurement (M12), not by default.
+
+To look at before designing: `mansart-pool`, the workspace's JDBC connection pool, for its
+sizing and eviction model. A dependency on it would have to be justified: the rule is that a
+brick depends on specs only.
+
+Relation to M9: the CDI injection of `JMSContext` works without a pool on the in-VM broker.
+Once this milestone lands, injected contexts should be served from it.
+
 ### M12 — Benchmarks
 
 JMH in `tassis-bench`, every figure recorded in `BENCH.md`, and the `performance` page of the
