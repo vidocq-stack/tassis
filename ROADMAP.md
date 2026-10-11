@@ -682,36 +682,78 @@ What it leaves for M11.3:
 
 #### M11.3 — AMQP 1.0
 
-To open with a study of its own, since several of the points below are recalled from the
-specifications and not yet checked against them:
+Opened by a study (2026-10-11) that checked against the texts what this roadmap had so far
+recalled from memory.
 
-- the AMQP 1.0 core (types, framing, transport, messaging, transactions, security) and how much
-  of it a broker must implement to be a conforming container;
-- the **JMS mapping**. AMQP 1.0 defines no queue, topic, selector or durable subscription; the
-  conventions that give JMS its semantics (destination and message type annotations, selector
-  and no-local filters, shared subscriptions, temporary destinations as dynamic nodes, delivery
-  delay) come from the OASIS AMQP JMS Mapping, which to our knowledge never left working-draft
-  status, and from what existing brokers and Apache Qpid JMS agreed on in practice;
-- **delivery by credit**: AMQP pushes messages against the credit a receiver grants. A
-  synchronous `receive` on top of it means either a credit of one per call, or a prefetch whose
-  messages another consumer cannot see meanwhile. To be settled with the TCK in hand, then
-  measured in M12;
-- local transactions through the transaction coordinator, and what M13 (XA) can expect, since
-  AMQP 1.0 leaves distributed transactions largely unspecified.
+**What the standard says** (OASIS Standard, 29 October 2012; parts 1 to 5):
 
-To deliver:
+- A conformant implementation must implement the types (part 1) and the transport (part 2), and
+  the messaging part (3) as soon as it processes messages. Transactions (4) and security (5) are
+  recommended, not required.
+- There is no client and no broker on the wire: two symmetric peers. One codec serves both.
+- Transport: an 8-byte protocol header, frames with a channel, nine performatives (`open`,
+  `begin`, `attach`, `flow`, `transfer`, `disposition`, `detach`, `end`, `close`), heartbeats as
+  empty frames, a frame size of 512 bytes until negotiated. Link recovery after a failure is
+  optional, and left out.
+- Local transactions: a control link to a coordinator, `declare` then `discharge`. That covers
+  the transacted sessions.
+- **Distributed transactions are not specified**: part 4 defers them to a "part 6" that is not
+  among the parts of the standard. XA (M13) therefore cannot go through AMQP in a standard way.
+- Security: TLS and SASL strongly recommended for a server, with PLAIN and SCRAM-SHA1. PLAIN
+  inside optional TLS, as decided, conforms; SCRAM can be added later.
 
-- [ ] The codec, the server on virtual threads, and the client transport, selected by the
-      connection URL beside `tassis:vm:`.
-- [ ] SASL PLAIN and ANONYMOUS over the registry of M11.1; optional TLS.
-- [ ] Where the server lives: a module of its own (`tassis-server`), `tassis-core` keeping the
-      client and the in-VM broker. To be confirmed in plan mode, as any new module.
-- [ ] The `ExceptionListener` (§6.1.7), stored and never called so far, gets its purpose: a
-      lost connection. Heartbeats, to notice one.
-- [ ] **Proof: the whole TCK replayed through the network transport**, besides the in-VM run.
-- [ ] Interoperability with a client that is not Tassis, as a test outside the reactor: it is
-      the reason AMQP was chosen, and it needs a third-party client that must not become a
-      dependency.
+**The JMS mapping is not a standard.** The OASIS "AMQP JMS Mapping" stayed a working draft (the
+last one found is WD07, February 2017). The reference in practice is the code of Apache Qpid
+JMS, where these conventions were read (2026-10-11, `AmqpSupport`, `AmqpMessageSupport`,
+`AmqpDestinationHelper` on its main branch):
+
+| JMS need | Convention |
+|---|---|
+| Message type | message annotation `x-opt-jms-msg-type` |
+| Destination type | message annotations `x-opt-jms-dest`, `x-opt-jms-reply-to` (0 queue, 1 topic, 2 temporary queue, 3 temporary topic); terminus capabilities `queue`, `topic`, `temporary-queue`, `temporary-topic` |
+| Selector | source filter `jms-selector`, descriptor `apache.org:selector-filter:string` (0x0000468C00000004) |
+| `noLocal` | source filter `no-local`, descriptor `apache.org:no-local-filter:list` (0x0000468C00000003) |
+| Shared subscriptions | source capabilities `shared`, `global`; connection capability `SHARED-SUBS` |
+| Delivery delay | message annotation `x-opt-delivery-time`; connection capability `DELAYED_DELIVERY` |
+| One connection per client identifier | `container-id`, connection capability `sole-connection-for-container` |
+| Producer without a destination | connection capability `ANONYMOUS-RELAY` |
+| Temporary destinations | dynamic nodes, with a `lifetime-policy` |
+| Queue browser | distribution mode `copy` |
+
+Still to check in that code: the numeric values of the message types, how the names of JMS
+headers are written inside a selector, and how a durable subscription is named on the link.
+
+**Delivery by credit.** AMQP pushes messages against the credit a receiver grants; Qpid JMS
+prefetches 1000 messages per consumer by default. The Tassis client will do the opposite at
+first: credit on demand, one message per `receive`, and `drain` for `receiveNoWait`, which keeps
+today's semantics and the TCK. Prefetch becomes an option, to be measured in M12.
+
+**Decided with the maintainer** (2026-10-11):
+
+| Topic | Decision |
+|---|---|
+| Scope | **Both directions**: a Tassis broker accepts third-party AMQP clients, and the Tassis client works against a third-party AMQP broker. |
+| Modules | **`tassis-amqp`** (the codec and the client transport) and **`tassis-server`** (the broker's listener). `tassis-core` stays without a socket; a remote client does not carry the server. |
+| Interoperability tests | A **test module that is never published**, behind a Maven profile, may depend on third-party tools (Qpid JMS as a client; a third-party broker in Docker or locally). Nothing third-party enters the delivered artifacts. |
+
+The seam of M11.2 stands: nothing in the study asks for it to be reshaped before starting.
+
+Slices, each merged on its own with the TCK green, each opened in plan mode since they add
+modules:
+
+- [ ] **M11.3a — The codec** (`tassis-amqp`): types, frames, performatives, message sections.
+      Pure code, tested on byte vectors.
+- [ ] **M11.3b — The server, queues only** (`tassis-server`): SASL PLAIN and ANONYMOUS over the
+      registry of M11.1, connection, session, links, credit, settlement. First
+      interoperability test, with Qpid JMS as the client.
+- [ ] **M11.3c — The rest of the mapping, server side**: topics, subscriptions, selectors,
+      `noLocal`, temporary destinations, transactions, browsing, delivery delay.
+- [ ] **M11.3d — The Tassis client over AMQP**: the client transport behind
+      `BrokerConnection`, selected by the connection URL beside `tassis:vm:`; optional TLS;
+      heartbeats; the `ExceptionListener` (§6.1.7), stored and never called so far, for a lost
+      connection. **Proof: the whole TCK replayed through the network**, besides the in-VM run.
+- [ ] **M11.3e — The Tassis client against a third-party broker**: what differs from one
+      broker to another in the conventions above, found by running against a real one.
 
 ### M11b — Connection pool
 
@@ -801,8 +843,11 @@ To settle when the milestone opens:
   `standalone` mode, and their 903 tests pass (see `TCK.md`); `ee` and `ee20` stay out of
   reach.
 - **AMQP 1.0 without a dependency** (M11.3) is a large body of protocol code to write and to
-  keep correct, and its JMS mapping rests on conventions rather than on a standard. The slice
-  opens with a study, and interoperability is tested against a real third-party client.
+  keep correct, and its JMS mapping rests on conventions rather than on a standard: those of
+  Apache Qpid JMS, which each broker follows more or less. Interoperability is tested against
+  real third-party peers, in both directions.
+- **XA over the network** (M13) has no standard to rest on: AMQP 1.0 leaves distributed
+  transactions unspecified.
 - **No JNDI in Vidocq**: `@JMSConnectionFactoryDefinition` / `@JMSDestinationDefinition` are
   Jakarta EE resource definitions and stay unimplemented unless a milestone is opened for them.
 - **`requires static transitive java.transaction.xa`** in the API module: the XA types are
