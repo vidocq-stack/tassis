@@ -10,7 +10,7 @@ Nothing to migrate: no version has been published. This section will get its fir
 
 == From another Jakarta Messaging provider
 
-Migrating a production application is premature: read the xref:reference.adoc#limits[limits] first. Messages do not survive the JVM, and the broker is only reachable from the JVM it runs in.
+Migrating a production application is premature: read the xref:reference.adoc#limits[limits] first. Messages do not survive the JVM, and the network transport serves queues only, without encryption.
 
 === What stays the same
 
@@ -57,8 +57,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | None
 
 | A broker shared by several processes or machines
-| The broker is in the JVM of the application, and only there
-| M11.3
+| `TassisServer` opens a broker to AMQP 1.0 clients, for queues and without encryption. The Tassis client itself reaches the broker of its own JVM only
+| M11.3c, M11.3d
 
 | Authentication
 | Supported once users are declared on the broker with `TassisBroker`; until then any user name and password are accepted. Users live in memory and are declared by the application, not in a file

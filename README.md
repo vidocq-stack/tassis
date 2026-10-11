@@ -62,7 +62,8 @@ the Italian *Tasso* and the German *Taxis*.
 - **Zero third-party dependency**: `tassis-core` compiles against `jakarta.jms-api` and nothing
   else. No CDI, no JNDI, no library; the message selector parser is written by hand.
 - **A broker of its own**, in the JVM and entirely in memory: it writes nothing to the file
-  system, by design. A network transport over AMQP 1.0 (M11.3) is on the roadmap.
+  system, by design. It can be opened to the network with AMQP 1.0, a standard protocol:
+  the clients need nothing of Tassis.
 - **Java Modules-first**: every artifact is an explicit Java module. `io.vidocq.tassis.core`
   exports one package, which holds the three classes an application names, and opens none.
 - **Virtual threads**: the threads Tassis creates, for message listeners and completion
@@ -72,8 +73,8 @@ the Italian *Tasso* and the German *Taxis*.
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. The network transport is not
-implemented yet. Messages live in memory and do not survive the JVM: that
+🚧 **In development, not released.** No artifact is published. The network transport is partial:
+queues only, no encryption. Messages live in memory and do not survive the JVM: that
 one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
 the milestones, and the limits a user must know are in the
 [reference](docs/en/modules/ROOT/pages/reference.adoc).
@@ -227,6 +228,26 @@ factory.createContext();                      // refused too, unless allowAnonym
 Users live in memory and every user has the same rights: see
 [Authentication](docs/en/modules/ROOT/pages/usage.adoc) in the documentation.
 
+### Opening the broker to the network
+
+`TassisServer`, in `tassis-server`, opens a broker to other processes over AMQP 1.0:
+
+```java
+try (TassisServer server = TassisServer.forBroker("orders").port(5672).start()) {
+    // any AMQP 1.0 client reaches the broker "orders" at amqp://this-host:5672
+}
+```
+
+A client needs nothing of Tassis. With Apache Qpid JMS, for instance:
+
+```java
+ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
+```
+
+Queues only for now, and **nothing is encrypted yet**: the server listens on the loopback
+address unless told otherwise. See
+[Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
+
 ## Architecture
 
 ```mermaid
@@ -251,7 +272,8 @@ tassis/
 ├── tassis-api            Aggregator: re-exposes jakarta.jms-api, a Java module upstream
 ├── tassis-core           The provider: administered objects, client API, in-VM broker,
 │                         message model, selectors
-├── tassis-amqp           AMQP 1.0, written from scratch: the codec so far (M11.3)
+├── tassis-amqp           AMQP 1.0, written from scratch: the codec and the mapping of messages
+├── tassis-server         TassisServer: opens a broker to AMQP 1.0 clients
 ├── tassis-cdi-vauban     JMSContext injection (§12.4) for applications on Vauban
 ├── tassis-cdi-vauban-module-it   Its proof on the module path; never published
 ├── tassis-examples       The examples of the documentation, compiled and run by the build
@@ -288,7 +310,9 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Priority, expiration, delivery delay | ✅ |
 | Persistence across a restart | Not planned: the broker is in memory by design |
 | Authentication (user registry per broker, `TassisBroker`) | ✅ |
-| Network transport, over AMQP 1.0 | M11.3: the codec is written, the server and the client are next |
+| A broker open to AMQP 1.0 clients: queues | ✅ |
+| Over AMQP: topics, selectors, transactions, temporary destinations, browsers | M11.3c |
+| Over AMQP: TLS, and the Tassis client itself | M11.3d |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |

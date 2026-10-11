@@ -65,6 +65,20 @@ public final class TassisObjectMessage extends TassisMessage implements ObjectMe
         }
     }
 
+    /**
+     * The body as it is held: the serialized form of the object, or {@code null} for none.
+     * This is what travels: a broker carries an object message without ever deserializing it.
+     */
+    public byte[] serialized() {
+        return serialized == null ? null : serialized.clone();
+    }
+
+    /** Sets the body from the serialized form of an object, which is not looked into. */
+    public void setSerialized(byte[] serializedObject) throws JMSException {
+        checkBodyWritable();
+        serialized = serializedObject == null ? null : serializedObject.clone();
+    }
+
     @Override
     TassisMessage newInstance() {
         return new TassisObjectMessage();

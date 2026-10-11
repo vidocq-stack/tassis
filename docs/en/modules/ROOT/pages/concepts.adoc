@@ -6,11 +6,11 @@ This page explains the model behind the API: where messages are, when a destinat
 
 == The in-VM broker
 
-Tassis is a provider, not a client library for another broker: the broker is part of `tassis-core` and runs in the JVM of the application. Its queues, subscriptions and messages are Java objects in the heap of that JVM. Nothing is written to disk and nothing goes through the network.
+Tassis is a provider, not a client library for another broker: the broker is part of `tassis-core` and runs in the JVM of the application. Its queues, subscriptions and messages are Java objects in the heap of that JVM. Nothing is written to disk, and nothing goes through the network unless the application opens the broker to it.
 
 Two consequences follow, both listed among the xref:reference.adoc#limits[limits]:
 
-* a broker is only reachable from its own JVM (the network transport is milestone M11.3);
+* a broker is reachable from its own JVM, and from other processes only once a `TassisServer` opens it to them, for queues so far (see xref:usage.adoc#network[Opening a broker to the network]);
 * messages and durable subscriptions do not survive the JVM. This is a design decision, not a milestone to come: Tassis writes nothing to the file system.
 
 === Broker names

@@ -12,9 +12,13 @@
 
     <artifactId>tassis-amqp</artifactId>
     <name>Tassis :: AMQP</name>
-    <description>AMQP 1.0 for Tassis: the codec (types, frames, performatives, message sections), see ROADMAP M11.3</description>
+    <description>AMQP 1.0 for Tassis: the codec (types, frames, performatives, message sections) and the mapping of Jakarta Messaging messages, see ROADMAP M11.3</description>
 
     <dependencies>
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-core</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

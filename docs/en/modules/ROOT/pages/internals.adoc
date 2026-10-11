@@ -12,7 +12,8 @@ For contributors: where the code lives and the rules it obeys. Users do not need
 
 | `tassis-api` | Aggregator: `requires transitive jakarta.messaging`. It holds no class of its own; the API artifact `jakarta.jms-api` is a Java module upstream and is not forked.
 | `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
-| `tassis-amqp` | AMQP 1.0, written from scratch. So far the codec only: nothing in it is used by the provider yet. See <<amqp>>.
+| `tassis-amqp` | AMQP 1.0, written from scratch: the codec, and how a Jakarta Messaging message travels as an AMQP one. See <<amqp>>.
+| `tassis-server` | `TassisServer`: the listener that opens a broker to AMQP 1.0 clients. See <<server>>.
 | `tassis-cdi-vauban` | The injection of `JMSContext`: a producer, a request-scoped holder of the contexts of a request, and the facade that is injected. See <<injection>>.
 | `tassis-cdi-vauban-module-it` | The proof of the above on the module path: an application module whose beans are processed at build time. Never published.
 | `tassis-bench` | Placeholder without sources. JMH benchmarks are milestone M12.
@@ -186,7 +187,7 @@ Nothing is reflective. Vauban's annotation processor generates, in the package o
 [#amqp]
 == The AMQP 1.0 codec
 
-`tassis-amqp` (Java module `io.vidocq.tassis.amqp`) is the start of the network transport of milestone M11.3. It depends on nothing, not even on `tassis-core` or on the Jakarta Messaging API: it knows AMQP 1.0 and nothing of JMS. It exports nothing yet, and no connection, session or link exists: it reads and writes octets.
+`tassis-amqp` (Java module `io.vidocq.tassis.amqp`) reads and writes what AMQP 1.0 puts on the wire. It holds no connection, session or link: those are the server's. It exports its packages to `tassis-server` only, and depends on `tassis-core` for one package, `internal.jms`.
 
 [cols="1,3",options="header"]
 |===
@@ -206,6 +207,9 @@ Nothing is reflective. Vauban's annotation processor generates, in the package o
 
 | `internal.security`
 | The five bodies of a SASL frame (part 5).
+
+| `internal.jms`
+| `JmsMessageCodec`: a `TassisMessage` as an `AmqpMessage`, and back. AMQP defines no such mapping; the conventions are those of Apache Qpid JMS: an annotation for the type of message, two for the kind of destination, the header fields of JMS spread over the header and the properties sections. An object message travels as its serialized form and is never deserialized on the way.
 |===
 
 `AmqpTypes.ALL` is the registry of the 40 described types Tassis knows, by numeric and by symbolic descriptor. A described value whose descriptor it does not know stays a `Described`, as the specification asks.
@@ -224,6 +228,44 @@ The proof that these octets are AMQP 1.0, and not a private reading of it, is in
 ----
 ./mvnw -Pinterop -pl tassis-interop -am verify
 ----
+
+[#server]
+== The AMQP server
+
+`tassis-server` puts a listener in front of a broker. It is a client of `BrokerConnection`, the seam of milestone M11.2, exactly as the client objects of `tassis-core` are, and it added nothing to that interface.
+
+Each connection, an `AmqpConnection`, is served by virtual threads of three kinds:
+
+* the **reader** reads the frames and does what each asks. It never writes to the socket, so a client that does not read cannot hold it up;
+* the **writer** writes the frames the others queue, in the order they were queued, and an empty frame when it has had nothing to write for half the time-out the client announced;
+* one **pump** per link the client receives by (`OutgoingLink`) takes messages from the broker and queues their transfers, for as long as the client has credit.
+
+One lock per connection guards its sessions, its links, their credit and the deliveries sent and not settled. It is taken before the broker's lock, never after, and is not held while waiting for the broker or for the socket.
+
+How AMQP meets the seam:
+
+[cols="1,1",options="header"]
+|===
+| AMQP | `BrokerConnection`
+
+| SASL `PLAIN` or `ANONYMOUS` | `Broker.connect(user, password)`
+| `open` asking for `sole-connection-for-container` | `claimClientId(container-id)`
+| A transfer on a link the client sends by | `send`, then a disposition `accepted`
+| `attach` of a link the client receives by | `attach(queue)`
+| Credit granted with `flow` | `Consumer.listen(true)` and `take(period)` by the pump
+| Credit taken back, or `drain` | `Consumer.listen(false)`, which ends the pump's wait
+| Disposition `accepted`, or `rejected` | `settle`
+| Disposition `released` | `returnUndelivered`
+| Disposition `modified` | `redeliver`, or `settle` if the client will never take the message
+| `detach`, `end` | `Consumer.close()`, and `redeliver` of what the link had not settled
+| `close`, or the socket lost | `close()`, which takes back whatever is left
+|===
+
+The listening period of `Consumer.listen`, made for message listeners, is what delivery by credit needed: the reader changes the state of the link, then ends the period, and the pump either sees the state or has its wait ended.
+
+A link Tassis does not serve yet is refused the way AMQP prescribes, attached with nothing at the server's end and detached with `amqp:not-implemented`, which leaves the session usable. What a peer does out of place ends the connection with the matching error. `Limits` holds what the server announces and accepts.
+
+`TassisServerTest` drives the server frame by frame with the codec. `QpidJmsAgainstTassisTest`, in `tassis-interop`, runs Apache Qpid JMS against it.
 
 == House rules
 

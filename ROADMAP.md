@@ -743,9 +743,9 @@ modules:
 
 - [x] **M11.3a — The codec** (`tassis-amqp`): types, frames, performatives, message sections.
       Pure code, with no dependency, not even on `tassis-core`. See below.
-- [ ] **M11.3b — The server, queues only** (`tassis-server`): SASL PLAIN and ANONYMOUS over the
-      registry of M11.1, connection, session, links, credit, settlement. First
-      interoperability test, with Qpid JMS as the client.
+- [x] **M11.3b — The server, queues only** (`tassis-server`): SASL PLAIN and ANONYMOUS over the
+      registry of M11.1, connection, session, links, credit, settlement. Apache Qpid JMS as the
+      client. See below.
 - [ ] **M11.3c — The rest of the mapping, server side**: topics, subscriptions, selectors,
       `noLocal`, temporary destinations, transactions, browsing, delivery delay.
 - [ ] **M11.3d — The Tassis client over AMQP**: the client transport behind
@@ -787,6 +787,61 @@ What it taught, for the next slices:
   to M11.3b, with the virtual threads that will do it.
 - Not done: `declare.global-id` is carried as any value and was not crossed with Proton-J,
   which types it for distributed transactions, a part AMQP 1.0 leaves unspecified.
+
+#### M11.3b — The server, queues only ✅
+
+- [x] `TassisServer`, the one public class of the new module `tassis-server`:
+      `TassisServer.forBroker(name).port(n).start()`. It listens on the loopback address unless
+      told otherwise, since nothing is encrypted yet.
+- [x] The opening of a connection: protocol headers, SASL `PLAIN` and `ANONYMOUS` over the user
+      registry, `open` and `close`, heartbeats, `sole-connection-for-container` for the client
+      identifier (§6.1.2).
+- [x] Sessions and links: a client sends to a queue (credit granted and renewed, messages in
+      several frames, anonymous relay) and receives from one (delivery by credit, `drain`,
+      every outcome of a delivery, messages split to the client's frame size).
+- [x] **A client that goes away loses nothing**: detach, end, close or a lost socket give back
+      what was not settled. This is what M11.2 had prepared, and it took no change to
+      `BrokerConnection`.
+- [x] `JmsMessageCodec` (`tassis-amqp`, `internal.jms`): a JMS message as an AMQP one and back,
+      on the conventions of Apache Qpid JMS; a message of a client that is not a JMS one is
+      classed by its body. An object message is never deserialized on the way.
+- [x] What is not served yet is **refused per link** (`amqp:not-implemented`) and leaves the
+      connection usable: topics, selectors, browsers, temporary destinations, transactions.
+- [x] Proof: `TassisServerTest`, frame by frame; and in `tassis-interop`, **Apache Qpid JMS
+      against `TassisServer`**: every kind of message, header fields and properties, priority,
+      expiration, `receive` / `receiveNoWait` / listener, acknowledgement and `recover`, a
+      large message, authentication, client identifiers, and an exchange with a Tassis client
+      of the JVM.
+
+What it changed outside the new module, and what it taught:
+
+- **`tassis-core` gained two accessors**, not none as planned: `Broker.name()`, and
+  `TassisObjectMessage.serialized()` / `setSerialized(byte[])`, without which an object message
+  could only cross a broker by being deserialized there. Both are in internal packages.
+- **`tassis-amqp` now depends on `tassis-core`**, for `internal.jms`: the mapping is shared by
+  the server and, in M11.3d, by the client transport.
+- **The reader never writes.** Were replies written from the reading thread, a client that
+  stops reading would block it, and with it everything else of that connection. All writes go
+  through one queue and one writer thread, which also gives the frames their order.
+- **The last frames must outlive the reader**: closing the input stream closes the socket, and
+  a `close` or a refused `sasl-outcome` was lost with it. The writer closes the socket.
+- **A client answers the detach that refuses its link**, and may have sent credit for it
+  meanwhile: neither is an error. Qpid JMS showed it; the frame-by-frame tests had not.
+- **Prefetch and redelivery.** A client that prefetches, as Qpid JMS does by 1000, may be sent
+  again a message it gives back while it closes: `JMSXDeliveryCount` can grow by more than one.
+- **Message identifiers**: a string that starts with `ID:` travels as it is; the other AMQP
+  types of identifier are kept in the text (`ID:AMQP_UUID:...`), which Qpid JMS reads the same
+  way. Checked against the client, not against its source.
+- **The concurrency review found two defects of delivery**, both reproduced by a test before
+  being fixed: two links of one session that had waited for the client's window could be given
+  the same delivery identifier, and a message longer than that window was never sent. A
+  delivery now takes its identifier once it has room to start, and its frames go as the window
+  opens.
+- **A message rejected, or declared undeliverable, by a client is dropped**: there is no
+  dead-letter queue. To be decided when it matters.
+- Not done, and not planned in this slice: the limits of `Limits` are not configurable; a
+  `Settings`-like description of a server belongs with the client transport of M11.3d, which
+  needs the same URL.
 
 ### M11b — Connection pool
 

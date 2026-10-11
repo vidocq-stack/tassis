@@ -452,6 +452,51 @@ What to know:
 
 With CDI, `@JMSPasswordCredential` gives the credentials of an injected context. An injection point without it connects without credentials, which a secured broker refuses unless it allows anonymous connections.
 
+[#network]
+== Opening a broker to the network
+
+A broker lives in a JVM. `TassisServer`, in the module `tassis-server`, opens it to other processes: it listens on a port and speaks AMQP 1.0, a standard protocol, so the clients need nothing of Tassis.
+
+[source,java]
+----
+try (TassisServer server = TassisServer.forBroker("orders").port(5672).start()) {
+    // clients connect to amqp://this-host:5672 until the server is closed
+}
+----
+
+The broker is the one `new TassisConnectionFactory("orders")` reaches in the same JVM: an application that starts a server keeps using its broker directly, and the clients of the network share its queues.
+
+A client is any AMQP 1.0 client. With Apache Qpid JMS, a Jakarta Messaging client, an application on another machine writes ordinary Jakarta Messaging code:
+
+[source,java]
+----
+ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
+try (JMSContext context = factory.createContext()) {
+    context.createProducer().send(context.createQueue("orders"), "hello");
+}
+----
+
+[cols="1,3",options="header"]
+|===
+| Setting | Meaning
+
+| `port(int)`
+| The port to listen on. 5672, the port of AMQP, by default; 0 for any free port, which `server.port()` then tells.
+
+| `host(String)`
+| The address to listen on. **The loopback address by default**, which only the machine itself reaches. `"0.0.0.0"` listens on every interface.
+|===
+
+What to know:
+
+* **Nothing is encrypted yet.** Messages and passwords travel in clear. That is why the server listens on the loopback address unless told otherwise: open it to a network you trust, or put it behind a tunnel. Encryption with TLS is milestone M11.3d.
+* **The users are those of the broker.** A secured broker (see <<authentication>>) asks a client of the network for the name and the password of a declared user, and offers anonymous access only if it allows it. A refused client gets a `JMSSecurityException` from its own provider.
+* **Queues only, for now.** A client can do this: sending to a queue and receiving from one, with every kind of message, the header fields and the properties, and acknowledgement. These are refused with an error, and leave the connection usable: topics and subscriptions, message selectors, temporary destinations, transactions and queue browsers. They are milestone M11.3c.
+* **A client that vanishes loses nothing.** What it had received and not acknowledged goes back to its queue and is delivered again, marked as a redelivery.
+* **A client that prefetches may see a message more than once.** A client such as Qpid JMS asks for many messages ahead of the application. A message it gives back while it closes can be sent to it again before it is gone, so `JMSXDeliveryCount` may grow by more than one.
+* **Closing the server ends the connections, not the broker.** The messages stay, for the clients of the JVM and for a server started later.
+* **The Tassis client itself does not use the network yet**: `TassisConnectionFactory` reaches the broker of its own JVM. A Tassis client over AMQP is milestone M11.3d.
+
 [#injection]
 == Injecting `JMSContext` with CDI
 

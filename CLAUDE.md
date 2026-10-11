@@ -35,7 +35,7 @@ sdk env
 # Another TCK selection
 ./run-official-tck-messaging-3.1.sh -Dtck.test='**/core/selectorQueue/*IT'
 
-# Interoperability tests of the AMQP codec (Proton-J, embedded Artemis)
+# Interoperability tests (Proton-J, embedded Artemis, Qpid JMS against TassisServer)
 ./mvnw -ntp -Pinterop -pl tassis-interop -am verify
 ```
 
@@ -45,15 +45,16 @@ sdk env
 ## Architecture
 
 Tassis is a **Jakarta Messaging 3.1 provider** with **zero third-party dependency**. Being a
-provider, it ships its own broker: in-VM and entirely in memory, network transport later,
-over AMQP 1.0 (ROADMAP M11.3).
+provider, it ships its own broker: in-VM and entirely in memory, opened to the network over
+AMQP 1.0 by `tassis-server` (ROADMAP M11.3: queues so far).
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
                      TassisTopic), broker administration (TassisBroker),
                      internal.message, internal.broker, internal.client, internal.selector
-tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec so far, used by nothing yet
+tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec, and JMS messages as AMQP ones
+tassis-server      ← TassisServer: the listener that opens a broker to AMQP 1.0 clients
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
 tassis-bench       ← Placeholder — JMH (M12)
@@ -69,12 +70,14 @@ a milestone.
 ## Architecture Constraints Not to Violate
 
 1. **`tassis-core` depends on nothing beyond `jakarta.jms-api`** — no CDI, no JNDI, no
-   third-party library. `tassis-amqp` depends on nothing at all. Third-party code is allowed
+   third-party library. `tassis-amqp` and `tassis-server` depend on Tassis modules only. Third-party code is allowed
    in one place, `tassis-interop`, in test scope: that module is never published and is not
    part of the default build.
-2. **`io.vidocq.tassis.core` is the only exported package**, and holds only what an
-   application must name (the administered objects, and `TassisBroker`). Everything else
-   lives under `io.vidocq.tassis.core.internal.*`.
+2. **`io.vidocq.tassis.core` is the only package exported to applications**, and holds only
+   what an application must name (the administered objects, and `TassisBroker`). Everything
+   else lives under `io.vidocq.tassis.core.internal.*`; two of those packages are exported
+   to `tassis-amqp` and `tassis-server` by name, and to nobody else. Likewise `tassis-server`
+   exports one package with one class, `TassisServer`.
 3. **Unimplemented API methods throw `UnsupportedOperationException` with a ROADMAP
    pointer** (`"...: see ROADMAP M2"`), never a stub that silently returns wrong data.
    Replace the exception only when implementing the milestone.
@@ -200,8 +203,9 @@ equal keys share a context within a request. Rules:
 
 The codec of the network transport (ROADMAP M11.3): `internal.types` (values, `AmqpEncoder`,
 `AmqpDecoder`), `internal.transport` (frames, performatives), `internal.messaging`,
-`internal.transactions`, `internal.security`. It knows AMQP and nothing of JMS, and exports
-nothing yet. Rules:
+`internal.transactions`, `internal.security`; and `internal.jms`, the one package that knows
+JMS: `JmsMessageCodec`, a `TassisMessage` as an AMQP message and back, on the conventions of
+Apache Qpid JMS. Exported to `tassis-server` only. Rules:
 
 - **The specification is the source.** A format code, a descriptor, the order of the fields of
   a composite type are written from the OASIS text, and the test that covers them cites the
@@ -215,7 +219,34 @@ nothing yet. Rules:
   and report whatever is wrong as an `AmqpDecodeException`: no other exception may come out
   because of what a peer sent. Any change there adds its case to `HostileInputTest`.
 - **No reflection**: a record lists its own fields.
+- **An object message is never deserialized on the way**: it travels as its serialized form
+  (`TassisObjectMessage.serialized()`). Deserializing what a client sent would hand the broker
+  to whoever can connect.
 - A change to the codec is proven twice: `./mvnw install`, and the `interop` profile.
+
+## The AMQP server (`tassis-server`)
+
+`TassisServer` listens; each client is an `AmqpConnection`, which is a client of
+`BrokerConnection` like `internal.client` is. Rules:
+
+- **Three kinds of virtual thread per connection.** The reader handles frames and **never
+  writes to the socket**: it queues. The writer alone writes, in queue order. One pump per link
+  the client receives by (`OutgoingLink`).
+- **One lock per connection** (`AmqpConnection.lock`) guards sessions, links, credit and the
+  unsettled deliveries. Order: that lock, then the broker lock. Never hold it while waiting for
+  the broker (`take`, `receive`) or for the socket.
+- **Credit is the reader's to change, the pump's to use.** The reader changes the link under
+  the lock, then calls `Consumer.listen(false)`; the pump calls `listen(true)`, then asks
+  `mayDeliver` before `take(period)`. Keep both orders: they are what closes the race.
+- **A delivery taken from the broker always ends somewhere**: sent and recorded in
+  `session.unsettled`, or `returnUndelivered`. A link, a session or a connection that ends
+  gives back what it had not settled.
+- **Refuse, do not fail.** What is not served yet is refused per link (`refuse`:
+  `amqp:not-implemented`), which leaves the session usable; only what is out of place ends the
+  connection (`AmqpFailure`).
+- What the server announces and accepts is in `Limits`, and nowhere else.
+- A change here is proven three times: `TassisServerTest` (frame by frame), the `interop`
+  profile (Apache Qpid JMS as the client), and the TCK, since the broker is shared.
 
 ## Selectors (`internal.selector`)
 
@@ -230,7 +261,7 @@ its evaluation, where `null` is SQL's NULL / unknown. A subscription filters at 
 - **Maven groupId**: `io.vidocq.tassis`. Version `0.4.0-SNAPSHOT`, parent
   `io.vidocq:vidocq-parent:0.4.0-SNAPSHOT`.
 - **Java modules**: `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.amqp`,
-  `io.vidocq.tassis.cdi.vauban`.
+  `io.vidocq.tassis.server`, `io.vidocq.tassis.cdi.vauban`.
 - **Licence header** on every Java file (`etc/license-header.txt`, checked by the build).
 
 ## TDD — Test-Driven Development (mandatory)

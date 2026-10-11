@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.vidocq.tassis</groupId>
+        <artifactId>tassis-parent</artifactId>
+        <version>0.4.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>tassis-server</artifactId>
+    <name>Tassis :: Server</name>
+    <description>Opens a Tassis broker to the network: a listener that speaks AMQP 1.0, see ROADMAP M11.3</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-amqp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

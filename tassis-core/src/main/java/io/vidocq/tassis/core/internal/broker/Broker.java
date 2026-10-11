@@ -285,6 +285,11 @@ public final class Broker {
         return users;
     }
 
+    /** The name this broker is known by in its JVM. */
+    public String name() {
+        return name;
+    }
+
     /** Returns the broker of that name in this JVM, creating it on first use. */
     public static Broker named(String name) {
         return BROKERS.computeIfAbsent(name, Broker::new);

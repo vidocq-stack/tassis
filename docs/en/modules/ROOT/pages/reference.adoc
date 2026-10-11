@@ -18,6 +18,12 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `io.vidocq.tassis:tassis-api:{project-version}`
 | Aggregator of the specification API. A dependency of `tassis-core`; it brings `jakarta.jms:jakarta.jms-api:3.1.0`.
 
+| `io.vidocq.tassis:tassis-server:{project-version}`
+| `TassisServer`, which opens a broker to the network with AMQP 1.0. Declared in addition to `tassis-core` by the application that hosts a broker for others. It brings `tassis-amqp`. See xref:usage.adoc#network[Usage].
+
+| `io.vidocq.tassis:tassis-amqp:{project-version}`
+| AMQP 1.0, written for Tassis. A dependency of `tassis-server`; an application names nothing in it.
+
 | `io.vidocq.tassis:tassis-cdi-vauban:{project-version}`
 | The injection of `JMSContext` with CDI, for an application on Vauban. Declared in addition to `tassis-core` by the applications that inject. See xref:usage.adoc#injection[Usage].
 |===
@@ -32,13 +38,19 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `requires transitive jakarta.messaging`. No package of its own.
 
 | `io.vidocq.tassis.core`
-| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported, and no package is opened.
+| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported to applications, and no package is opened. Two internal packages are exported to the modules of the network transport only.
+
+| `io.vidocq.tassis.server`
+| `requires io.vidocq.tassis.core` and `io.vidocq.tassis.amqp`, `exports io.vidocq.tassis.server`. No package is opened.
+
+| `io.vidocq.tassis.amqp`
+| `requires io.vidocq.tassis.core`. Its packages are exported to `io.vidocq.tassis.server` only.
 
 | `io.vidocq.tassis.cdi.vauban`
 | `requires transitive io.vidocq.tassis.core`, `requires static` the CDI, injection and annotation APIs and `io.vidocq.vauban.api`, `exports io.vidocq.tassis.cdi`, and provides a `VaubanComponentProvider`. No package is opened.
 |===
 
-An application module declares `requires io.vidocq.tassis.core;`, and `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`.
+An application module declares `requires io.vidocq.tassis.core;`, `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`, and `requires io.vidocq.tassis.server;` when it opens a broker to the network.
 
 == Administered objects
 
@@ -135,6 +147,51 @@ Implements `Topic`.
 |===
 
 `Session.createTopic(name)` and `JMSContext.createTopic(name)` return a `TassisTopic`.
+
+[#tassis-server]
+== `TassisServer`
+
+In the module `tassis-server`, package `io.vidocq.tassis.server`. See xref:usage.adoc#network[Opening a broker to the network].
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisServer.forBroker(String brokerName)`
+| Starts describing a server for the broker of that name in this JVM. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
+
+| `port(int)` (on the builder)
+| The port to listen on: `TassisServer.DEFAULT_PORT` (5672) by default, 0 for any free port. Throws `IllegalArgumentException` outside 0..65535.
+
+| `host(String)` (on the builder)
+| The address to listen on: the loopback address by default.
+
+| `start()` (on the builder)
+| Starts listening and returns the `TassisServer`. Throws `UncheckedIOException` if the address cannot be listened on.
+
+| `port()`
+| The port the server listens on.
+
+| `brokerName()`
+| The name of the broker.
+
+| `close()`
+| Stops listening and ends the connections of the clients. What they had not acknowledged goes back to its queue; the broker and its messages stay.
+|===
+
+What the server announces to a client, and accepts from it, is not configurable yet:
+
+[cols="2,1",options="header"]
+|===
+| Limit | Value
+
+| Largest frame accepted | 256 KiB
+| Largest message accepted | 16 MiB
+| Sessions of a connection | 1024
+| Idle time-out announced to the client | 60 s: a client silent for twice as long is given up
+| Time to authenticate and open a connection | 10 s
+| Authentication mechanisms | `PLAIN`; `ANONYMOUS` if the broker accepts connections without credentials
+|===
 
 [#tassis-broker]
 == `TassisBroker`
@@ -300,11 +357,15 @@ A broker nobody administers is open: `createConnection(userName, password)`, `cr
 
 A secured broker checks who connects, and gives every user the same rights: there is no permission by destination, and no milestone plans one. A password is kept in memory as a salted digest, never written anywhere.
 
-=== The broker is only reachable from its own JVM
+=== The network transport is partial
 
-A broker lives in the JVM that created it. Two processes cannot exchange messages through Tassis: each one has its own brokers, even under the same name.
+A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. Three things are missing:
 
-Addressed by milestone M11.3 (network transport, over AMQP 1.0).
+* **Queues only.** A network client can do this: sending to a queue and receiving from one, with every kind of message, the header fields and the properties, and acknowledgement. Refused for now: topics and subscriptions, message selectors, temporary destinations, transactions and queue browsers. Milestone M11.3c.
+* **No encryption.** Messages and passwords travel in clear, and the server listens on the loopback address by default. Milestone M11.3d.
+* **No Tassis client over the network.** `TassisConnectionFactory` reaches the broker of its own JVM only; a network client is a third-party AMQP client. Milestone M11.3d.
+
+A message a network client rejects, or declares undeliverable to itself, is dropped: there is no dead-letter queue.
 
 === No connection pool
 
