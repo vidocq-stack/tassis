@@ -746,8 +746,8 @@ modules:
 - [x] **M11.3b — The server, queues only** (`tassis-server`): SASL PLAIN and ANONYMOUS over the
       registry of M11.1, connection, session, links, credit, settlement. Apache Qpid JMS as the
       client. See below.
-- [ ] **M11.3c — The rest of the mapping, server side**: topics, subscriptions, selectors,
-      `noLocal`, temporary destinations, transactions, browsing, delivery delay.
+- [x] **M11.3c — The rest of the mapping, server side**: topics, subscriptions, selectors,
+      `noLocal`, temporary destinations, transactions, browsing, delivery delay. See below.
 - [ ] **M11.3d — The Tassis client over AMQP**: the client transport behind
       `BrokerConnection`, selected by the connection URL beside `tassis:vm:`; optional TLS;
       heartbeats; the `ExceptionListener` (§6.1.7), stored and never called so far, for a lost
@@ -842,6 +842,60 @@ What it changed outside the new module, and what it taught:
 - Not done, and not planned in this slice: the limits of `Limits` are not configurable; a
   `Settings`-like description of a server belongs with the client transport of M11.3d, which
   needs the same URL.
+
+#### M11.3c — The rest of the mapping, server side ✅
+
+A client of the network now has what a client of the JVM has, short of XA.
+
+- [x] **Topics and the four kinds of subscription** (§8.3), `noLocal`, and `unsubscribe` by a
+      link that looks the subscription up and deletes it by closing.
+- [x] **Message selectors** (§3.8), on queues and on subscriptions; an invalid one refuses the
+      link.
+- [x] **Temporary destinations** (§6.2.2): created by a sending link with a dynamic target,
+      deleted with that link, and with the connection whatever happens.
+- [x] **Local transactions** (§6.2.7): a coordinator link, `declare` and `discharge`; the sends
+      and the acknowledgements of a transaction reach the broker in one `commit`, or not at
+      all. A transaction whose coordinator link or connection goes is rolled back.
+- [x] **Queue browsers** (§4.1.3): a snapshot, sent as credit comes, and the client told when
+      it has seen it all. **Delivery delay** (§7.9): carried by an annotation, honoured by the
+      broker as it already was.
+- [x] Proof: Apache Qpid JMS on 21 more scenarios (`QpidJmsMessagingTest`), and the frames of
+      transactions, browsers and refusals in `TassisServerTest`.
+
+What it changed in the seam, and what it taught:
+
+- **`BrokerConnection` gained one question and one flag.** `durableSubscriptionTopic(name)`: a
+  remote client has no other way to know a durable subscription exists before it unsubscribes.
+  And `global`, on `Subscribing`, `unsubscribe` and that lookup: whether a subscription name is
+  the broker's rather than a client identifier's.
+- **Why `global`.** Qpid JMS asks for `sole-connection-for-container` on every connection,
+  whether the application set a client identifier or not, so the server claims the container
+  identifier for all of them. A client that set none says so on each subscription, with the
+  capability `global`. Without the flag, two such clients did not share a shared subscription:
+  found by the test, not foreseen.
+- **A rejected commit must not say `amqp:transaction:rollback`.** Qpid JMS turns any rejected
+  commit into a `TransactionRolledBackException`, except one whose condition is already that
+  one, which it takes for a transaction in doubt. The server answers with the cause
+  (`amqp:not-found` for a destination that is gone).
+- **A temporary destination that crossed a broker comes back as a plain one of its name.** A
+  reply sent to it from the JVM goes to the queue of that name, which is the same storage; the
+  kind is told again from the name when the message goes back out to AMQP. A reply sent from
+  the JVM after the temporary queue was deleted creates a plain queue of that name: harmless,
+  and untidy. Over the network it is refused: there, a name the broker gives to temporary
+  destinations is one of them or nothing.
+- **Only the creating connection may consume from a temporary destination** (§6.2.2): the
+  client of the JVM checks it; over the network it is the client library that does, not the
+  server.
+- **The concurrency review found no race in the transactions**, which only the reader thread
+  touches, and five defects elsewhere, each reproduced by a test before its fix: a browser
+  sent a long message without regard for the session window, and forgot a drain it could not
+  answer at once; an outcome given in a transaction that was over consumed the message; a
+  deleted temporary destination named without its capability came back as a queue; the scope
+  of a looked-up subscription was read from the link name by a looser rule than the one that
+  created it. It also asked for bounds, now in `Limits`: the transactions a connection may
+  hold undischarged, and the octets one may hold.
+- Still not there: a `Settings`-like description of a server and configurable limits (with
+  M11.3d), a dead-letter queue, and anything of XA.
 
 ### M11b — Connection pool
 

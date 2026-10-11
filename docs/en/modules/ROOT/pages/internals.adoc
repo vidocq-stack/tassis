@@ -232,7 +232,7 @@ The proof that these octets are AMQP 1.0, and not a private reading of it, is in
 [#server]
 == The AMQP server
 
-`tassis-server` puts a listener in front of a broker. It is a client of `BrokerConnection`, the seam of milestone M11.2, exactly as the client objects of `tassis-core` are, and it added nothing to that interface.
+`tassis-server` puts a listener in front of a broker. It is a client of `BrokerConnection`, the seam of milestone M11.2, exactly as the client objects of `tassis-core` are. Serving the whole of Jakarta Messaging asked two things of that interface: a way to find a durable subscription by its name, and subscription names that are the broker's rather than a client identifier's, since every AMQP connection has a container identifier whether its client set one or not.
 
 Each connection, an `AmqpConnection`, is served by virtual threads of three kinds:
 
@@ -251,7 +251,11 @@ How AMQP meets the seam:
 | SASL `PLAIN` or `ANONYMOUS` | `Broker.connect(user, password)`
 | `open` asking for `sole-connection-for-container` | `claimClientId(container-id)`
 | A transfer on a link the client sends by | `send`, then a disposition `accepted`
-| `attach` of a link the client receives by | `attach(queue)`
+| `attach` of a link the client receives by | `attach(queue, selector)`, or `subscribe` for a topic: the name of the link is the name of the subscription, the source says whether it is durable and shared
+| `attach` with the distribution mode `copy` | `browse`: a snapshot, sent as credit comes and settled as it goes
+| `attach` of a sending link whose target is dynamic | `createTemporaryQueue` or `createTemporaryTopic`; closing the link deletes it
+| `attach` of a receiving link without a source, then its closing | `durableSubscriptionTopic`, then `unsubscribe`
+| A link to the coordinator: `declare`, transfers and dispositions that name the transaction, `discharge` | Sends and acknowledgements are kept in a `Transaction`, then `commit(sends, consumed)`, or `redeliver(consumed)` to roll back
 | Credit granted with `flow` | `Consumer.listen(true)` and `take(period)` by the pump
 | Credit taken back, or `drain` | `Consumer.listen(false)`, which ends the pump's wait
 | Disposition `accepted`, or `rejected` | `settle`
@@ -263,7 +267,7 @@ How AMQP meets the seam:
 
 The listening period of `Consumer.listen`, made for message listeners, is what delivery by credit needed: the reader changes the state of the link, then ends the period, and the pump either sees the state or has its wait ended.
 
-A link Tassis does not serve yet is refused the way AMQP prescribes, attached with nothing at the server's end and detached with `amqp:not-implemented`, which leaves the session usable. What a peer does out of place ends the connection with the matching error. `Limits` holds what the server announces and accepts.
+A link the server cannot attach (an invalid selector, a temporary destination that is gone, a subscription in use) is refused the way AMQP prescribes: attached with nothing at the server's end, then detached with the reason, which leaves the session usable. What a peer does out of place ends the connection with the matching error. `Limits` holds what the server announces and accepts.
 
 `TassisServerTest` drives the server frame by frame with the codec. `QpidJmsAgainstTassisTest`, in `tassis-interop`, runs Apache Qpid JMS against it.
 

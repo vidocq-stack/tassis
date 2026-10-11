@@ -666,7 +666,7 @@ public final class TassisSession implements QueueSession, TopicSession {
     private TassisMessageConsumer subscribe(Destination topic, Destinations.Address address, String name,
             boolean durable, boolean shared, boolean noLocal, Selector selector) throws JMSException {
         BrokerConnection.Subscribing request = new BrokerConnection.Subscribing(address.name(),
-                address.temporary(), name, durable, shared, noLocal, selector);
+                address.temporary(), name, durable, shared, noLocal, selector, false);
         return register(new TassisMessageConsumer(this, topic, noLocal, selector, link().subscribe(request)));
     }
 
@@ -737,7 +737,7 @@ public final class TassisSession implements QueueSession, TopicSession {
     public void unsubscribe(String name) throws JMSException {
         checkOpen();
         notForA(Domain.QUEUE, "unsubscribe");
-        link().unsubscribe(name);
+        link().unsubscribe(name, false);
     }
 
     // ---- destinations --------------------------------------------------

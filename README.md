@@ -73,8 +73,8 @@ the Italian *Tasso* and the German *Taxis*.
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. The network transport is partial:
-queues only, no encryption. Messages live in memory and do not survive the JVM: that
+🚧 **In development, not released.** No artifact is published. The network transport has no
+encryption yet. Messages live in memory and do not survive the JVM: that
 one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
 the milestones, and the limits a user must know are in the
 [reference](docs/en/modules/ROOT/pages/reference.adoc).
@@ -244,8 +244,8 @@ A client needs nothing of Tassis. With Apache Qpid JMS, for instance:
 ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
 ```
 
-Queues only for now, and **nothing is encrypted yet**: the server listens on the loopback
-address unless told otherwise. See
+A client of the network has the whole of Jakarta Messaging, short of XA. **Nothing is encrypted
+yet**: the server listens on the loopback address unless told otherwise. See
 [Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
 
 ## Architecture
@@ -310,8 +310,7 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Priority, expiration, delivery delay | ✅ |
 | Persistence across a restart | Not planned: the broker is in memory by design |
 | Authentication (user registry per broker, `TassisBroker`) | ✅ |
-| A broker open to AMQP 1.0 clients: queues | ✅ |
-| Over AMQP: topics, selectors, transactions, temporary destinations, browsers | M11.3c |
+| A broker open to AMQP 1.0 clients: queues, topics and subscriptions, selectors, temporary destinations, local transactions, browsers | ✅ |
 | Over AMQP: TLS, and the Tassis client itself | M11.3d |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |

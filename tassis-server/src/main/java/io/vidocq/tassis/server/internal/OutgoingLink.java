@@ -41,6 +41,10 @@ final class OutgoingLink implements Runnable {
     final BrokerConnection.Consumer consumer;
     /** Whether the client asked for deliveries it does not have to settle (snd-settle-mode settled). */
     final boolean presettled;
+    /** The name of the durable subscription the link reads, which goes if the link is closed for good; else null. */
+    final String durableName;
+    /** Whether that name is one of the broker rather than of the client identifier. */
+    final boolean global;
 
     long credit;
     long deliveryCount;
@@ -49,13 +53,15 @@ final class OutgoingLink implements Runnable {
     boolean closed;
 
     OutgoingLink(AmqpConnection connection, AmqpSession session, long handle, String name,
-            BrokerConnection.Consumer consumer, boolean presettled) {
+            BrokerConnection.Consumer consumer, boolean presettled, String durableName, boolean global) {
         this.connection = connection;
         this.session = session;
         this.handle = handle;
         this.name = name;
         this.consumer = consumer;
         this.presettled = presettled;
+        this.durableName = durableName;
+        this.global = global;
     }
 
     @Override

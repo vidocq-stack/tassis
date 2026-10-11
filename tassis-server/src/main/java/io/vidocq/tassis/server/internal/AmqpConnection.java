@@ -22,6 +22,7 @@ package io.vidocq.tassis.server.internal;
 import io.vidocq.tassis.amqp.internal.jms.JmsMessageCodec;
 import io.vidocq.tassis.amqp.internal.messaging.Accepted;
 import io.vidocq.tassis.amqp.internal.messaging.AmqpMessage;
+import io.vidocq.tassis.amqp.internal.messaging.AmqpValue;
 import io.vidocq.tassis.amqp.internal.messaging.DeliveryState;
 import io.vidocq.tassis.amqp.internal.messaging.Modified;
 import io.vidocq.tassis.amqp.internal.messaging.Rejected;
@@ -31,6 +32,11 @@ import io.vidocq.tassis.amqp.internal.messaging.Target;
 import io.vidocq.tassis.amqp.internal.security.SaslInit;
 import io.vidocq.tassis.amqp.internal.security.SaslMechanisms;
 import io.vidocq.tassis.amqp.internal.security.SaslOutcome;
+import io.vidocq.tassis.amqp.internal.transactions.Coordinator;
+import io.vidocq.tassis.amqp.internal.transactions.Declare;
+import io.vidocq.tassis.amqp.internal.transactions.Declared;
+import io.vidocq.tassis.amqp.internal.transactions.Discharge;
+import io.vidocq.tassis.amqp.internal.transactions.TransactionalState;
 import io.vidocq.tassis.amqp.internal.transport.AmqpError;
 import io.vidocq.tassis.amqp.internal.transport.Attach;
 import io.vidocq.tassis.amqp.internal.transport.Begin;
@@ -48,12 +54,17 @@ import io.vidocq.tassis.amqp.internal.transport.Transfer;
 import io.vidocq.tassis.amqp.internal.types.AmqpDecodeException;
 import io.vidocq.tassis.amqp.internal.types.AmqpEncoder;
 import io.vidocq.tassis.amqp.internal.types.Binary;
+import io.vidocq.tassis.amqp.internal.types.Described;
 import io.vidocq.tassis.amqp.internal.types.Symbol;
 import io.vidocq.tassis.core.TassisQueue;
+import io.vidocq.tassis.core.TassisTopic;
 import io.vidocq.tassis.core.internal.broker.Broker;
 import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.message.TassisMessage;
+import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.InvalidClientIDException;
+import jakarta.jms.InvalidDestinationException;
+import jakarta.jms.InvalidSelectorException;
 import jakarta.jms.JMSException;
 import jakarta.jms.JMSSecurityException;
 import jakarta.jms.Topic;
@@ -102,6 +113,19 @@ public final class AmqpConnection {
     private static final Symbol CAPABILITY_TEMPORARY_QUEUE = Symbol.of("temporary-queue");
     private static final Symbol CAPABILITY_TEMPORARY_TOPIC = Symbol.of("temporary-topic");
     private static final Symbol DISTRIBUTION_COPY = Symbol.of("copy");
+    private static final Symbol CAPABILITY_SHARED = Symbol.of("shared");
+    private static final Symbol CAPABILITY_GLOBAL = Symbol.of("global");
+    private static final Symbol SHARED_SUBS = Symbol.of("SHARED-SUBS");
+    private static final Symbol DELAYED_DELIVERY = Symbol.of("DELAYED_DELIVERY");
+    private static final Symbol LOCAL_TRANSACTIONS = Symbol.of("amqp:local-transactions");
+    private static final Symbol FILTER_SELECTOR = Symbol.of("jms-selector");
+    private static final Symbol FILTER_NO_LOCAL = Symbol.of("no-local");
+    private static final Symbol EXPIRY_NEVER = Symbol.of("never");
+    /** What separates the name of a shared subscription from what tells its links apart, in a link name. */
+    private static final char SUBSCRIPTION_NAME_END = '|';
+    /** How the broker names the temporary destinations it creates. */
+    private static final String TEMPORARY_QUEUE_NAME = "temporary-queue:";
+    private static final String TEMPORARY_TOPIC_NAME = "temporary-topic:";
 
     /** The codes of a sasl-outcome (part 5, §5.3.3.6): authenticated, or refused for its credentials. */
     private static final int SASL_OK = 0;
@@ -118,6 +142,9 @@ public final class AmqpConnection {
     private final Consumer<AmqpConnection> onEnd;
     private final LinkedBlockingQueue<byte[]> outbound = new LinkedBlockingQueue<>();
     private final Map<Integer, AmqpSession> sessions = new HashMap<>();
+    // The transactions declared and not discharged yet, by their identifier. Guarded by the lock.
+    private final Map<Binary, Transaction> transactions = new HashMap<>();
+    private long nextTransactionId;
 
     // Set by the reader before any pump exists, then only read.
     private volatile BrokerConnection link;
@@ -265,6 +292,8 @@ public final class AmqpConnection {
                     pump.closed = true;
                 }
                 sessions.clear();
+                // What their transactions held goes back with everything else, below.
+                transactions.clear();
                 changed.signalAll();
             } finally {
                 lock.unlock();
@@ -377,7 +406,8 @@ public final class AmqpConnection {
             }
         }
         queue(FrameCodec.encode(Frame.amqp(0, new Open("tassis-" + broker.name(), null, Limits.MAX_FRAME_SIZE,
-                Limits.CHANNEL_MAX, (long) Limits.IDLE_TIME_OUT, null, null, List.of(ANONYMOUS_RELAY, SOLE_CONNECTION),
+                Limits.CHANNEL_MAX, (long) Limits.IDLE_TIME_OUT, null, null,
+                List.of(ANONYMOUS_RELAY, SOLE_CONNECTION, SHARED_SUBS, DELAYED_DELIVERY),
                 null, properties)), FrameCodec.MIN_MAX_FRAME_SIZE));
         peerMaxFrameSize = Math.min(peerMax, Limits.MAX_FRAME_SIZE);
         if (refused != null) {
@@ -512,9 +542,15 @@ public final class AmqpConnection {
             for (AmqpSession.Sent sent : session.unsettled.values()) {
                 unsettled.add(sent.delivery());
             }
+            // A transaction whose coordinator link goes is rolled back (part 4, §4.2).
+            for (IncomingLink incoming : session.incoming.values()) {
+                unsettled.addAll(rolledBack(incoming));
+            }
             session.unsettled.clear();
             session.outgoing.clear();
             session.incoming.clear();
+            session.browsers.clear();
+            session.lookups.clear();
             changed.signalAll();
         } finally {
             lock.unlock();
@@ -525,6 +561,22 @@ public final class AmqpConnection {
         // What the client had received and not settled is delivered again (§2.6.12).
         this.link.redeliver(unsettled);
         send(session.channel, new End(null));
+    }
+
+    /**
+     * Forgets the transactions declared on a coordinator link and not discharged, and returns
+     * what they had consumed, for the caller to give back. Under the lock.
+     */
+    private List<BrokerConnection.Delivery> rolledBack(IncomingLink coordinator) {
+        List<BrokerConnection.Delivery> consumed = new ArrayList<>();
+        transactions.values().removeIf(transaction -> {
+            if (transaction.coordinator == coordinator) {
+                consumed.addAll(transaction.consumed);
+                return true;
+            }
+            return false;
+        });
+        return consumed;
     }
 
     /** A flow frame saying where the session stands, for the caller to add what it says of a link. */
@@ -544,7 +596,8 @@ public final class AmqpConnection {
         try {
             // A handle refused a moment ago may be used again without waiting for the detach to cross.
             session.refused.remove(attach.handle());
-            if (session.incoming.containsKey(attach.handle()) || session.outgoing.containsKey(attach.handle())) {
+            if (session.incoming.containsKey(attach.handle()) || session.outgoing.containsKey(attach.handle())
+                    || session.browsers.containsKey(attach.handle()) || session.lookups.containsKey(attach.handle())) {
                 throw new AmqpFailure(AmqpFailure.NOT_ALLOWED, "handle " + attach.handle() + " is in use");
             }
         } finally {
@@ -583,92 +636,275 @@ public final class AmqpConnection {
         return false;
     }
 
+    /**
+     * Whether an address is one the broker gives to a temporary destination. A client need not
+     * say that what it names is temporary, and a deleted one must not come back as a queue of
+     * that name: over the network, such a name is a temporary destination or nothing.
+     */
+    private static boolean temporaryName(String address) {
+        return address.startsWith(TEMPORARY_QUEUE_NAME) || address.startsWith(TEMPORARY_TOPIC_NAME);
+    }
+
+    /** What an address names in the broker, as far as the server can tell. */
+    private record Named(String address, boolean topic, boolean temporary) {
+    }
+
+    /**
+     * Says what an address names: a client tells whether it means a queue or a topic by a
+     * capability of the terminus, and a temporary destination is known by the broker.
+     *
+     * @return null if the address is that of a temporary destination and no such one exists
+     */
+    private Named named(String address, List<Symbol> capabilities) {
+        boolean temporaryQueue = link.hasTemporaryQueue(address);
+        boolean temporaryTopic = link.hasTemporaryTopic(address);
+        if (!temporaryQueue && !temporaryTopic && (temporaryName(address)
+                || has(capabilities, CAPABILITY_TEMPORARY_QUEUE, CAPABILITY_TEMPORARY_TOPIC))) {
+            return null;
+        }
+        boolean topic = temporaryTopic || !temporaryQueue && has(capabilities, CAPABILITY_TOPIC);
+        return new Named(address, topic, temporaryQueue || temporaryTopic);
+    }
+
     /** The client sends by this link. */
     private void attachIncoming(AmqpSession session, Attach attach) {
-        if (!(attach.target() instanceof Target target)) {
-            // A coordinator, for transactions, or nothing at all.
-            refuse(session, attach, AmqpFailure.NOT_IMPLEMENTED,
-                    "only links to a queue are served: transactions are not, yet");
-            return;
-        }
-        if (Boolean.TRUE.equals(target.dynamic())
-                || has(target.capabilities(), CAPABILITY_TOPIC, CAPABILITY_TEMPORARY_QUEUE, CAPABILITY_TEMPORARY_TOPIC)) {
-            refuse(session, attach, AmqpFailure.NOT_IMPLEMENTED,
-                    "only queues are served: no topic, no temporary destination, yet");
-            return;
-        }
-        if (target.address() != null && !(target.address() instanceof String)) {
-            refuse(session, attach, AmqpFailure.INVALID_FIELD, "the address of a queue is a string");
-            return;
-        }
-        // No address: an anonymous relay, where each message says where it goes.
-        String queue = (String) target.address();
         long initialDeliveryCount = attach.initialDeliveryCount() == null ? 0 : attach.initialDeliveryCount();
-        IncomingLink link = new IncomingLink(attach.handle(), attach.name(), queue, initialDeliveryCount);
-        link.credit = Limits.PRODUCER_CREDIT;
+        IncomingLink incoming;
+        Object answeredTarget;
+        if (attach.target() instanceof Coordinator) {
+            // Part 4, §4.2: the link a client declares and discharges its transactions on.
+            incoming = new IncomingLink(attach.handle(), attach.name(), IncomingLink.Kind.COORDINATOR, null, false,
+                    false, initialDeliveryCount);
+            answeredTarget = new Coordinator(List.of(LOCAL_TRANSACTIONS));
+        } else if (!(attach.target() instanceof Target target)) {
+            refuse(session, attach, AmqpFailure.INVALID_FIELD, "a sending link says where its messages go");
+            return;
+        } else if (Boolean.TRUE.equals(target.dynamic())) {
+            // A node created for the client: how a temporary destination is asked for (§3.5.4).
+            boolean topic = has(target.capabilities(), CAPABILITY_TEMPORARY_TOPIC, CAPABILITY_TOPIC);
+            String created;
+            try {
+                created = topic ? link.createTemporaryTopic() : link.createTemporaryQueue();
+            } catch (JMSException e) {
+                refuse(session, attach, AmqpFailure.INTERNAL_ERROR, e.getMessage());
+                return;
+            }
+            incoming = new IncomingLink(attach.handle(), attach.name(), IncomingLink.Kind.TEMPORARY, created, topic,
+                    true, initialDeliveryCount);
+            answeredTarget = new Target(created, target.durable(), target.expiryPolicy(), target.timeout(), true,
+                    target.dynamicNodeProperties(), target.capabilities());
+        } else if (target.address() == null) {
+            // No address: an anonymous relay, where each message says where it goes.
+            incoming = new IncomingLink(attach.handle(), attach.name(), IncomingLink.Kind.DESTINATION, null, false,
+                    false, initialDeliveryCount);
+            answeredTarget = target;
+        } else if (!(target.address() instanceof String address)) {
+            refuse(session, attach, AmqpFailure.INVALID_FIELD, "the address of a destination is a string");
+            return;
+        } else {
+            Named named = named(address, target.capabilities());
+            if (named == null) {
+                refuse(session, attach, AmqpFailure.NOT_FOUND, "temporary destination " + address + " has been deleted");
+                return;
+            }
+            incoming = new IncomingLink(attach.handle(), attach.name(), IncomingLink.Kind.DESTINATION, address,
+                    named.topic(), named.temporary(), initialDeliveryCount);
+            answeredTarget = target;
+        }
+        incoming.credit = Limits.PRODUCER_CREDIT;
         lock.lock();
         try {
-            session.incoming.put(link.handle, link);
+            session.incoming.put(incoming.handle, incoming);
             send(session.channel, new Attach(attach.name(), attach.handle(), true, attach.sndSettleMode(), null,
-                    attach.source(), target, null, null, null, null, null, null, null));
-            send(session.channel, sessionFlow(session, link.handle, link.deliveryCount, link.credit, null));
+                    attach.source(), answeredTarget, null, null, null, null, null, null, null));
+            send(session.channel, sessionFlow(session, incoming.handle, incoming.deliveryCount, incoming.credit, null));
         } finally {
             lock.unlock();
         }
     }
 
+    /** The name of the subscription a link reads, which is the name of the link up to a separator. */
+    private static String subscriptionName(String linkName) {
+        int end = linkName.indexOf(SUBSCRIPTION_NAME_END);
+        return end < 0 ? linkName : linkName.substring(0, end);
+    }
+
     /** The client receives by this link. */
     private void attachOutgoing(AmqpSession session, Attach attach) throws AmqpFailure {
+        if (attach.source() == null) {
+            lookUp(session, attach);
+            return;
+        }
         if (!(attach.source() instanceof Source source)) {
             refuse(session, attach, AmqpFailure.INVALID_FIELD, "a receiving link says what it reads");
             return;
         }
-        if (Boolean.TRUE.equals(source.dynamic())
-                || has(source.capabilities(), CAPABILITY_TOPIC, CAPABILITY_TEMPORARY_QUEUE, CAPABILITY_TEMPORARY_TOPIC)) {
+        if (Boolean.TRUE.equals(source.dynamic())) {
             refuse(session, attach, AmqpFailure.NOT_IMPLEMENTED,
-                    "only queues are served: no topic, no temporary destination, yet");
+                    "a temporary destination is created by a sending link, not by a receiving one");
             return;
         }
-        if (!(source.address() instanceof String queue)) {
-            refuse(session, attach, AmqpFailure.INVALID_FIELD, "a receiving link names the queue it reads");
+        if (!(source.address() instanceof String address)) {
+            refuse(session, attach, AmqpFailure.INVALID_FIELD, "a receiving link names what it reads");
             return;
         }
-        if (source.filter() != null && !source.filter().isEmpty()) {
-            refuse(session, attach, AmqpFailure.NOT_IMPLEMENTED, "selectors are not served, yet");
+        Named named = named(address, source.capabilities());
+        if (named == null) {
+            refuse(session, attach, AmqpFailure.NOT_FOUND, "temporary destination " + address + " has been deleted");
             return;
         }
-        if (DISTRIBUTION_COPY.equals(source.distributionMode())) {
-            refuse(session, attach, AmqpFailure.NOT_IMPLEMENTED, "queue browsers are not served, yet");
+        Selector selector = null;
+        boolean noLocal = false;
+        if (source.filter() != null) {
+            noLocal = source.filter().containsKey(FILTER_NO_LOCAL);
+            Object filter = source.filter().get(FILTER_SELECTOR);
+            Object text = filter instanceof Described described ? described.value() : filter;
+            if (text instanceof String selectorText) {
+                try {
+                    selector = Selector.parse(selectorText);
+                } catch (InvalidSelectorException e) {
+                    refuse(session, attach, AmqpFailure.INVALID_FIELD, e.getMessage());
+                    return;
+                }
+            }
+        }
+        if (!named.topic() && DISTRIBUTION_COPY.equals(source.distributionMode())) {
+            browse(session, attach, source, address, selector);
             return;
         }
+
+        boolean durable = named.topic()
+                && (source.durable() != null && source.durable() > 0 || EXPIRY_NEVER.equals(source.expiryPolicy()));
+        boolean shared = named.topic() && has(source.capabilities(), CAPABILITY_SHARED);
+        String subscription = durable || shared ? subscriptionName(attach.name()) : null;
+        // A client without a client identifier of its own says so: every connection is given
+        // one here, its container-id, and its subscriptions must not be scoped by that.
+        boolean global = has(source.capabilities(), CAPABILITY_GLOBAL);
         BrokerConnection.Consumer consumer;
         try {
-            consumer = link.attach(queue, false, null);
-        } catch (JMSException e) {
+            consumer = named.topic()
+                    ? link.subscribe(new BrokerConnection.Subscribing(address, named.temporary(), subscription, durable,
+                            shared, noLocal, selector, global))
+                    : link.attach(address, named.temporary(), selector);
+        } catch (InvalidDestinationException e) {
             refuse(session, attach, AmqpFailure.NOT_FOUND, e.getMessage());
+            return;
+        } catch (JMSException e) {
+            // A subscription in use, or one of another kind under that name (§8.3).
+            refuse(session, attach, AmqpFailure.RESOURCE_LOCKED, e.getMessage());
             return;
         }
         // snd-settle-mode 1: the client wants what it is sent to be settled already (§2.8.2)
         boolean presettled = Integer.valueOf(1).equals(attach.sndSettleMode());
-        OutgoingLink pump = new OutgoingLink(this, session, attach.handle(), attach.name(), consumer, presettled);
+        OutgoingLink pump = new OutgoingLink(this, session, attach.handle(), attach.name(), consumer, presettled,
+                durable ? subscription : null, global);
         lock.lock();
         try {
             session.outgoing.put(pump.handle, pump);
             send(session.channel, new Attach(attach.name(), attach.handle(), false, attach.sndSettleMode(),
-                    attach.rcvSettleMode(), source, attach.target(), null, null, 0L, null, null, null, null));
+                    attach.rcvSettleMode(), source, attach.target(), null, null, 0L, null,
+                    shared ? List.of(SHARED_SUBS) : null, null, null));
         } finally {
             lock.unlock();
         }
         Thread.ofVirtual().name("tassis-amqp-pump-" + attach.name()).start(pump);
     }
 
+    /**
+     * A receiving link attached with no source: the client looks for the durable subscription
+     * the link is named after, to delete it by closing the link (Jakarta Messaging 3.1 §8.3.5).
+     */
+    private void lookUp(AmqpSession session, Attach attach) {
+        String name = subscriptionName(attach.name());
+        // Said by a capability, or by the name of the link as Qpid JMS writes it. Anything else
+        // after the name of the subscription tells links apart, and says nothing of its scope.
+        boolean global = has(attach.desiredCapabilities(), CAPABILITY_GLOBAL)
+                || attach.name().startsWith(name + SUBSCRIPTION_NAME_END + "global");
+        String topic = link.durableSubscriptionTopic(name, global);
+        if (topic == null) {
+            refuse(session, attach, AmqpFailure.NOT_FOUND, "there is no durable subscription named " + name);
+            return;
+        }
+        lock.lock();
+        try {
+            session.lookups.put(attach.handle(), new AmqpSession.LookedUp(name, global));
+            send(session.channel, new Attach(attach.name(), attach.handle(), false, null, null,
+                    new Source(topic, 2L, EXPIRY_NEVER, null, null, null, null, null, null, null,
+                            List.of(CAPABILITY_TOPIC)),
+                    attach.target(), null, null, 0L, null, null, null, null));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** A queue browser: the messages of the queue as they are now, to be sent as credit comes. */
+    private void browse(AmqpSession session, Attach attach, Source source, String queue, Selector selector) {
+        BrowserLink browser = new BrowserLink(attach.handle(), link.browse(queue, selector));
+        lock.lock();
+        try {
+            session.browsers.put(browser.handle, browser);
+            // Settled as they are sent: there is nothing to acknowledge in what is only looked at.
+            send(session.channel, new Attach(attach.name(), attach.handle(), false, 1, attach.rcvSettleMode(), source,
+                    attach.target(), null, null, 0L, null, null, null, null));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Sends a browser what its credit and the window of the session allow, one frame at a time:
+     * what the window has no room for waits in the link for the next flow. Under the lock.
+     */
+    private void feed(AmqpSession session, BrowserLink browser) {
+        while (session.remoteIncomingWindow > 0) {
+            byte[] frame = browser.frames.poll();
+            if (frame != null) {
+                session.nextOutgoingId++;
+                session.remoteIncomingWindow--;
+                queue(frame);
+                continue;
+            }
+            if (browser.credit == 0 || browser.next >= browser.messages.size()) {
+                break;
+            }
+            TassisMessage message = browser.messages.get(browser.next++);
+            byte[] octets;
+            try {
+                octets = JmsMessageCodec.toAmqp(message).encode();
+            } catch (JMSException | RuntimeException e) {
+                LOG.log(System.Logger.Level.ERROR, "a message could not be written for a browser: it is skipped", e);
+                continue;
+            }
+            // Given its identifier with room for its first frame: identifiers follow the wire.
+            long id = session.nextDeliveryId++;
+            browser.credit--;
+            browser.deliveryCount++;
+            Transfer first = new Transfer(browser.handle, id, new Binary(AmqpEncoder.encode(id)), 0L, true, null, null,
+                    null, null, null, null);
+            browser.frames.addAll(split(session.channel, first, octets));
+        }
+        if (browser.draining && browser.frames.isEmpty()
+                && (browser.credit == 0 || browser.next >= browser.messages.size())) {
+            // Nothing more to look at: how a client knows it has seen the whole queue (§2.6.7).
+            browser.deliveryCount += browser.credit;
+            browser.credit = 0;
+            browser.draining = false;
+            send(session.channel, sessionFlow(session, browser.handle, browser.deliveryCount, 0L, true));
+        }
+    }
+
     private void detach(AmqpSession session, Detach detach) throws AmqpFailure {
+        boolean closed = Boolean.TRUE.equals(detach.closed());
         OutgoingLink pump;
+        IncomingLink incoming;
+        AmqpSession.LookedUp lookedUp;
         List<BrokerConnection.Delivery> unsettled = new ArrayList<>();
         lock.lock();
         try {
             pump = session.outgoing.remove(detach.handle());
-            if (pump == null && session.incoming.remove(detach.handle()) == null) {
+            incoming = session.incoming.remove(detach.handle());
+            lookedUp = session.lookups.remove(detach.handle());
+            if (pump == null && incoming == null && lookedUp == null && session.browsers.remove(detach.handle()) == null) {
                 if (session.refused.remove(detach.handle())) {
                     // The client's answer to the detach that refused its link (§2.6.5).
                     return;
@@ -686,14 +922,37 @@ public final class AmqpConnection {
                 });
                 changed.signalAll();
             }
+            if (incoming != null && incoming.kind == IncomingLink.Kind.COORDINATOR) {
+                unsettled.addAll(rolledBack(incoming));
+            }
         } finally {
             lock.unlock();
         }
-        if (pump != null) {
-            pump.consumer.close();
-            link.redeliver(unsettled);
+        AmqpError error = null;
+        try {
+            if (pump != null) {
+                pump.consumer.close();
+                if (closed && pump.durableName != null) {
+                    // Closed, not merely detached: the subscription goes with its link (§2.6.6).
+                    link.unsubscribe(pump.durableName, pump.global);
+                }
+            }
+            if (lookedUp != null && closed) {
+                link.unsubscribe(lookedUp.name(), lookedUp.global());
+            }
+            if (incoming != null && incoming.kind == IncomingLink.Kind.TEMPORARY && closed) {
+                if (incoming.topic) {
+                    link.deleteTemporaryTopic(incoming.address);
+                } else {
+                    link.deleteTemporaryQueue(incoming.address);
+                }
+            }
+        } catch (JMSException e) {
+            // In use by a consumer: it stays, and the client is told why.
+            error = new AmqpError(AmqpFailure.RESOURCE_LOCKED, e.getMessage(), null);
         }
-        send(session.channel, new Detach(detach.handle(), true, null));
+        link.redeliver(unsettled);
+        send(session.channel, new Detach(detach.handle(), true, error));
     }
 
     // ---- flow control (§2.6.7) ---------------------------------------------------
@@ -710,7 +969,20 @@ public final class AmqpConnection {
             if (flow.handle() != null) {
                 pump = session.outgoing.get(flow.handle());
                 IncomingLink incoming = session.incoming.get(flow.handle());
-                if (pump == null && incoming == null && !session.refused.contains(flow.handle())) {
+                BrowserLink browser = session.browsers.get(flow.handle());
+                if (browser != null) {
+                    long clientDeliveryCount =
+                            flow.deliveryCount() == null ? browser.deliveryCount : flow.deliveryCount();
+                    long credit = flow.linkCredit() == null ? 0 : flow.linkCredit();
+                    browser.credit = Math.max(0, clientDeliveryCount + credit - browser.deliveryCount);
+                    // Kept until it is answered: the queue may take several flows to be seen.
+                    browser.draining = Boolean.TRUE.equals(flow.drain());
+                    if (Boolean.TRUE.equals(flow.echo())) {
+                        send(session.channel, sessionFlow(session, browser.handle, browser.deliveryCount,
+                                browser.credit, null));
+                    }
+                } else if (pump == null && incoming == null && !session.lookups.containsKey(flow.handle())
+                        && !session.refused.contains(flow.handle())) {
                     throw new AmqpFailure(AmqpFailure.UNATTACHED_HANDLE, "no link is attached with handle " + flow.handle());
                 }
                 if (pump != null) {
@@ -730,6 +1002,10 @@ public final class AmqpConnection {
                 }
             } else if (Boolean.TRUE.equals(flow.echo())) {
                 send(session.channel, sessionFlow(session, null, null, null, null));
+            }
+            // Credit for one of them, or a window that opens for those that waited for room.
+            for (BrowserLink waiting : session.browsers.values()) {
+                feed(session, waiting);
             }
             changed.signalAll();
         } finally {
@@ -869,6 +1145,15 @@ public final class AmqpConnection {
             // Only what is really unsettled in the range: the range itself may be any size.
             Map<Long, AmqpSession.Sent> named =
                     new LinkedHashMap<>(session.unsettled.subMap(disposition.first(), true, last, true));
+            // Part 4, §4.4.2: an outcome that only holds if its transaction is committed.
+            Transaction transaction =
+                    state instanceof TransactionalState transactional ? transactions.get(transactional.txnId()) : null;
+            if (state instanceof TransactionalState transactional) {
+                // In a transaction that is over, or never was, an outcome holds for nothing:
+                // the message is delivered again, as after a rollback.
+                state = transaction == null ? null
+                        : transactional.outcome() == null ? new Accepted() : transactional.outcome();
+            }
             for (Map.Entry<Long, AmqpSession.Sent> entry : named.entrySet()) {
                 BrokerConnection.Delivery delivery = entry.getValue().delivery();
                 switch (state) {
@@ -880,6 +1165,8 @@ public final class AmqpConnection {
                     case Modified modified when Boolean.TRUE.equals(modified.deliveryFailed()) ->
                         link.redeliver(List.of(delivery));
                     case Modified modified -> link.returnUndelivered(delivery);
+                    // Consumed when the transaction commits, delivered again if it does not.
+                    case Accepted accepted when transaction != null -> transaction.consumed.add(delivery);
                     case Accepted accepted -> link.settle(delivery);
                     // Invalid for the client: delivering it again would change nothing.
                     case Rejected rejected -> link.settle(delivery);
@@ -888,9 +1175,10 @@ public final class AmqpConnection {
                 }
                 session.unsettled.remove(entry.getKey());
             }
-            if (!Boolean.TRUE.equals(disposition.settled()) && !named.isEmpty() && state instanceof DeliveryState) {
+            if (!Boolean.TRUE.equals(disposition.settled()) && !named.isEmpty()
+                    && disposition.state() instanceof DeliveryState answered) {
                 // The client waits for the server to settle first (rcv-settle-mode second).
-                send(session.channel, new Disposition(false, disposition.first(), last, true, state, null));
+                send(session.channel, new Disposition(false, disposition.first(), last, true, answered, null));
             }
         } finally {
             lock.unlock();
@@ -903,6 +1191,7 @@ public final class AmqpConnection {
         IncomingLink incoming;
         byte[] message = null;
         Long deliveryId;
+        Binary transactionId;
         boolean settled;
         Flow moreCredit = null;
         lock.lock();
@@ -925,6 +1214,9 @@ public final class AmqpConnection {
                 incoming.partial = new ByteArrayOutputStream();
                 incoming.partialDeliveryId = transfer.deliveryId();
                 incoming.partialSettled = Boolean.TRUE.equals(transfer.settled());
+                // Part 4, §4.4.1: a message that only arrives if its transaction is committed.
+                incoming.partialTransaction =
+                        transfer.state() instanceof TransactionalState transactional ? transactional.txnId() : null;
             }
             if (incoming.partial.size() + (long) payload.length() > Limits.MAX_MESSAGE_SIZE) {
                 throw new AmqpFailure(AmqpFailure.MESSAGE_SIZE_EXCEEDED,
@@ -935,6 +1227,7 @@ public final class AmqpConnection {
                 return;
             }
             deliveryId = incoming.partialDeliveryId;
+            transactionId = incoming.partialTransaction;
             settled = incoming.partialSettled || Boolean.TRUE.equals(transfer.settled());
             if (!Boolean.TRUE.equals(transfer.aborted())) {
                 message = incoming.partial.toByteArray();
@@ -952,7 +1245,12 @@ public final class AmqpConnection {
         }
         if (message != null) {
             // Outside the lock: the broker is asked to store the message.
-            DeliveryState outcome = store(incoming, message);
+            DeliveryState outcome = switch (incoming.kind) {
+                case COORDINATOR -> coordinate(incoming, message);
+                case TEMPORARY -> rejected(AmqpFailure.NOT_ALLOWED,
+                        "this link stands for a temporary destination: messages for it go by a link of their own");
+                case DESTINATION -> store(incoming, message, transactionId);
+            };
             if (!settled && deliveryId != null) {
                 send(session.channel, new Disposition(true, deliveryId, deliveryId, true, outcome, null));
             }
@@ -962,31 +1260,117 @@ public final class AmqpConnection {
         }
     }
 
-    /** Hands a message to the broker, and says what became of it. */
-    private DeliveryState store(IncomingLink incoming, byte[] octets) {
+    /** Hands a message to the broker, or to its transaction, and says what became of it. */
+    private DeliveryState store(IncomingLink incoming, byte[] octets, Binary transactionId) {
         try {
             TassisMessage message = JmsMessageCodec.toJms(AmqpMessage.decode(octets));
-            String queue = incoming.queue;
-            if (queue == null) {
+            String address = incoming.address;
+            boolean topic = incoming.topic;
+            boolean temporary = incoming.temporary;
+            if (address == null) {
                 // An anonymous relay: the message says where it goes.
-                if (message.getJMSDestination() instanceof Topic) {
-                    return rejected(AmqpFailure.NOT_IMPLEMENTED, "only queues are served: no topic, yet");
+                address = switch (message.getJMSDestination()) {
+                    case TassisQueue queue -> queue.getQueueName();
+                    case TassisTopic named -> named.getTopicName();
+                    case null, default -> null;
+                };
+                if (address == null) {
+                    return rejected(AmqpFailure.INVALID_FIELD,
+                            "a message sent to no link in particular names its destination in 'to'");
                 }
-                if (!(message.getJMSDestination() instanceof TassisQueue named)) {
-                    return rejected(AmqpFailure.INVALID_FIELD, "a message sent to no link in particular names its queue in 'to'");
-                }
-                queue = named.getQueueName();
+                // Decided by the name alone: the broker then refuses a temporary destination
+                // that is gone, in the same request that would have stored the message.
+                temporary = temporaryName(address);
+                topic = temporary ? address.startsWith(TEMPORARY_TOPIC_NAME) : message.getJMSDestination() instanceof Topic;
             }
-            message.setJMSDestination(new TassisQueue(queue));
+            message.setJMSDestination(topic ? new TassisTopic(address) : new TassisQueue(address));
             if (message.getJMSMessageID() == null) {
                 message.setJMSMessageID(link.nextMessageId());
             }
-            link.send(new BrokerConnection.Outgoing(queue, false, false, message));
-            return new Accepted();
+            BrokerConnection.Outgoing outgoing = new BrokerConnection.Outgoing(address, topic, temporary, message);
+            if (transactionId == null) {
+                link.send(outgoing);
+                return new Accepted();
+            }
+            lock.lock();
+            try {
+                Transaction transaction = transactions.get(transactionId);
+                if (transaction == null) {
+                    return rejected(AmqpFailure.UNKNOWN_TRANSACTION, "no such transaction: it was never declared, or is over");
+                }
+                if (transaction.octets + octets.length > Limits.MAX_TRANSACTION_OCTETS) {
+                    return rejected(AmqpFailure.RESOURCE_LIMIT_EXCEEDED, "a transaction holds no more than "
+                            + Limits.MAX_TRANSACTION_OCTETS + " octets of messages before it is discharged");
+                }
+                transaction.octets += octets.length;
+                transaction.sends.add(outgoing);
+            } finally {
+                lock.unlock();
+            }
+            return new TransactionalState(transactionId, new Accepted());
         } catch (AmqpDecodeException e) {
             return rejected(AmqpFailure.DECODE_ERROR, e.getMessage());
+        } catch (InvalidDestinationException e) {
+            return rejected(AmqpFailure.NOT_FOUND, e.getMessage());
         } catch (JMSException e) {
             return rejected(AmqpFailure.INTERNAL_ERROR, e.getMessage());
+        }
+    }
+
+    /**
+     * What a client sends on a coordinator link: declare, which begins a transaction, or
+     * discharge, which ends one (part 4, §4.3).
+     */
+    private DeliveryState coordinate(IncomingLink coordinator, byte[] octets) {
+        Object request;
+        try {
+            AmqpMessage message = AmqpMessage.decode(octets);
+            request = message.body().size() == 1 && message.body().get(0) instanceof AmqpValue value ? value.value() : null;
+        } catch (AmqpDecodeException e) {
+            return rejected(AmqpFailure.DECODE_ERROR, e.getMessage());
+        }
+        if (request instanceof Declare) {
+            lock.lock();
+            try {
+                if (transactions.size() >= Limits.MAX_TRANSACTIONS) {
+                    return rejected(AmqpFailure.RESOURCE_LIMIT_EXCEEDED, "a connection holds no more than "
+                            + Limits.MAX_TRANSACTIONS + " transactions that are not discharged");
+                }
+                Binary id = new Binary(AmqpEncoder.encode(nextTransactionId++));
+                transactions.put(id, new Transaction(id, coordinator));
+                return new Declared(id);
+            } finally {
+                lock.unlock();
+            }
+        }
+        if (!(request instanceof Discharge discharge)) {
+            return rejected(AmqpFailure.NOT_ALLOWED, "a coordinator is sent declare or discharge, and nothing else");
+        }
+        Transaction transaction;
+        lock.lock();
+        try {
+            transaction = transactions.remove(discharge.txnId());
+        } finally {
+            lock.unlock();
+        }
+        if (transaction == null) {
+            return rejected(AmqpFailure.UNKNOWN_TRANSACTION, "no such transaction: it was never declared, or is over");
+        }
+        if (Boolean.TRUE.equals(discharge.fail())) {
+            // Rolled back: nothing was sent, and what was received is delivered again (§6.2.7).
+            link.redeliver(transaction.consumed);
+            return new Accepted();
+        }
+        try {
+            // One request to the broker: the sends and the acknowledgements together, or neither.
+            link.commit(transaction.sends, transaction.consumed);
+            return new Accepted();
+        } catch (JMSException e) {
+            link.redeliver(transaction.consumed);
+            // Not amqp:transaction:rollback: a client such as Qpid JMS takes a rejected commit
+            // for a rollback whatever the condition, and that very condition for a doubt.
+            return rejected(e instanceof InvalidDestinationException ? AmqpFailure.NOT_FOUND : AmqpFailure.INTERNAL_ERROR,
+                    "the transaction was rolled back: " + e.getMessage());
         }
     }
 

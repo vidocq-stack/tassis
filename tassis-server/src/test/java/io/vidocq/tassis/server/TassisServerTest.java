@@ -842,46 +842,311 @@ class TassisServerTest {
         }
     }
 
-    // ---- what is not served yet (ROADMAP M11.3c) ------------------------------------
+    // ---- beyond queues: the frames of what Qpid JMS exercises end to end in tassis-interop -----
 
-    private static void assertRefused(Wire wire, Attach attach) throws Exception {
+    private static final Target NOWHERE = new Target(null, null, null, null, null, null, null);
+    private static final Source NOTHING = new Source(null, null, null, null, null, null, null, null, null, null, null);
+
+    /** Sends an attach the server must refuse, and returns the condition it gives. */
+    private static Symbol refusal(Wire wire, Attach attach) throws Exception {
         wire.send(attach);
         Attach answer = wire.expect(Attach.class);
         assertEquals(attach.name(), answer.name());
+        assertNull(attach.role() ? answer.source() : answer.target(), "nothing at the server's end");
         Detach detach = wire.expect(Detach.class);
         assertEquals(true, detach.closed());
-        assertEquals(Symbol.of("amqp:not-implemented"), detach.error().condition(), attach.name());
         // §2.6.5: the client answers the detach, and what it had sent meanwhile is not held against it
         wire.credit(attach.handle(), 0, 1, null);
         wire.send(new Detach(attach.handle(), true, null));
+        return detach.error().condition();
     }
 
     @Test
-    void topicsSelectorsBrowsersTemporariesAndTransactionsAreRefusedForNow() throws Exception {
-        Target nowhere = new Target(null, null, null, null, null, null, null);
-        Source nothing = new Source(null, null, null, null, null, null, null, null, null, null, null);
-        Map<Symbol, Object> selector = new LinkedHashMap<>();
-        selector.put(Symbol.of("jms-selector"), new Described(ULong.of(0x0000468C00000004L), "color = 'red'"));
+    void aLinkTheServerCannotServeIsRefusedAndTheSessionGoesOn() throws Exception {
+        Map<Symbol, Object> badSelector = new LinkedHashMap<>();
+        badSelector.put(Symbol.of("jms-selector"), new Described(ULong.of(0x0000468C00000004L), "color = = 'red'"));
         try (Wire wire = connect().ready()) {
-            assertRefused(wire, new Attach("topic-consumer", 0L, true, null, null, new Source("news", null, null, null,
-                    null, null, null, null, null, null, List.of(Symbol.of("topic"))), nowhere, null, null, null, null, null,
-                    null, null));
-            assertRefused(wire, new Attach("topic-producer", 0L, false, null, null, nothing, new Target("news", null,
-                    null, null, null, null, List.of(Symbol.of("topic"))), null, null, 0L, null, null, null, null));
-            assertRefused(wire, new Attach("selector", 0L, true, null, null, new Source("orders", null, null, null, null,
-                    null, null, selector, null, null, null), nowhere, null, null, null, null, null, null, null));
-            assertRefused(wire, new Attach("browser", 0L, true, null, null, new Source("orders", null, null, null, null,
-                    null, Symbol.of("copy"), null, null, null, null), nowhere, null, null, null, null, null, null, null));
-            assertRefused(wire, new Attach("temporary", 0L, true, null, null, new Source(null, null, null, null, true,
-                    null, null, null, null, null, List.of(Symbol.of("temporary-queue"))), nowhere, null, null, null, null,
-                    null, null, null));
-            assertRefused(wire, new Attach("transactions", 0L, false, null, null, nothing,
-                    new Coordinator(List.of(Symbol.of("amqp:local-transactions"))), null, null, 0L, null, null, null,
-                    null));
+            // a selector that is not one (Jakarta Messaging 3.1 §3.8.1)
+            assertEquals(Symbol.of("amqp:invalid-field"), refusal(wire, new Attach("bad-selector", 0L, true, null, null,
+                    new Source("orders", null, null, null, null, null, null, badSelector, null, null, null), NOWHERE, null,
+                    null, null, null, null, null, null)));
+            // a temporary destination that does not exist
+            assertEquals(Symbol.of("amqp:not-found"), refusal(wire, new Attach("gone", 0L, false, null, null, NOTHING,
+                    new Target("temporary-queue:nowhere", null, null, null, null, null,
+                            List.of(Symbol.of("temporary-queue"))), null, null, 0L, null, null, null, null)));
+            // a durable subscription nobody created, looked up to be deleted (§8.3.5)
+            assertEquals(Symbol.of("amqp:not-found"), refusal(wire, new Attach("no-such-subscription", 0L, true, null,
+                    null, null, NOWHERE, null, null, null, null, null, null, null)));
+            // a receiving link cannot ask for a node to be created
+            assertEquals(Symbol.of("amqp:not-implemented"), refusal(wire, new Attach("dynamic-source", 0L, true, null,
+                    null, new Source(null, null, null, null, true, null, null, null, null, null, null), NOWHERE, null,
+                    null, null, null, null, null, null)));
 
-            // a refusal leaves the session, and the handle, usable
+            // the session, and the handle, are still usable
             wire.attachReceiver(0, "orders");
         }
-        assertFalse(Broker.named(brokerName).consumerCount("orders") < 0);
+    }
+
+    @Test
+    void aTransactionIsDeclaredAndDischargedOnACoordinatorLink() throws Exception {
+        try (Wire wire = connect().ready()) {
+            // part 4, §4.2: a link to the coordinator
+            wire.send(new Attach("coordinator", 0L, false, null, null, NOTHING,
+                    new Coordinator(List.of(Symbol.of("amqp:local-transactions"))), null, null, 0L, null, null, null,
+                    null));
+            Attach attached = wire.expect(Attach.class);
+            assertEquals(List.of(Symbol.of("amqp:local-transactions")), ((Coordinator) attached.target()).capabilities());
+            wire.expect(Flow.class);
+            wire.attachSender(1, "orders");
+
+            // §4.3: declare, answered with the identifier of the transaction
+            wire.transfer(0, 0, AmqpMessage.ofBody(new AmqpValue(new io.vidocq.tassis.amqp.internal.transactions.Declare(null))));
+            Binary transaction = ((io.vidocq.tassis.amqp.internal.transactions.Declared) wire.expect(Disposition.class)
+                    .state()).txnId();
+
+            // §4.4.1: a message posted in the transaction is not there until it commits
+            wire.send(Frame.amqp(0, new Transfer(1L, 1L, Binary.of(1), 0L, false, null, null,
+                    new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(transaction, null), null, null,
+                    null), new Binary(text("in a transaction").encode())));
+            assertEquals(new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(transaction, new Accepted()),
+                    wire.expect(Disposition.class).state());
+            assertEquals(0, Broker.named(brokerName).messageCount("orders"));
+
+            wire.transfer(0, 2, AmqpMessage.ofBody(new AmqpValue(
+                    new io.vidocq.tassis.amqp.internal.transactions.Discharge(transaction, false))));
+            assertEquals(new Accepted(), wire.expect(Disposition.class).state());
+            assertEquals(1, Broker.named(brokerName).messageCount("orders"));
+
+            // discharged once: its identifier means nothing any more
+            wire.transfer(0, 3, AmqpMessage.ofBody(new AmqpValue(
+                    new io.vidocq.tassis.amqp.internal.transactions.Discharge(transaction, false))));
+            Rejected unknown = (Rejected) wire.expect(Disposition.class).state();
+            assertEquals(Symbol.of("amqp:transaction:unknown-id"), unknown.error().condition());
+        }
+    }
+
+    @Test
+    void aTransactionWhoseCoordinatorLinkGoesIsRolledBack() throws Exception {
+        sendInVm("orders", "a");
+        try (Wire wire = connect().ready()) {
+            wire.send(new Attach("coordinator", 0L, false, null, null, NOTHING, new Coordinator(null), null, null, 0L,
+                    null, null, null, null));
+            wire.expect(Attach.class);
+            wire.expect(Flow.class);
+            wire.transfer(0, 0, AmqpMessage.ofBody(new AmqpValue(new io.vidocq.tassis.amqp.internal.transactions.Declare(null))));
+            Binary transaction = ((io.vidocq.tassis.amqp.internal.transactions.Declared) wire.expect(Disposition.class)
+                    .state()).txnId();
+            wire.attachReceiver(1, "orders");
+            wire.credit(1, 0, 1, null);
+            long delivered = wire.delivery().transfer().deliveryId();
+            // §4.4.2: accepted, if the transaction commits
+            wire.send(new Disposition(true, delivered, delivered, true,
+                    new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(transaction, new Accepted()), null));
+            Thread.sleep(100);
+            assertEquals(0, Broker.named(brokerName).messageCount("orders"));
+
+            // §4.2: the link closes with the transaction undischarged
+            wire.send(new Detach(0L, true, null));
+            wire.expect(Detach.class);
+
+            awaitMessageCount("orders", 1);
+        }
+    }
+
+    @Test
+    void aBrowserIsSentTheQueueAndToldWhenItHasSeenItAll() throws Exception {
+        sendInVm("orders", "a", "b");
+        try (Wire wire = connect().ready()) {
+            wire.send(new Attach("browser", 0L, true, null, null, new Source("orders", null, null, null, null, null,
+                    Symbol.of("copy"), null, null, null, null), NOWHERE, null, null, null, null, null, null, null));
+            wire.expect(Attach.class);
+
+            wire.credit(0, 0, 10, true);
+
+            Wire.Received first = wire.delivery();
+            assertEquals("a", textOf(first.message()));
+            assertEquals(true, first.transfer().settled(), "nothing to acknowledge in what is only looked at");
+            assertEquals("b", textOf(wire.delivery().message()));
+            Flow drained = wire.expect(Flow.class);
+            assertEquals(0L, drained.linkCredit());
+            assertEquals(10L, drained.deliveryCount());
+        }
+        assertEquals(2, Broker.named(brokerName).messageCount("orders"), "a browser consumes nothing");
+    }
+
+    @Test
+    void aBrowserSendsNoMoreFramesThanTheWindowAllowsAndRemembersADrain() throws Exception {
+        sendInVm("orders", "x".repeat(3_000), "b");
+        try (Wire wire = connect()) {
+            wire.saslAnonymous();
+            wire.maxFrameSize = 512;
+            wire.open("browser-small-window");
+            // a window of two frames, for a first message that takes more (§2.5.6)
+            wire.send(new Begin(null, 0L, 2L, 1000L, null, null, null, null));
+            wire.expect(Begin.class);
+            wire.send(new Attach("browser", 0L, true, null, null, new Source("orders", null, null, null, null, null,
+                    Symbol.of("copy"), null, null, null, null), NOWHERE, null, null, null, null, null, null, null));
+            wire.expect(Attach.class);
+            // the drain is asked once, long before the queue has been seen to its end (§2.6.7)
+            wire.send(new Flow(0L, 2L, 0L, 1000L, 0L, 0L, 10L, null, true, null, null));
+
+            java.io.ByteArrayOutputStream octets = new java.io.ByteArrayOutputStream();
+            long received = 0;
+            Transfer last;
+            do {
+                Frame frame = wire.next();
+                last = (Transfer) frame.body();
+                octets.writeBytes(frame.payload().bytes());
+                received++;
+                if (received % 2 == 0) {
+                    assertTrue(wire.silent(), "no more than the window allows");
+                    wire.send(new Flow(received, 2L, 0L, 1000L, null, null, null, null, null, null, null));
+                }
+            } while (Boolean.TRUE.equals(last.more()));
+            assertTrue(received > 2);
+            assertEquals(3_000, textOf(AmqpMessage.decode(octets.toByteArray())).length());
+
+            wire.send(new Flow(received, 100L, 0L, 1000L, null, null, null, null, null, null, null));
+            assertEquals("b", textOf(wire.delivery().message()));
+            Flow drained = wire.expect(Flow.class);
+            assertEquals(0L, drained.linkCredit());
+            assertEquals(10L, drained.deliveryCount());
+        }
+    }
+
+    @Test
+    void aTemporaryDestinationThatIsGoneIsNotMadeAQueue() throws Exception {
+        try (Wire wire = connect().ready()) {
+            // §3.5.4: a dynamic target creates it, and closing the link deletes it
+            wire.send(new Attach("temporary", 0L, false, null, null, NOTHING,
+                    new Target(null, null, null, null, true, null, List.of(Symbol.of("temporary-queue"))), null, null,
+                    0L, null, null, null, null));
+            String created = (String) ((Target) wire.expect(Attach.class).target()).address();
+            wire.expect(Flow.class);
+            wire.send(new Detach(0L, true, null));
+            assertNull(wire.expect(Detach.class).error());
+
+            // named by a link that does not say it is a temporary destination
+            assertEquals(Symbol.of("amqp:not-found"), refusal(wire, new Attach("late", 0L, false, null, null, NOTHING,
+                    new Target(created, null, null, null, null, null, null), null, null, 0L, null, null, null, null)));
+            assertEquals(Symbol.of("amqp:not-found"), refusal(wire, new Attach("late-reader", 0L, true, null, null,
+                    new Source(created, null, null, null, null, null, null, null, null, null, null), NOWHERE, null, null,
+                    null, null, null, null, null)));
+
+            // named by a message, as the reply to a request whose sender is gone (§6.2.2)
+            wire.attachSender(1, null);
+            wire.transfer(1, 0, new AmqpMessage(null, null, null,
+                    new Properties(null, null, created, null, null, null, null, null, null, null, null, null, null), null,
+                    List.of(new AmqpValue("a late reply")), null));
+            Rejected rejected = (Rejected) wire.expect(Disposition.class).state();
+            assertEquals(Symbol.of("amqp:not-found"), rejected.error().condition());
+            assertEquals(0, Broker.named(brokerName).messageCount(created));
+        }
+    }
+
+    @Test
+    void anOutcomeInATransactionThatIsOverConsumesNothing() throws Exception {
+        sendInVm("orders", "a");
+        try (Wire wire = connect().ready()) {
+            wire.attachReceiver(0, "orders");
+            wire.credit(0, 0, 1, null);
+            long delivered = wire.delivery().transfer().deliveryId();
+
+            // part 4, §4.4.2: accepted in a transaction nobody declared
+            wire.send(new Disposition(true, delivered, delivered, true,
+                    new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(Binary.of(9, 9), new Accepted()),
+                    null));
+
+            awaitMessageCount("orders", 1);
+        }
+    }
+
+    @Test
+    void aDurableSubscriptionIsLookedUpInTheScopeItWasMadeIn() throws Exception {
+        try (Wire wire = connect()) {
+            wire.saslAnonymous();
+            wire.open(new Open("a-client-identifier", null, null, null, null, null, null, null,
+                    List.of(Symbol.of("sole-connection-for-container")), null));
+            wire.send(new Begin(null, 0L, 1000L, 1000L, null, null, null, null));
+            wire.expect(Begin.class);
+            // durable, and not global: it is the subscription of this client identifier (§8.3.3)
+            wire.send(new Attach("news-for-me", 0L, true, null, null, new Source("news", 2L, Symbol.of("never"), null,
+                    null, null, null, null, null, null, List.of(Symbol.of("topic"))), NOWHERE, null, null, null, null,
+                    null, null, null));
+            wire.expect(Attach.class);
+            wire.send(new Detach(0L, false, null));
+            wire.expect(Detach.class);
+            assertEquals(1, Broker.named(brokerName).subscriptionCount("news"));
+
+            // what follows the name of the subscription in the name of a link does not change its scope
+            wire.send(new Attach("news-for-me|2", 0L, true, null, null, null, NOWHERE, null, null, null, null, null,
+                    null, null));
+            assertEquals("news", ((Source) wire.expect(Attach.class).source()).address());
+            wire.send(new Detach(0L, true, null));
+            assertNull(wire.expect(Detach.class).error());
+            assertEquals(0, Broker.named(brokerName).subscriptionCount("news"));
+        }
+    }
+
+    @Test
+    void aClientMayNotHoldTransactionsWithoutEnd() throws Exception {
+        try (Wire wire = connect().ready()) {
+            wire.send(new Attach("coordinator", 0L, false, null, null, NOTHING, new Coordinator(null), null, null, 0L,
+                    null, null, null, null));
+            wire.expect(Attach.class);
+            wire.expect(Flow.class);
+            Object outcome = null;
+            for (int declared = 0; declared <= 1024; declared++) {
+                wire.transfer(0, declared,
+                        AmqpMessage.ofBody(new AmqpValue(new io.vidocq.tassis.amqp.internal.transactions.Declare(null))));
+                outcome = outcome(wire);
+            }
+            Rejected rejected = (Rejected) outcome;
+            assertEquals(Symbol.of("amqp:resource-limit-exceeded"), rejected.error().condition());
+        }
+    }
+
+    /** What the server says of the message it was just sent, past the credit it may grant meanwhile. */
+    private static Object outcome(Wire wire) throws Exception {
+        Frame answer = wire.next();
+        while (answer.body() instanceof Flow) {
+            answer = wire.next();
+        }
+        return ((Disposition) answer.body()).state();
+    }
+
+    @Test
+    void aTransactionHoldsNoMoreThanItsLimitOfMessages() throws Exception {
+        byte[] encoded = AmqpMessage.ofBody(new Data(new Binary(new byte[15 * 1024 * 1024]))).encode();
+        try (Wire wire = connect().ready()) {
+            wire.send(new Attach("coordinator", 0L, false, null, null, NOTHING, new Coordinator(null), null, null, 0L,
+                    null, null, null, null));
+            wire.expect(Attach.class);
+            wire.expect(Flow.class);
+            wire.attachSender(1, "orders");
+            wire.transfer(0, 0, AmqpMessage.ofBody(new AmqpValue(new io.vidocq.tassis.amqp.internal.transactions.Declare(null))));
+            Binary transaction = ((io.vidocq.tassis.amqp.internal.transactions.Declared) outcome(wire)).txnId();
+
+            // five messages of 15 MiB, for the 64 MiB a transaction may hold
+            Object outcome = null;
+            for (int sent = 1; sent <= 5; sent++) {
+                for (int from = 0; from < encoded.length; from += 200_000) {
+                    int to = Math.min(encoded.length, from + 200_000);
+                    boolean first = from == 0;
+                    wire.send(Frame.amqp(0, new Transfer(1L, first ? (long) sent : null, first ? Binary.of(sent) : null,
+                            first ? 0L : null, first ? false : null, to < encoded.length, null,
+                            new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(transaction, null), null,
+                            null, null), new Binary(java.util.Arrays.copyOfRange(encoded, from, to))));
+                }
+                Object answered = outcome(wire);
+                if (sent < 5) {
+                    assertEquals(new io.vidocq.tassis.amqp.internal.transactions.TransactionalState(transaction,
+                            new Accepted()), answered);
+                }
+                outcome = answered;
+            }
+            Rejected rejected = (Rejected) outcome;
+            assertEquals(Symbol.of("amqp:resource-limit-exceeded"), rejected.error().condition());
+        }
     }
 }

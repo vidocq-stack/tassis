@@ -8,7 +8,7 @@ Tassis is a Jakarta Messaging 3.1 provider written in Java 25. It depends on the
 
 [IMPORTANT]
 ====
-Tassis is **in development and not released**: no artifact has been published. The classic API, the simplified API and the legacy domain-specific API work on the in-VM broker. Messages live in memory, and the network transport is partial: queues only, no encryption. The limits a user must know are listed in the xref:reference.adoc#limits[reference]. This documentation describes the `{project-version}` development line.
+Tassis is **in development and not released**: no artifact has been published. The classic API, the simplified API and the legacy domain-specific API work on the in-VM broker. Messages live in memory, and the network transport has no encryption yet. The limits a user must know are listed in the xref:reference.adoc#limits[reference]. This documentation describes the `{project-version}` development line.
 ====
 
 == Origin of the name
@@ -44,7 +44,7 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 | Java | 25
 | Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.cdi.vauban` for the injection of `JMSContext`, and `io.vidocq.tassis.server` to open a broker to the network.
 | Runtime dependencies | None beyond the `jakarta.messaging` API module
-| Broker | In the JVM of the application, entirely in memory: nothing is written to the file system, by design. It can be opened to the network with AMQP 1.0, for queues so far.
+| Broker | In the JVM of the application, entirely in memory: nothing is written to the file system, by design. It can be opened to the network with AMQP 1.0.
 | Status | In development, not released
 | Jakarta Messaging TCK | The 903 applicable functional tests pass, and the signature test passes. Compatibility is **not claimed**: see xref:tck.adoc[TCK status].
 |===

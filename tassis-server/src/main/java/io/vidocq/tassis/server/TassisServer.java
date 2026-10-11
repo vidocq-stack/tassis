@@ -50,9 +50,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * messages. The server therefore listens on the loopback address unless told otherwise with
  * {@link Builder#host(String)}: open it to a network you trust, or not at all.
  *
- * <p>This is a first stage of the network transport. A client can send to a queue and receive
- * from one; topics, selectors, transactions, temporary destinations and queue browsers are
- * refused for now.
+ * <p>A client of the network has what a client of the JVM has: queues and topics, durable
+ * and shared subscriptions, message selectors, temporary destinations, local transactions,
+ * queue browsers. Distributed transactions are not carried by AMQP 1.0.
  */
 public final class TassisServer implements AutoCloseable {
 

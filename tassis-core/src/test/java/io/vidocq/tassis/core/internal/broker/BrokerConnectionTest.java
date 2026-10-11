@@ -238,8 +238,8 @@ class BrokerConnectionTest {
     @Test
     void closingEndsNonDurableSubscriptionsAndKeepsDurableOnes() throws JMSException {
         connection.claimClientId("desk");
-        Consumer durable = connection.subscribe(new Subscribing("news", false, "archive", true, false, false, null));
-        connection.subscribe(new Subscribing("news", false, null, false, false, false, null));
+        Consumer durable = connection.subscribe(new Subscribing("news", false, "archive", true, false, false, null, false));
+        connection.subscribe(new Subscribing("news", false, null, false, false, false, null, false));
         connection.send(outgoing("news", true, false, "a"));
         connection.send(outgoing("news", true, false, "b"));
         assertEquals("a", text(durable.receive(NOT_AT_ALL, false)));
@@ -256,6 +256,38 @@ class BrokerConnectionTest {
             assertTrue(a.getJMSRedelivered());
             assertEquals("b", ((TextMessage) consumer.receiveNoWait()).getText());
         }
+    }
+
+    @Test
+    void aDurableSubscriptionCanBeLookedUpByItsName() throws JMSException {
+        connection.claimClientId("desk");
+        assertNull(connection.durableSubscriptionTopic("archive", false));
+
+        Consumer durable = connection.subscribe(new Subscribing("news", false, "archive", true, false, false, null, false));
+        connection.subscribe(new Subscribing("news", false, "shared-volatile", false, true, false, null, false));
+
+        assertEquals("news", connection.durableSubscriptionTopic("archive", false));
+        assertNull(connection.durableSubscriptionTopic("shared-volatile", false), "not a durable one");
+        BrokerConnection other = broker.connect(null, null);
+        assertNull(other.durableSubscriptionTopic("archive", false), "scoped by the client identifier");
+        other.close();
+
+        // a name of the broker, which a connection that has a client identifier may ask for too
+        assertNull(connection.durableSubscriptionTopic("archive", true));
+        connection.subscribe(new Subscribing("news", false, "pool", true, true, false, null, true)).close();
+        assertEquals("news", other2().durableSubscriptionTopic("pool", false), "seen by a connection without one");
+        assertNull(connection.durableSubscriptionTopic("pool", false));
+        connection.unsubscribe("pool", true);
+
+        durable.close();
+        assertEquals("news", connection.durableSubscriptionTopic("archive", false), "it outlives its consumer");
+        connection.unsubscribe("archive", false);
+        assertNull(connection.durableSubscriptionTopic("archive", false));
+    }
+
+    /** A connection without a client identifier, closed with the broker's other test connections. */
+    private BrokerConnection other2() throws JMSException {
+        return broker.connect(null, null);
     }
 
     @Test
@@ -295,7 +327,7 @@ class BrokerConnectionTest {
 
         assertThrows(IllegalStateException.class, () -> connection.attach("orders", false, null));
         assertThrows(IllegalStateException.class,
-                () -> connection.subscribe(new Subscribing("news", false, null, false, false, false, null)));
+                () -> connection.subscribe(new Subscribing("news", false, null, false, false, false, null, false)));
         assertThrows(IllegalStateException.class, () -> connection.createTemporaryQueue());
         assertThrows(IllegalStateException.class, () -> connection.createTemporaryTopic());
         assertThrows(IllegalStateException.class, () -> connection.claimClientId("late"));
@@ -312,7 +344,7 @@ class BrokerConnectionTest {
 
     @Test
     void noLocalIgnoresWhatItsOwnConnectionPublishes() throws JMSException {
-        Consumer subscriber = connection.subscribe(new Subscribing("news", false, null, false, false, true, null));
+        Consumer subscriber = connection.subscribe(new Subscribing("news", false, null, false, false, true, null, false));
         BrokerConnection other = broker.connect(null, null);
 
         connection.send(outgoing("news", true, false, "mine"));

@@ -37,6 +37,8 @@ final class AmqpFailure extends Exception {
     static final Symbol FRAMING_ERROR = Symbol.of("amqp:connection:framing-error");
     static final Symbol MESSAGE_SIZE_EXCEEDED = Symbol.of("amqp:link:message-size-exceeded");
     static final Symbol ERRANT_LINK = Symbol.of("amqp:session:errant-link");
+    static final Symbol RESOURCE_LOCKED = Symbol.of("amqp:resource-locked");
+    static final Symbol UNKNOWN_TRANSACTION = Symbol.of("amqp:transaction:unknown-id");
     static final Symbol UNATTACHED_HANDLE = Symbol.of("amqp:session:unattached-handle");
 
     private final transient AmqpError error;

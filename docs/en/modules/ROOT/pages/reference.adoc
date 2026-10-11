@@ -187,6 +187,8 @@ What the server announces to a client, and accepts from it, is not configurable 
 
 | Largest frame accepted | 256 KiB
 | Largest message accepted | 16 MiB
+| Transactions of a connection that are not committed or rolled back yet | 1024
+| Messages sent in one transaction before it ends | 64 MiB
 | Sessions of a connection | 1024
 | Idle time-out announced to the client | 60 s: a client silent for twice as long is given up
 | Time to authenticate and open a connection | 10 s
@@ -359,11 +361,12 @@ A secured broker checks who connects, and gives every user the same rights: ther
 
 === The network transport is partial
 
-A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. Three things are missing:
+A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. A network client has the whole of Jakarta Messaging, short of XA. Two things are missing:
 
-* **Queues only.** A network client can do this: sending to a queue and receiving from one, with every kind of message, the header fields and the properties, and acknowledgement. Refused for now: topics and subscriptions, message selectors, temporary destinations, transactions and queue browsers. Milestone M11.3c.
 * **No encryption.** Messages and passwords travel in clear, and the server listens on the loopback address by default. Milestone M11.3d.
 * **No Tassis client over the network.** `TassisConnectionFactory` reaches the broker of its own JVM only; a network client is a third-party AMQP client. Milestone M11.3d.
+
+Distributed transactions will not go through the network: AMQP 1.0 leaves them unspecified. Local transactions do.
 
 A message a network client rejects, or declares undeliverable to itself, is dropped: there is no dead-letter queue.
 

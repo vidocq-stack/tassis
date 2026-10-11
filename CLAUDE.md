@@ -46,7 +46,7 @@ sdk env
 
 Tassis is a **Jakarta Messaging 3.1 provider** with **zero third-party dependency**. Being a
 provider, it ships its own broker: in-VM and entirely in memory, opened to the network over
-AMQP 1.0 by `tassis-server` (ROADMAP M11.3: queues so far).
+AMQP 1.0 by `tassis-server` (ROADMAP M11.3).
 
 ```
 tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, no fork)
@@ -241,9 +241,27 @@ Apache Qpid JMS. Exported to `tassis-server` only. Rules:
 - **A delivery taken from the broker always ends somewhere**: sent and recorded in
   `session.unsettled`, or `returnUndelivered`. A link, a session or a connection that ends
   gives back what it had not settled.
-- **Refuse, do not fail.** What is not served yet is refused per link (`refuse`:
-  `amqp:not-implemented`), which leaves the session usable; only what is out of place ends the
-  connection (`AmqpFailure`).
+- **Refuse, do not fail.** A link the server cannot attach is refused (`refuse`), which leaves
+  the session usable; only what is out of place ends the connection (`AmqpFailure`). A client
+  answers the detach of a refusal: `session.refused` is what makes that answer no error.
+- **What a link is, is read from its attach**, on the conventions of Apache Qpid JMS: the name
+  of a receiving link is the name of its subscription (up to a `|`), the source says durable,
+  shared, `global`, selector and `no-local`; a dynamic target asks for a temporary destination;
+  a null source looks a durable subscription up to delete it; `copy` is a browser. Check a new
+  convention against the client, in `tassis-interop`, not against memory.
+- **A name the broker gives to temporary destinations** (`temporary-queue:`, `temporary-topic:`)
+  is, for a client of the network, a temporary destination or nothing: never let it create a
+  queue (`temporaryName`).
+- **Whatever sends transfers counts the session window frame by frame**: a pump waits
+  (`deliver`), a browser keeps its frames for the next flow (`feed`, on the reader thread,
+  which must not wait).
+- **A transaction holds what it has not done yet** (`Transaction`): the sends, and the
+  deliveries accepted in it, which stay unsettled in the broker. Discharge is one
+  `commit(sends, consumed)` or one `redeliver(consumed)`. A coordinator link that goes rolls
+  its transactions back.
+- **`global`**: every AMQP connection has a container identifier, so the server claims it as
+  client identifier for all of them; a client that set none says so with the capability
+  `global`, and its subscription names are then the broker's, not that identifier's.
 - What the server announces and accepts is in `Limits`, and nowhere else.
 - A change here is proven three times: `TassisServerTest` (frame by frame), the `interop`
   profile (Apache Qpid JMS as the client), and the TCK, since the broker is shared.

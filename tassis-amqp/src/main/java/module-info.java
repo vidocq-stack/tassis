@@ -27,7 +27,6 @@ module io.vidocq.tassis.amqp {
     exports io.vidocq.tassis.amqp.internal.jms to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.messaging to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.security to io.vidocq.tassis.server;
-    // Read by the server's tests only, until transactions are served (ROADMAP M11.3c).
     exports io.vidocq.tassis.amqp.internal.transactions to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.transport to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.types to io.vidocq.tassis.server;

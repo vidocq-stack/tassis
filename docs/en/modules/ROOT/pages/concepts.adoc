@@ -10,7 +10,7 @@ Tassis is a provider, not a client library for another broker: the broker is par
 
 Two consequences follow, both listed among the xref:reference.adoc#limits[limits]:
 
-* a broker is reachable from its own JVM, and from other processes only once a `TassisServer` opens it to them, for queues so far (see xref:usage.adoc#network[Opening a broker to the network]);
+* a broker is reachable from its own JVM, and from other processes only once a `TassisServer` opens it to them (see xref:usage.adoc#network[Opening a broker to the network]);
 * messages and durable subscriptions do not survive the JVM. This is a design decision, not a milestone to come: Tassis writes nothing to the file system.
 
 === Broker names

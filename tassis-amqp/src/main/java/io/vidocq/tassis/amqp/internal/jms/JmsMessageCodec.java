@@ -217,9 +217,13 @@ public final class JmsMessageCodec {
                 application.isEmpty() ? null : new ApplicationProperties(application), body, null);
     }
 
-    private static byte kindOf(Destination destination) {
+    private static byte kindOf(Destination destination) throws JMSException {
+        // A temporary destination that crossed a broker comes back as a plain one of its name:
+        // the names a Tassis broker gives them say what they are.
+        String name = addressOf(destination);
         boolean temporary = destination instanceof jakarta.jms.TemporaryQueue
-                || destination instanceof jakarta.jms.TemporaryTopic;
+                || destination instanceof jakarta.jms.TemporaryTopic
+                || name != null && (name.startsWith("temporary-queue:") || name.startsWith("temporary-topic:"));
         if (destination instanceof Topic) {
             return temporary ? KIND_TEMPORARY_TOPIC : KIND_TOPIC;
         }

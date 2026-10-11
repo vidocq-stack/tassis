@@ -135,8 +135,13 @@ final class LocalConnection implements BrokerConnection {
     }
 
     @Override
-    public void unsubscribe(String name) throws JMSException {
-        broker.unsubscribe(this, name);
+    public String durableSubscriptionTopic(String name, boolean global) {
+        return broker.durableSubscriptionTopic(this, name, global);
+    }
+
+    @Override
+    public void unsubscribe(String name, boolean global) throws JMSException {
+        broker.unsubscribe(this, name, global);
     }
 
     @Override

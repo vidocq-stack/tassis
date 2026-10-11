@@ -64,6 +64,12 @@ final class Limits {
     /** How many octets may wait to be written to one client before the server gives it up. */
     static final long MAX_PENDING_OCTETS = 64L * 1024 * 1024;
 
+    /** How many transactions a connection may have declared and not discharged (part 4, §4.3). */
+    static final int MAX_TRANSACTIONS = 1024;
+
+    /** How many octets of messages a transaction may hold before it is discharged. */
+    static final long MAX_TRANSACTION_OCTETS = 64L * 1024 * 1024;
+
     private Limits() {
     }
 }

@@ -60,7 +60,8 @@ import org.junit.jupiter.api.Test;
 /**
  * A third-party Jakarta Messaging client, Apache Qpid JMS, against a Tassis broker opened to
  * the network by {@code TassisServer}: nothing of Tassis is on the client's side. This is what
- * AMQP 1.0 was chosen for. Queues only for now (ROADMAP M11.3b).
+ * AMQP 1.0 was chosen for. Queues here; the rest of Jakarta Messaging is in
+ * {@link QpidJmsMessagingTest}.
  */
 class QpidJmsAgainstTassisTest {
 
@@ -387,27 +388,5 @@ class QpidJmsAgainstTassisTest {
             opened.add(second);
             second.setClientID("desk");
         });
-    }
-
-    // ---- what is not served yet (ROADMAP M11.3c) -------------------------------------
-
-    @Test
-    void whatIsNotServedYetFailsWithAnExceptionAndLeavesTheConnectionUsable() throws Exception {
-        Connection connection = connect();
-        Session session = connection.createSession();
-        Queue queue = session.createQueue("orders");
-
-        assertThrows(JMSException.class, () -> session.createConsumer(session.createTopic("news")));
-        assertThrows(JMSException.class, () -> session.createConsumer(queue, "color = 'red'"));
-        assertThrows(JMSException.class, () -> session.createTemporaryQueue());
-        assertThrows(JMSException.class, () -> {
-            Session transacted = connection.createSession(Session.SESSION_TRANSACTED);
-            transacted.createProducer(queue).send(transacted.createTextMessage("in a transaction"));
-            transacted.commit();
-        });
-
-        Session fine = connection.createSession();
-        fine.createProducer(queue).send(fine.createTextMessage("still works"));
-        assertEquals("still works", ((TextMessage) fine.createConsumer(queue).receive(SOON)).getText());
     }
 }

@@ -57,9 +57,12 @@ public interface BrokerConnection {
      *
      * @param name the subscription name, or {@code null} for an unshared non-durable subscription
      * @param selector what the subscription keeps of the topic's messages, or {@code null} for all
+     * @param global whether the name is one of the broker rather than of the connection's client
+     *        identifier: what the name of a subscription is when its connection has no client
+     *        identifier, and what a connection that has one may still ask for
      */
     record Subscribing(String topic, boolean temporary, String name, boolean durable, boolean shared,
-            boolean noLocal, Selector selector) {
+            boolean noLocal, Selector selector, boolean global) {
 
         /** Whether the two requests describe the same subscription (§8.3.3, §8.3.4). */
         boolean describesTheSameAs(Subscribing other) {
@@ -173,8 +176,23 @@ public interface BrokerConnection {
      */
     Consumer subscribe(Subscribing request) throws JMSException;
 
-    /** Deletes a durable subscription of this connection's client identifier (§8.3.5). */
-    void unsubscribe(String name) throws JMSException;
+    /**
+     * Returns the topic of the durable subscription of that name, or {@code null} if there is
+     * none. A client that is not in the broker's JVM has no other way to find out before it
+     * unsubscribes.
+     *
+     * @param global whether the name is one of the broker rather than of this connection's client
+     *        identifier: see {@link Subscribing}
+     */
+    String durableSubscriptionTopic(String name, boolean global);
+
+    /**
+     * Deletes a durable subscription (§8.3.5).
+     *
+     * @param global whether the name is one of the broker rather than of this connection's client
+     *        identifier: see {@link Subscribing}
+     */
+    void unsubscribe(String name, boolean global) throws JMSException;
 
     /**
      * Settles a delivery: the message is consumed for good.

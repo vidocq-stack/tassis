@@ -28,10 +28,26 @@ import java.io.ByteArrayOutputStream;
  */
 final class IncomingLink {
 
+    /** What a link the client sends by is for. */
+    enum Kind {
+        /** Messages for a queue or a topic. */
+        DESTINATION,
+        /** The declare and discharge of transactions (part 4, §4.2). */
+        COORDINATOR,
+        /** Nothing is sent by it: it stands for a temporary destination, which lasts as long as it does. */
+        TEMPORARY
+    }
+
     final long handle;
     final String name;
-    /** The queue the messages go to, or {@code null} if each message says it in its {@code to} field. */
-    final String queue;
+    final Kind kind;
+    /**
+     * The queue or topic the messages go to, or {@code null} if each message says it in its
+     * {@code to} field. For a {@link Kind#TEMPORARY} link, the temporary destination it stands for.
+     */
+    final String address;
+    final boolean topic;
+    final boolean temporary;
 
     long credit;
     long deliveryCount;
@@ -41,10 +57,17 @@ final class IncomingLink {
     Long partialDeliveryId;
     boolean partialSettled;
 
-    IncomingLink(long handle, String name, String queue, long initialDeliveryCount) {
+    // The transaction the delivery in progress is part of, if its first frame named one.
+    io.vidocq.tassis.amqp.internal.types.Binary partialTransaction;
+
+    IncomingLink(long handle, String name, Kind kind, String address, boolean topic, boolean temporary,
+            long initialDeliveryCount) {
         this.handle = handle;
         this.name = name;
-        this.queue = queue;
+        this.kind = kind;
+        this.address = address;
+        this.topic = topic;
+        this.temporary = temporary;
         this.deliveryCount = initialDeliveryCount;
     }
 }

@@ -36,9 +36,16 @@ final class AmqpSession {
     record Sent(OutgoingLink link, BrokerConnection.Delivery delivery) {
     }
 
+    /** A durable subscription a client looked up: its name, and whether that is a name of the broker. */
+    record LookedUp(String name, boolean global) {
+    }
+
     final int channel;
     final Map<Long, IncomingLink> incoming = new HashMap<>();
     final Map<Long, OutgoingLink> outgoing = new HashMap<>();
+    final Map<Long, BrowserLink> browsers = new HashMap<>();
+    // The links attached only to find a durable subscription, so as to delete it: handle -> its name.
+    final Map<Long, LookedUp> lookups = new HashMap<>();
     // The handles of the links the server refused, until the client answers the detach: what it
     // sent for them meanwhile is not an error.
     final Set<Long> refused = new HashSet<>();

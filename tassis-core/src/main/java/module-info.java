@@ -28,4 +28,5 @@ module io.vidocq.tassis.core {
     // The network transport reaches the broker and the message model, and nobody else does.
     exports io.vidocq.tassis.core.internal.broker to io.vidocq.tassis.server;
     exports io.vidocq.tassis.core.internal.message to io.vidocq.tassis.amqp, io.vidocq.tassis.server;
+    exports io.vidocq.tassis.core.internal.selector to io.vidocq.tassis.server;
 }

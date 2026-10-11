@@ -250,7 +250,7 @@ public final class Broker {
 
         Subscription(Subscribing request, LocalConnection connection) {
             this.request = request;
-            this.clientId = connection.clientId;
+            this.clientId = request.global() ? null : connection.clientId;
             this.subscriber = connection.identity();
         }
     }
@@ -661,7 +661,8 @@ public final class Broker {
     }
 
     private Subscription named(LocalConnection connection, Subscribing request) throws JMSException {
-        Subscription existing = namedSubscriptions.get(nameOf(connection.clientId, request));
+        Subscription existing =
+                namedSubscriptions.get(nameOf(request.global() ? null : connection.clientId, request));
         if (existing == null) {
             return add(connection, request);
         }
@@ -712,13 +713,25 @@ public final class Broker {
         return new SubscriptionName(request.durable(), clientId, request.name());
     }
 
+    /** The topic of a durable subscription of the connection's client identifier, or null. */
+    String durableSubscriptionTopic(LocalConnection connection, String name, boolean global) {
+        lock.lock();
+        try {
+            Subscription subscription =
+                    namedSubscriptions.get(new SubscriptionName(true, global ? null : connection.clientId, name));
+            return subscription == null ? null : subscription.request.topic();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** Deletes a durable subscription; fails while it has an active consumer (§8.3.5). */
-    void unsubscribe(LocalConnection connection, String name) throws JMSException {
+    void unsubscribe(LocalConnection connection, String name, boolean global) throws JMSException {
         lock.lock();
         try {
             checkOpen(connection);
             Subscription subscription =
-                    namedSubscriptions.get(new SubscriptionName(true, connection.clientId, name));
+                    namedSubscriptions.get(new SubscriptionName(true, global ? null : connection.clientId, name));
             if (subscription == null) {
                 throw new InvalidDestinationException("there is no durable subscription named " + name);
             }
