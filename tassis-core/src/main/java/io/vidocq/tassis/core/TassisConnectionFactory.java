@@ -20,6 +20,7 @@
 package io.vidocq.tassis.core;
 
 import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.client.Domain;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
 import io.vidocq.tassis.core.internal.client.TassisContext;
@@ -176,10 +177,14 @@ public final class TassisConnectionFactory
      * @throws JMSSecurityException if the broker rejects the credentials (§6.1.1, §10.3)
      */
     private TassisConnection connect(Domain domain, String userName, String password) throws JMSException {
-        Broker broker = Broker.named(settings.broker());
-        // Before anything is taken from the broker: a rejected client holds no client identifier.
-        broker.users().check(userName, password);
-        return new TassisConnection(broker, domain, settings.clientId(), settings.maxListenerDeliveries());
+        BrokerConnection link = Broker.named(settings.broker()).connect(userName, password);
+        try {
+            return new TassisConnection(link, domain, settings.clientId(), settings.maxListenerDeliveries());
+        } catch (JMSException | RuntimeException e) {
+            // The client identifier of the factory was refused: nothing must stay open.
+            link.close();
+            throw e;
+        }
     }
 
     @Override

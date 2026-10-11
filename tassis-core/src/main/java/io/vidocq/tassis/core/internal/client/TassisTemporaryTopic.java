@@ -42,12 +42,7 @@ final class TassisTemporaryTopic implements TemporaryTopic {
 
     /** The broker is the one place that knows which temporary topics exist. */
     boolean isDeleted() {
-        return !owner.broker().hasTemporaryTopic(name);
-    }
-
-    /** Deletes this topic because its connection is closing. */
-    void dispose() {
-        owner.broker().dropTemporaryTopic(name);
+        return !owner.link().hasTemporaryTopic(name);
     }
 
     @Override
@@ -57,8 +52,7 @@ final class TassisTemporaryTopic implements TemporaryTopic {
 
     @Override
     public void delete() throws JMSException {
-        owner.broker().deleteTemporaryTopic(name);
-        owner.forget(this);
+        owner.link().deleteTemporaryTopic(name);
     }
 
     @Override

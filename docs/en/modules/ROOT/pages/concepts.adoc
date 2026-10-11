@@ -53,12 +53,14 @@ A message has one owner at each moment.
 
 . **The client**, until `send` returns. The send gives the broker a copy of the message, so the application's object and the stored message are independent from then on.
 . **The broker**, while the message waits in a queue or in a subscription. In a transacted session the copy stays with the session until `commit`, and reaches the broker only then.
-. **The session of the consumer**, from the moment one of its consumers takes the message. The message has left the queue: no other consumer and no browser sees it.
+. **The session of the consumer**, from the moment one of its consumers takes the message. The message has left the queue: no other consumer and no browser sees it. The broker keeps hold of it all the same, until the session says what becomes of it.
 
 The session then does one of two things with each message it owns:
 
 * it **settles** it: the message is gone for good. An automatically acknowledged session settles a message as it returns it from `receive`, or when `onMessage` returns. A client-acknowledged session settles on `acknowledge()`, a transacted session on `commit()`.
 * it **gives it back** to the broker: on `rollback()`, on `recover()`, when the session is closed with unsettled messages, or when a listener throws in an automatically acknowledged session. The message returns to its place and its next delivery is marked as a redelivery.
+
+A connection that ends without its sessions having done either, which is what a client that vanishes looks like to a broker, changes nothing to that: the broker gives the messages back itself. It also deletes the temporary destinations of the connection, ends its non-durable subscriptions and frees its client identifier.
 
 Each delivery hands the application its own read-only copy of the message, with `JMSXDeliveryCount` set for that delivery.
 

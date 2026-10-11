@@ -19,7 +19,7 @@
  */
 package io.vidocq.tassis.core.internal.client;
 
-import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import jakarta.jms.ConnectionConsumer;
 import jakarta.jms.ConnectionMetaData;
 import jakarta.jms.Destination;
@@ -37,55 +37,51 @@ import jakarta.jms.TopicConnection;
 import jakarta.jms.TopicSession;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * A client's active connection to the in-VM broker (Jakarta Messaging 3.1 §6.1).
+ * A client's active connection to a broker (Jakarta Messaging 3.1 §6.1), which it knows through
+ * a {@link BrokerConnection} only.
  * It is created stopped: its consumers receive nothing until {@link #start()}.
  */
 public final class TassisConnection implements QueueConnection, TopicConnection {
 
-    private final Broker broker;
+    private final BrokerConnection link;
     private final Domain domain;
     private final int maxListenerDeliveries;
     private final List<TassisSession> sessions = new CopyOnWriteArrayList<>();
-    private final List<TassisTemporaryQueue> temporaryQueues = new CopyOnWriteArrayList<>();
-    private final List<TassisTemporaryTopic> temporaryTopics = new CopyOnWriteArrayList<>();
-    // Written under the broker lock, which is where delivery reads them.
-    private volatile boolean started;
     private volatile boolean closed;
     private volatile String clientId;
     // Whether anything was done with the connection: after that, setClientID is too late (§6.1.2).
     private volatile boolean used;
     private volatile ExceptionListener exceptionListener;
-    private final AtomicBoolean clientIdReleased = new AtomicBoolean();
-    // Serialises setting the client identifier with releasing it on close, so that an
-    // identifier claimed by a setClientID racing with close() is always given back.
+    // Serialises the calls to setClientID: the identifier is set once. The broker gives it back
+    // when the connection closes, and refuses to give one to a closed connection.
     private final ReentrantLock identity = new ReentrantLock();
 
     /**
      * @param configuredClientId the client identifier assigned by the connection factory, or
      *        {@code null} to leave it to {@link #setClientID}
      */
-    public TassisConnection(Broker broker, Domain domain, String configuredClientId, int maxListenerDeliveries)
-            throws JMSException {
-        this.broker = broker;
+    public TassisConnection(BrokerConnection link, Domain domain, String configuredClientId,
+            int maxListenerDeliveries) throws JMSException {
+        this.link = link;
         this.domain = domain;
         this.maxListenerDeliveries = maxListenerDeliveries;
         if (configuredClientId != null) {
-            broker.claimClientId(configuredClientId);
+            link.claimClientId(configuredClientId);
             clientId = configuredClientId;
             used = true;
         }
     }
 
-    Broker broker() {
-        return broker;
+    /** The broker, as this connection knows it. */
+    BrokerConnection link() {
+        return link;
     }
 
     boolean isStarted() {
-        return started;
+        return link.isStarted();
     }
 
     /** How many times a message is delivered to a listener that keeps failing before it is dropped. */
@@ -98,46 +94,17 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
         return clientId;
     }
 
-    /**
-     * What identifies this connection as a publisher or a subscriber for {@code noLocal}: its
-     * client identifier, so that it stays the same across reconnections, or else itself.
-     */
-    Object localIdentity() {
-        String id = clientId;
-        return id != null ? id : this;
-    }
-
     void forget(TassisSession session) {
         sessions.remove(session);
     }
 
-    TassisTemporaryQueue createTemporaryQueue() throws IllegalStateException {
-        TassisTemporaryQueue queue = new TassisTemporaryQueue(this, broker.createTemporaryQueue());
-        temporaryQueues.add(queue);
-        // Same add-then-check as for sessions: a concurrent close must not miss this queue.
-        if (closed) {
-            queue.dispose();
-            throw new IllegalStateException("the connection is closed");
-        }
-        return queue;
+    /** A temporary destination lasts as long as its connection: the broker deletes it with it (§6.2.2). */
+    TassisTemporaryQueue createTemporaryQueue() throws JMSException {
+        return new TassisTemporaryQueue(this, link.createTemporaryQueue());
     }
 
-    TassisTemporaryTopic createTemporaryTopic() throws IllegalStateException {
-        TassisTemporaryTopic topic = new TassisTemporaryTopic(this, broker.createTemporaryTopic());
-        temporaryTopics.add(topic);
-        if (closed) {
-            topic.dispose();
-            throw new IllegalStateException("the connection is closed");
-        }
-        return topic;
-    }
-
-    void forget(TassisTemporaryQueue queue) {
-        temporaryQueues.remove(queue);
-    }
-
-    void forget(TassisTemporaryTopic topic) {
-        temporaryTopics.remove(topic);
+    TassisTemporaryTopic createTemporaryTopic() throws JMSException {
+        return new TassisTemporaryTopic(this, link.createTemporaryTopic());
     }
 
     private void checkOpen() throws IllegalStateException {
@@ -226,7 +193,7 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
             if (clientID == null || clientID.isEmpty()) {
                 throw new InvalidClientIDException("a client identifier must not be null or empty");
             }
-            broker.claimClientId(clientID);
+            link.claimClientId(clientID);
             clientId = clientID;
             used = true;
         } finally {
@@ -255,14 +222,9 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     @Override
     public void start() throws JMSException {
         use();
-        boolean[] wasStopped = new boolean[1];
-        broker.update(() -> {
-            wasStopped[0] = !started;
-            started = true;
-        });
         // Only when delivery really resumes: start on a started connection must do nothing, or
         // listeners of two sessions calling it would wait for each other's turn.
-        if (wasStopped[0]) {
+        if (link.start()) {
             for (TassisSession session : sessions) {
                 session.resumeListeners();
             }
@@ -270,15 +232,15 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     }
 
     /**
-     * Returns once delivery is paused (§6.1.5): no receive will return a message, since the flag
-     * is flipped under the lock every delivery holds, and no listener is running or will be
+     * Returns once delivery is paused (§6.1.5): no receive will return a message, which is what
+     * the broker guarantees of a stopped connection, and no listener is running or will be
      * called. A listener cannot stop the connection it is called by.
      */
     @Override
     public void stop() throws JMSException {
         use();
         notFromACallback("stop", false);
-        broker.update(() -> started = false);
+        link.stop();
         for (TassisSession session : sessions) {
             session.awaitListenerInProgress();
         }
@@ -303,31 +265,14 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     @Override
     public void close() throws JMSException {
         notFromACallback("close", true);
-        broker.update(() -> {
-            closed = true;
-            started = false;
-        });
+        closed = true;
+        link.stop();
         for (TassisSession session : sessions) {
             session.shut();
         }
-        for (TassisTemporaryQueue queue : temporaryQueues) {
-            queue.dispose();
-            temporaryQueues.remove(queue);
-        }
-        for (TassisTemporaryTopic topic : temporaryTopics) {
-            topic.dispose();
-            temporaryTopics.remove(topic);
-        }
-        // Once only: after that the identifier may belong to another connection.
-        identity.lock();
-        try {
-            String id = clientId;
-            if (id != null && clientIdReleased.compareAndSet(false, true)) {
-                broker.releaseClientId(id);
-            }
-        } finally {
-            identity.unlock();
-        }
+        // The sessions have given back what they held; the broker takes back the rest: the
+        // temporary destinations and the client identifier.
+        link.close();
     }
 
     // ---- connection consumers: optional (§11), and not for a QueueConnection (§9.2) ----

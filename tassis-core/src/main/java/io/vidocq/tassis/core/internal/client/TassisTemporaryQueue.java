@@ -42,12 +42,7 @@ final class TassisTemporaryQueue implements TemporaryQueue {
 
     /** The broker is the one place that knows which temporary queues exist. */
     boolean isDeleted() {
-        return !owner.broker().hasTemporaryQueue(name);
-    }
-
-    /** Deletes this queue because its connection is closing. */
-    void dispose() {
-        owner.broker().dropTemporaryQueue(name);
+        return !owner.link().hasTemporaryQueue(name);
     }
 
     @Override
@@ -57,8 +52,7 @@ final class TassisTemporaryQueue implements TemporaryQueue {
 
     @Override
     public void delete() throws JMSException {
-        owner.broker().deleteTemporaryQueue(name);
-        owner.forget(this);
+        owner.link().deleteTemporaryQueue(name);
     }
 
     @Override

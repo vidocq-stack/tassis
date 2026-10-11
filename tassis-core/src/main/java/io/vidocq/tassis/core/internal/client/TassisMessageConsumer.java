@@ -19,7 +19,7 @@
  */
 package io.vidocq.tassis.core.internal.client;
 
-import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.message.TassisMessage;
 import io.vidocq.tassis.core.internal.selector.Selector;
 import jakarta.jms.Destination;
@@ -46,16 +46,16 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     private final Destination destination;
     private final boolean noLocal;
     private final Selector selector;
-    private final Broker.Consumer attachment;
+    private final BrokerConnection.Consumer attachment;
     private volatile boolean closed;
-    // Written through Broker.update: the dispatcher's wait for a message depends on it.
+    // The broker is told whether there is one (attachment.listen): the dispatcher's wait for a
+    // message ends when there is none any more.
     private volatile MessageListener listener;
     // The virtual thread that takes messages for the listener; null when there is no listener.
-    // Written through Broker.update, like the listener: a dispatcher's wait depends on it too.
     private volatile Thread dispatcher;
 
     TassisMessageConsumer(TassisSession session, Destination destination, boolean noLocal, Selector selector,
-            Broker.Consumer attachment) {
+            BrokerConnection.Consumer attachment) {
         this.session = session;
         this.destination = destination;
         this.noLocal = noLocal;
@@ -104,14 +104,21 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     @Override
     public Message receive(long timeout) throws JMSException {
         checkSynchronous();
-        return session.delivered(session.broker().receive(attachment,
-                timeout == 0 ? Broker.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout)));
+        return take(timeout == 0 ? BrokerConnection.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout));
     }
 
     @Override
     public Message receiveNoWait() throws JMSException {
         checkSynchronous();
-        return session.delivered(session.broker().receive(attachment, 0));
+        return take(0);
+    }
+
+    /**
+     * An automatically acknowledged session keeps nothing of a message it receives: the broker
+     * settles the delivery as it makes it. In the other modes the session answers for it.
+     */
+    private Message take(long timeoutNanos) throws JMSException {
+        return session.delivered(attachment.receive(timeoutNanos, session.automaticallyAcknowledged()));
     }
 
     /**
@@ -124,7 +131,8 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
      */
     <T> T receiveBody(Class<T> c, long timeoutNanos) throws JMSException {
         checkSynchronous();
-        Broker.Delivery delivery = session.broker().receive(attachment, timeoutNanos);
+        // Not settled on delivery, whatever the mode: the message may still have to be given back.
+        BrokerConnection.Delivery delivery = attachment.receive(timeoutNanos, false);
         if (delivery == null) {
             return null;
         }
@@ -138,14 +146,18 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
             if (body == null) {
                 throw new MessageFormatException("the message has no body");
             }
-        } catch (JMSException | RuntimeException failure) {
+        } catch (JMSException | RuntimeException | Error failure) {
             // Whatever went wrong, the delivery must end up somewhere.
             if (session.automaticallyAcknowledged()) {
-                session.broker().returnUndelivered(delivery);
+                session.link().returnUndelivered(delivery);
             } else {
                 session.delivered(delivery);
             }
             throw failure;
+        }
+        if (session.automaticallyAcknowledged()) {
+            // Null if the connection was closed meanwhile: the message went back to its queue.
+            return session.link().settle(delivery) ? body : null;
         }
         return session.delivered(delivery) == null ? null : body;
     }
@@ -168,13 +180,14 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     @Override
     public void setMessageListener(MessageListener newListener) throws JMSException {
         checkOpen();
-        session.broker().update(() -> listener = newListener);
+        listener = newListener;
+        long period = attachment.listen(newListener != null);
         if (newListener == null) {
             awaitDispatcher();
         } else if (dispatcher == null && !closed) {
             // Assigned before it runs: the dispatcher stops as soon as it is no longer the one in charge.
-            Thread thread = Thread.ofVirtual().name("tassis-listener-" + destination).unstarted(this::dispatch);
-            session.broker().update(() -> dispatcher = thread);
+            Thread thread = Thread.ofVirtual().name("tassis-listener-" + destination).unstarted(() -> dispatch(period));
+            dispatcher = thread;
             thread.start();
         }
     }
@@ -188,25 +201,25 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     }
 
     /** The dispatcher: takes messages one at a time for as long as the consumer has a listener. */
-    private void dispatch() {
+    private void dispatch(long period) {
         Thread me = Thread.currentThread();
         try {
             while (listenerToCall() != null) {
-                Broker.Delivery delivery = session.broker().receive(attachment, Broker.FOREVER,
-                        () -> listener != null && dispatcher == me);
-                if (delivery != null) {
-                    session.dispatch(this, delivery);
+                BrokerConnection.Delivery delivery = attachment.take(period);
+                if (delivery == null) {
+                    // The listener this thread served is gone, or the consumer is closed, whoever
+                    // closed it: either way there is nothing more to wait for.
+                    break;
                 }
+                session.dispatch(this, delivery);
             }
         } catch (JMSException interrupted) {
             // Only an interrupt ends a wait this way; nothing was taken from the broker.
         } finally {
             // Whatever ended it, a later setMessageListener must be able to start another one.
-            session.broker().update(() -> {
-                if (dispatcher == me) {
-                    dispatcher = null;
-                }
-            });
+            if (dispatcher == me) {
+                dispatcher = null;
+            }
         }
     }
 
@@ -235,12 +248,9 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
                 Thread.currentThread().interrupt();
             }
         }
-        // Through the broker, so that a dispatcher still waiting there learns it was dismissed.
-        session.broker().update(() -> {
-            if (dispatcher == running) {
-                dispatcher = null;
-            }
-        });
+        if (dispatcher == running) {
+            dispatcher = null;
+        }
     }
 
     @Override
@@ -251,7 +261,7 @@ final class TassisMessageConsumer implements QueueReceiver, TopicSubscriber, Ses
     @Override
     public void shut() {
         closed = true;
-        session.broker().detach(attachment);
+        attachment.close();
         awaitDispatcher();
         session.forget(this);
     }

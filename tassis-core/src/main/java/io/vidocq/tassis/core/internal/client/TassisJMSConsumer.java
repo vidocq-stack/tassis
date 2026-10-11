@@ -19,7 +19,7 @@
  */
 package io.vidocq.tassis.core.internal.client;
 
-import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import jakarta.jms.JMSConsumer;
 import jakarta.jms.Message;
 import jakarta.jms.MessageListener;
@@ -71,14 +71,14 @@ final class TassisJMSConsumer implements JMSConsumer {
 
     @Override
     public <T> T receiveBody(Class<T> c) {
-        return Unchecked.get(() -> consumer.receiveBody(c, Broker.FOREVER));
+        return Unchecked.get(() -> consumer.receiveBody(c, BrokerConnection.FOREVER));
     }
 
     /** A timeout of zero never expires, as for {@code receive}. */
     @Override
     public <T> T receiveBody(Class<T> c, long timeout) {
         return Unchecked.get(() -> consumer.receiveBody(c,
-                timeout == 0 ? Broker.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout)));
+                timeout == 0 ? BrokerConnection.FOREVER : TimeUnit.MILLISECONDS.toNanos(timeout)));
     }
 
     @Override

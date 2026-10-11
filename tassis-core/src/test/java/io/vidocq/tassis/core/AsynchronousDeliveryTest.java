@@ -363,6 +363,43 @@ class AsynchronousDeliveryTest {
     }
 
     @Test
+    void closingTheSessionWaitsForAListenerThatRemovedItself() throws Exception {
+        // Session.close "must not return until message processing has been shut down in an
+        // orderly fashion" (§6.2.15), even when the listener in progress is no longer the
+        // listener of its consumer. The message it holds is not redelivered behind its back.
+        CountDownLatch inListener = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        MessageConsumer consumer = session.createConsumer(queue);
+        consumer.setMessageListener(message -> {
+            try {
+                consumer.setMessageListener(null);
+                inListener.countDown();
+                release.await();
+            } catch (JMSException | InterruptedException e) {
+                throw new AssertionError(e);
+            }
+        });
+        send(queue, "a");
+        assertTrue(inListener.await(SOON, TimeUnit.SECONDS));
+
+        CompletableFuture<Void> closing = CompletableFuture.runAsync(() -> {
+            try {
+                session.close();
+            } catch (JMSException e) {
+                throw new AssertionError(e);
+            }
+        });
+        assertThrows(java.util.concurrent.TimeoutException.class,
+                () -> closing.get(BRIEFLY, TimeUnit.MILLISECONDS), "close returned while the listener was running");
+        release.countDown();
+        closing.get(SOON, TimeUnit.SECONDS);
+
+        try (Session other = connection.createSession()) {
+            assertNull(other.createConsumer(queue).receiveNoWait(), "the message was processed, not given back");
+        }
+    }
+
+    @Test
     void removingTheListenerStopsAsynchronousDelivery() throws Exception {
         MessageConsumer consumer = session.createConsumer(queue);
         consumer.setMessageListener(message -> received.add(text(message)));

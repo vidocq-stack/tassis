@@ -11,7 +11,7 @@
 
 | Topic | Decision |
 |---|---|
-| Nature | Home-grown broker, **in-VM** today: the client objects call the `Broker` object of their JVM directly. No transport SPI exists. The network transport (M11) speaks **AMQP 1.0**, decided on 2026-10-10, and introduces the seam it needs. |
+| Nature | Home-grown broker, **in-VM** today: the client objects reach the broker of their JVM through the internal interface `BrokerConnection` (M11.2). The network transport (M11.3) speaks **AMQP 1.0**, decided on 2026-10-10, and will be another implementation of it. |
 | Authentication | A user registry on each broker, administered with `TassisBroker` (M11.1). A broker is open until a first user is declared, then secured for good. No authorization: every user has the same rights. |
 | Persistence | **In-memory, by decision** (2026-10-10): messages live in the broker's memory, in `Broker.Storage`, and the broker writes nothing to the file system. No store SPI exists. The journal that M10 planned is abandoned. |
 | Integrations | **CDI through Vauban** only (`JMSContext` injection, M9). |
@@ -106,9 +106,10 @@ tassis-tck         ← The official TCK runner: in-reactor behind the `tck` prof
 Consumer / QueueBrowser, temporary destinations, and the simplified API), `broker` (the `Broker`
 class: queues, subscriptions, client identifiers, delivery), `selector` (lexer, parser, evaluator).
 
-There is no `store` and no `transport` package, and no SPI for either, although the plan of M0
-had them. Messages live in the broker's memory, in `Broker.Storage`, and the client objects call
-the `Broker` directly. M11 (network transport) introduces the seam it needs.
+There is no `store` and no `transport` package, although the plan of M0 had them. Messages live
+in the broker's memory, in `Broker.Storage`. The client objects reach the broker through one
+internal interface, `BrokerConnection` (M11.2), where the network transport of M11.3 will put
+its own implementation.
 
 ## Phases
 
@@ -634,24 +635,50 @@ Not in this slice, and why:
 - **A stronger password hash.** Nothing is written out, so the digest only keeps the password
   out of a memory dump; a slow hash would be paid at each connection.
 
-#### M11.2 — The seam between client and broker
+#### M11.2 — The seam between client and broker ✅
 
-Today the client objects call `Broker` directly, and three things in that contract do not
-survive a network:
+The client objects called `Broker` directly, and three things in that contract would not have
+survived a network. Each is settled:
 
-- **The broker forgets a message when it delivers it.** `Broker.receive` removes it and the
-  session keeps it; acknowledging is only forgetting. A client that dies would take its
-  unacknowledged messages with it. The broker must hold the unsettled deliveries of each
-  connection and requeue them when the connection is lost. (The discarded journal prototype
-  had reached the same conclusion: see M10.)
-- **The broker reads client state under its lock**: whether the connection is started, whether
-  the consumer is closed. Those become things the client tells the broker.
-- **Identity is an object reference** (`Outgoing.publisher`, `Subscribing.subscriber`), for
-  `noLocal`. It becomes a connection identifier.
+- [x] **The broker forgot a message when it delivered it**, and acknowledging was only
+      forgetting, on the client's side. The broker now keeps the unsettled deliveries of each
+      connection; the session settles them or gives them back with a request, and a commit is
+      one request, atomic. (The discarded journal prototype had reached the same conclusion:
+      see M10.)
+- [x] **The broker read client state under its lock** (two `BooleanSupplier`, and
+      `Broker.update(Runnable)`, which ran client code there). It is now told: `start()`,
+      `stop()`, `Consumer.listen(boolean)`.
+- [x] **Identity was an object reference** passed in each request, for `noLocal`. The broker
+      now knows who a connection is, and closes what it owns: consumers, temporary
+      destinations, client identifier.
+- [x] `BrokerConnection`, the one interface between `internal.client` and a broker;
+      `LocalConnection`, its implementation for the broker of the JVM; `Broker.connect`, which
+      also checks the credentials.
+- [x] **A connection that ends with work left undone** gets all of it taken back by
+      `close()`: the one new behaviour of this slice, and the whole treatment a lost connection
+      will need. `BrokerConnectionTest` exercises the contract directly.
 
-To deliver: one interface per connection between `internal.client` and the broker, shaped by
-AMQP's model (see below) rather than by today's calls, with the in-VM broker behind it and no
-change of behaviour. Proof: the unit tests and the whole TCK, unchanged.
+No behaviour changed for applications: the existing tests pass untouched, and the TCK with them.
+The concurrency review of the slice found one old defect, fixed here and recorded as `BUG.md`
+T-001: closing a session did not wait for a listener that had removed itself from its consumer.
+
+What it leaves for M11.3:
+
+- **The seam is at the level of the connection**, with no session on the broker's side: the
+  client buffers the sends of a transaction. It is the smallest contract both the in-VM broker
+  and an AMQP peer can honour, not one modelled on AMQP's sessions and links. The study that
+  opens M11.3 may reshape it.
+- **A blocking `receive(timeout)`** is what the interface offers. Over AMQP it has to be built
+  on credit; see the point on delivery by credit below.
+- **`hasTemporaryQueue` / `hasTemporaryTopic` are asked at each use** of a temporary
+  destination (`Destinations.resolve`). Free in the JVM, a round trip on a network.
+- **One more lock acquisition per message for a listener** of an automatically acknowledged
+  session, which now settles after `onMessage`. To be measured in M12.
+- **Messages and selectors cross the seam as objects.** The codec is M11.3's.
+- **A consumer the broker closes on its own** ends its dispatcher, which is new. But a
+  dispatcher that holds a message at that moment may still hand it to its listener while the
+  broker gives it back: harmless in the JVM, where a connection closes its sessions first, and
+  to be settled for a connection that drops.
 
 #### M11.3 — AMQP 1.0
 

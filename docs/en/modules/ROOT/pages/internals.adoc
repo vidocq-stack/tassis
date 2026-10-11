@@ -33,7 +33,7 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 | `TassisMessage` (header fields, properties, the template for a body) and one subclass per body type: text, object, map, bytes, stream. `ValueConversions` is the single conversion table for properties, `MapMessage` and `StreamMessage`. `Messages.snapshot` turns any `Message`, including another provider's, into an independent Tassis copy.
 
 | `internal.broker`
-| `Broker`: the registry of brokers by name, queues, subscriptions, client identifiers, temporary destinations, and the delivery of messages. `Users`: the user registry of a broker and the check of the credentials a connection is created with. It guards itself and is never touched under the broker lock; a password is kept as a salted SHA-256 digest and compared in constant time.
+| `BrokerConnection`: the interface through which a client connection reaches its broker, and the only thing the client objects know of it. `Broker`: the registry of brokers by name, queues, subscriptions, client identifiers, temporary destinations, and the delivery of messages. `LocalConnection`: what a `Broker` keeps for one client, and the implementation of `BrokerConnection` for the broker of the JVM. `Users`: the user registry of a broker and the check of the credentials a connection is created with. It guards itself and is never touched under the broker lock; a password is kept as a salted SHA-256 digest and compared in constant time.
 
 | `internal.client`
 | The API objects: `TassisConnection`, `TassisSession`, `TassisMessageProducer`, `TassisMessageConsumer`, `TassisQueueBrowser`, the temporary destinations, and the simplified API (`TassisContext`, `TassisJMSProducer`, `TassisJMSConsumer`). `Destinations.resolve` is the one place that decides which `Destination` objects belong to Tassis.
@@ -45,7 +45,18 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 | `Settings`, one record: what configures a connection factory, read from keys or from a connection URL, with the defaults and the validation. A new setting is added there once, as a key and as a URL parameter.
 |===
 
-There is no storage interface and no transport interface. Messages live in the memory of the broker, in `Broker.Storage`, and the client objects call the `Broker` object directly. The broker is in memory by decision, so there will be no store; the network transport (milestone M11.3, over AMQP 1.0) needs a seam there, which milestone M11.2 introduces.
+There is no storage interface: messages live in the memory of the broker, in `Broker.Storage`, and the broker is in memory by decision.
+
+== The seam between client and broker
+
+The client objects never name the class `Broker`. `TassisConnectionFactory` obtains a `BrokerConnection` from `Broker.connect(userName, password)`, which is also where the credentials are checked, and every client object goes through it: `TassisConnection.link()`, `TassisSession.link()`. It is the place where the network transport of milestone M11.3 (over AMQP 1.0) will put another implementation, and it is written for a broker that may be far away and whose client may vanish:
+
+* **The broker reads nothing from the client.** It is told what it needs to know: `start()` and `stop()` for the connection, `listen(boolean)` for a consumer that gains or loses its listener. No client code runs under the broker lock.
+* **The broker keeps every delivery that is not settled**, in `LocalConnection.unsettled`, until the client settles it or gives it back.
+* **The broker knows who the connection is.** Nothing in a request names its sender: the client identifier, or else the connection itself, is what `noLocal` compares.
+* **`close()` takes back what is left**: it closes the remaining consumers, gives back the unsettled deliveries, deletes the temporary destinations of the connection and frees its client identifier. A client that closes in good order leaves it little to do; a lost connection will arrive there with everything.
+
+The interface stays at the level of the connection. There is no session on the broker's side: a transacted session buffers its sends and hands them over, with the deliveries to settle, in one `commit` request.
 
 == Storage and subscriptions
 
@@ -53,25 +64,25 @@ There is no storage interface and no transport interface. Messages live in the m
 
 * A queue has one storage, created on first use.
 * A subscription (`Broker.Subscription`) is a subscription request plus a storage of its own.
-* `Broker.send` adds a message sent to a queue to the storage of that queue. It adds a message published to a topic to the storage of each subscription of that topic, after applying the subscription's selector and its `noLocal` rule. The same message object is shared by all those storages; it is never modified.
+* `Broker.commit`, which a send outside a transaction also goes through, adds a message sent to a queue to the storage of that queue. It adds a message published to a topic to the storage of each subscription of that topic, after applying the subscription's selector and its `noLocal` rule. The same message object is shared by all those storages; it is never modified.
 
 From there on a subscription behaves like a queue, so receive, acknowledgement, transactions and redelivery are one code path for both.
 
-Named subscriptions are indexed by a key made of three values: durable or not, the client identifier, the name. The creation, reuse, replacement and conflict rules of section 8.3 of the specification are in one private method of `Broker`, `named(Subscribing)`.
+Named subscriptions are indexed by a key made of three values: durable or not, the client identifier, the name. The creation, reuse, replacement and conflict rules of section 8.3 of the specification are in one private method of `Broker`, `named(LocalConnection, Subscribing)`.
 
 A send never hands the broker the client's own message: `TassisMessageProducer` passes `Messages.snapshot(message)`.
 
 == Delivery
 
-`Broker.receive` takes the first deliverable message of the storage a consumer is attached to, removes it from the storage and returns a `Broker.Delivery`: the stored entry, plus a copy of the message made for this delivery, marked with its delivery count.
+A receive takes the first deliverable message of the storage a consumer is attached to, removes it from the storage and returns a `Delivery`: the stored entry, plus a copy of the message made for this delivery, marked with its delivery count. Unless the caller asked for it to be settled on delivery, the broker also records it among the unsettled deliveries of the connection.
 
-From that moment **the consumer's session owns the delivery**. It must do one of three things with it:
+From that moment **the consumer's session answers for the delivery**. It does one of three things with it, each a request to the broker:
 
-* settle it, which with an in-memory broker means forgetting it: no broker call is needed;
-* give it back with `Broker.redeliver`: the entry returns to its storage with its sequence number, hence to its place, and its next delivery is a redelivery;
-* give it back with `Broker.returnUndelivered` when the application never saw the message: the delivery count is decremented, as if the message had not been taken.
+* `settle`, alone or as part of a `commit`: the broker forgets the delivery, and the message is consumed for good;
+* `redeliver`: the entry returns to its storage with its sequence number, hence to its place, and its next delivery is a redelivery;
+* `returnUndelivered`, when the application never saw the message: the delivery count is decremented, as if the message had not been taken.
 
-A `Delivery` that is lost is a lost message. `TassisSession` keeps the deliveries it has not settled in its `unsettled` list. An automatically acknowledged session settles on delivery and keeps nothing, except while a listener is processing a message.
+Each of the three does nothing for a delivery that is no longer the connection's, so a delivery cannot be given back twice: not by a session and by the closing of its connection, for instance. `TassisSession` keeps the deliveries it answers for in its `unsettled` list. A `receive` of an automatically acknowledged session asks for settlement on delivery and keeps nothing; a listener of such a session is settled when `onMessage` returns.
 
 `Storage.add` and `Storage.remove` are the only two ways to change what a storage holds: they keep the selector index and the next expiration time up to date.
 
@@ -101,12 +112,12 @@ Tassis creates two kinds of thread, both virtual.
 
 `setMessageListener` with a non-null listener starts a virtual thread for the consumer, running `TassisMessageConsumer.dispatch`. The dispatcher loops:
 
-. it takes one message with `Broker.receive`, waiting without limit;
+. it takes one message with `Consumer.take(period)`, which waits for as long as the consumer listens without interruption. `listen(boolean)` returns the number of the period it opens or continues, and that number changes each time the consumer stops listening: a dispatcher that served a listener since removed is thus never mistaken for the dispatcher of the next one. A `take` that returns nothing ends the dispatcher;
 . it hands the delivery to `TassisSession.dispatch`, which takes the session's `listeners` lock, waits while the connection is stopped, calls `onMessage`, then settles the message or handles the failure.
 
 All the `onMessage` calls of a session go through `TassisSession.dispatch`. That lock is what makes the listeners of a session serial.
 
-If the consumer is closed or loses its listener while the dispatcher holds a message, the message goes back with `Broker.returnUndelivered`.
+If the consumer is closed or loses its listener while the dispatcher holds a message, the message goes back with `returnUndelivered`.
 
 === The completion thread of a session
 
@@ -131,14 +142,14 @@ A session records which thread is currently inside one of its message listeners 
 | The session's unsettled deliveries, its uncommitted sends, and the bookkeeping of its completion callbacks.
 
 | The broker lock (`Broker.lock`)
-| All broker state, **and** the delivery-related state of its clients: whether a connection is started, whether a consumer is closed, which listener and dispatcher a consumer has.
+| All broker state, that of its connections included: whether a connection is started, its consumers and whether each one listens, its unsettled deliveries, its temporary destinations.
 |===
 
 The only order in which they are taken is: **`listeners`, then `work`, then the broker lock**. Nothing that runs under the broker lock may take a session lock or call application code.
 
-Client state that delivery depends on is changed through `Broker.update(Runnable)`, which runs the change under the broker lock and then signals the condition every waiting receive listens to. Changing such a field without it can leave a receive asleep.
+Whatever delivery depends on is state of the broker, changed by a `BrokerConnection` request that signals the condition every waiting receive listens to. The client keeps no such state of its own: a consumer's `listener` and `dispatcher` fields only say what the client does with a message once it has it.
 
-Two other locks exist beside these three: `TassisContext.lifecycle`, which guards the lazily created session of a context and is never held while waiting for a callback to return, and `TassisConnection.identity`, which serialises setting a client identifier with releasing it on close.
+Two other locks exist beside these three: `TassisContext.lifecycle`, which guards the lazily created session of a context and is never held while waiting for a callback to return, and `TassisConnection.identity`, which serialises the calls to `setClientID`.
 
 One broker lock is the simplest design that honours `stop()` and `close()`. Its known costs: every state change wakes every waiting receive of the broker, and a receive without a view scans past the messages that are delayed. Whether the lock must be split is left to the benchmarks of milestone M12.
 

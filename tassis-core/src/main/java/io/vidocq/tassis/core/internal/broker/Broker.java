@@ -21,9 +21,13 @@ package io.vidocq.tassis.core.internal.broker;
 
 import io.vidocq.tassis.core.internal.message.TassisMessage;
 import io.vidocq.tassis.core.internal.selector.Selector;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection.Outgoing;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection.Subscribing;
+import jakarta.jms.IllegalStateException;
 import jakarta.jms.InvalidClientIDException;
 import jakarta.jms.InvalidDestinationException;
 import jakarta.jms.JMSException;
+import jakarta.jms.JMSSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -39,7 +43,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.BooleanSupplier;
 
 /**
  * The in-VM broker (Jakarta Messaging 3.1 chapter 4).
@@ -49,70 +52,73 @@ import java.util.function.BooleanSupplier;
  * publications to its topic. From there on the two behave alike: consumers attached to a
  * storage compete for its messages.
  *
- * <p>All broker state, and the delivery-related state of its clients (connection started,
- * consumer closed), is guarded by one lock. Whatever changes that state signals
- * {@link #changed}, which is the only thing a waiting receive listens to.
+ * <p>A client reaches the broker through a {@link BrokerConnection}, obtained from
+ * {@link #connect}: the broker reads nothing from its clients. What it keeps for each of them
+ * is in a {@link LocalConnection}.
+ *
+ * <p>All broker state, that of its connections included (started, consumers, unsettled
+ * deliveries), is guarded by one lock. Whatever changes that state signals {@link #changed},
+ * which is the only thing a waiting receive listens to.
  */
 public final class Broker {
 
-    /** Timeout value of {@link #receive} that never expires. */
-    public static final long FOREVER = Long.MAX_VALUE;
+    private static final long FOREVER = BrokerConnection.FOREVER;
+
+    /** For a receive that does not depend on the consumer listening; no period has this number. */
+    private static final long NO_PERIOD = -1;
 
     private static final ConcurrentHashMap<String, Broker> BROKERS = new ConcurrentHashMap<>();
 
-    /**
-     * A message on its way to a destination.
-     *
-     * @param publisher identifies who sends it, for the {@code noLocal} subscriptions of a topic
-     */
-    public record Outgoing(String destination, boolean topic, boolean temporary, Object publisher,
-            TassisMessage message) {
-    }
-
-    /**
-     * What a consumer asks of a topic (§8.3).
-     *
-     * @param name the subscription name, or {@code null} for an unshared non-durable subscription
-     * @param clientId the client identifier the name is scoped by, or {@code null} if unset
-     * @param selector what the subscription keeps of the topic's messages, or {@code null} for all
-     * @param subscriber identifies who subscribes, to be compared with {@link Outgoing#publisher}
-     */
-    public record Subscribing(String topic, boolean temporary, String name, boolean durable, boolean shared,
-            String clientId, boolean noLocal, Selector selector, Object subscriber) {
-
-        /** Whether the two requests describe the same subscription (§8.3.3, §8.3.4). */
-        private boolean describesTheSameAs(Subscribing other) {
-            return topic.equals(other.topic) && noLocal == other.noLocal && Objects.equals(selector, other.selector);
-        }
-    }
-
     /** A consumer's attachment to a queue or to a subscription. */
-    public static final class Consumer {
+    static final class Consumer implements BrokerConnection.Consumer {
 
+        private final LocalConnection connection;
         private final Storage storage;
         private final Subscription subscription;
         // A queue consumer's own filter; a subscription filters when the message is published.
         private final Selector selector;
         // The selector's view of the queue, or null when the consumer looks at the whole storage.
         private final View view;
-        private final BooleanSupplier started;
+        private boolean listening;
+        // Changes each time the consumer stops listening: see BrokerConnection.Consumer.listen.
+        private long period;
         private boolean closed;
         private boolean detached;
         // A count, not a flag: a misused consumer may be in several receives at once.
         private int receiving;
 
-        private Consumer(Storage storage, Subscription subscription, Selector selector, View view,
-                BooleanSupplier started) {
+        private Consumer(LocalConnection connection, Storage storage, Subscription subscription, Selector selector,
+                View view) {
+            this.connection = connection;
             this.storage = storage;
             this.subscription = subscription;
             this.selector = selector;
             this.view = view;
-            this.started = started;
+        }
+
+        @Override
+        public BrokerConnection.Delivery receive(long timeoutNanos, boolean settleOnDelivery) throws JMSException {
+            return connection.broker.receive(this, timeoutNanos, settleOnDelivery, NO_PERIOD);
+        }
+
+        @Override
+        public BrokerConnection.Delivery take(long ofPeriod) throws JMSException {
+            return connection.broker.receive(this, FOREVER, false, ofPeriod);
+        }
+
+        @Override
+        public long listen(boolean nowListening) {
+            return connection.broker.listen(this, nowListening);
+        }
+
+        @Override
+        public void close() {
+            connection.broker.detach(this);
         }
     }
 
-    /** A message handed to a consumer, which the consumer's session either settles or gives back. */
-    public static final class Delivery {
+    /** A message handed to a consumer. */
+    static final class Delivery implements BrokerConnection.Delivery {
 
         private final Stored stored;
         private final TassisMessage message;
@@ -124,12 +130,12 @@ public final class Broker {
             this.deliveryCount = stored.deliveryCount;
         }
 
-        /** How many times the message has been delivered, this delivery included. */
+        @Override
         public int deliveryCount() {
             return deliveryCount;
         }
 
-        /** The copy of the message made for this delivery. */
+        @Override
         public TassisMessage message() {
             return message;
         }
@@ -236,10 +242,16 @@ public final class Broker {
     private static final class Subscription {
 
         final Subscribing request;
+        // The client identifier the name is scoped by, or null if the subscriber had none.
+        final String clientId;
+        // Who subscribed, to be compared with who publishes (§8.3.1).
+        final Object subscriber;
         final Storage storage = new Storage();
 
-        Subscription(Subscribing request) {
+        Subscription(Subscribing request, LocalConnection connection) {
             this.request = request;
+            this.clientId = connection.clientId;
+            this.subscriber = connection.identity();
         }
     }
 
@@ -255,6 +267,8 @@ public final class Broker {
     private final Set<String> temporaryTopics = new HashSet<>();
     private final Map<String, List<Subscription>> subscriptionsByTopic = new HashMap<>();
     private final Map<SubscriptionName, Subscription> namedSubscriptions = new HashMap<>();
+    // Who created each temporary destination: it goes when its connection does.
+    private final Map<String, LocalConnection> temporaryOwners = new HashMap<>();
     private final Set<String> clientIds = new HashSet<>();
     private final AtomicLong messageIds = new AtomicLong();
     private final AtomicLong temporaryIds = new AtomicLong();
@@ -276,39 +290,102 @@ public final class Broker {
         return BROKERS.computeIfAbsent(name, Broker::new);
     }
 
-    public String nextMessageId() {
+    /**
+     * Opens a connection for a client, once the broker has accepted who it says it is (§6.1.1).
+     *
+     * @param userName the user name, or {@code null} for a connection without credentials
+     * @throws JMSSecurityException if the broker is secured and rejects the credentials
+     */
+    public BrokerConnection connect(String userName, String password) throws JMSSecurityException {
+        // Before anything is kept for the client: a rejected one leaves no trace.
+        users.check(userName, password);
+        return new LocalConnection(this);
+    }
+
+    String nextMessageId() {
         return "ID:" + name + "-" + messageIds.incrementAndGet();
     }
 
-    /** Runs a change to delivery-related client state, then wakes the waiting receives. */
-    public void update(Runnable change) {
-        lock.lock();
-        try {
-            change.run();
-            changed.signalAll();
-        } finally {
-            lock.unlock();
+    private static void checkOpen(LocalConnection connection) throws IllegalStateException {
+        if (connection.closed) {
+            throw new IllegalStateException("the connection is closed");
         }
     }
 
-    // ---- client identifiers ----------------------------------------------
+    // ---- connections -----------------------------------------------------
 
-    /** Reserves a client identifier for one connection (§6.1.2). */
-    public void claimClientId(String clientId) throws InvalidClientIDException {
+    /** Reserves a client identifier for the connection, until it closes (§6.1.2). */
+    void claimClientId(LocalConnection connection, String clientId) throws JMSException {
         lock.lock();
         try {
+            checkOpen(connection);
+            if (connection.clientId != null) {
+                throw new IllegalStateException("the client identifier is already set to " + connection.clientId);
+            }
             if (!clientIds.add(clientId)) {
                 throw new InvalidClientIDException("client identifier " + clientId + " is in use by another connection");
             }
+            connection.clientId = clientId;
         } finally {
             lock.unlock();
         }
     }
 
-    public void releaseClientId(String clientId) {
+    boolean start(LocalConnection connection) {
         lock.lock();
         try {
-            clientIds.remove(clientId);
+            if (connection.closed || connection.started) {
+                return false;
+            }
+            connection.started = true;
+            changed.signalAll();
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Flipped under the lock every delivery holds: once this returns, no receive hands out a message. */
+    void stop(LocalConnection connection) {
+        lock.lock();
+        try {
+            connection.started = false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Ends a connection, taking back what it leaves behind. The order matters: its consumers
+     * first, so that a non-durable subscription ends before its unsettled messages look for a
+     * place to return to.
+     */
+    void close(LocalConnection connection) {
+        lock.lock();
+        try {
+            if (connection.closed) {
+                return;
+            }
+            connection.closed = true;
+            connection.started = false;
+            changed.signalAll();
+            for (Consumer consumer : List.copyOf(connection.consumers)) {
+                detach(consumer);
+            }
+            for (Delivery delivery : connection.unsettled) {
+                giveBack(delivery);
+            }
+            connection.unsettled.clear();
+            for (String queue : List.copyOf(connection.temporaryQueues)) {
+                dropTemporaryQueue(queue);
+            }
+            for (String topic : List.copyOf(connection.temporaryTopics)) {
+                dropTemporaryTopic(topic);
+            }
+            if (connection.clientId != null) {
+                clientIds.remove(connection.clientId);
+            }
+            changed.signalAll();
         } finally {
             lock.unlock();
         }
@@ -316,21 +393,15 @@ public final class Broker {
 
     // ---- temporary destinations ------------------------------------------
 
-    /** Creates a temporary queue and returns its name. */
-    public String createTemporaryQueue() {
-        return createTemporary(temporaryQueues, "temporary-queue:");
-    }
-
-    /** Creates a temporary topic and returns its name. */
-    public String createTemporaryTopic() {
-        return createTemporary(temporaryTopics, "temporary-topic:");
-    }
-
-    private String createTemporary(Set<String> names, String prefix) {
-        String created = prefix + name + "-" + temporaryIds.incrementAndGet();
+    /** Creates a temporary queue or topic that lasts as long as the connection, and returns its name. */
+    String createTemporary(LocalConnection connection, boolean topic) throws IllegalStateException {
+        String created = (topic ? "temporary-topic:" : "temporary-queue:") + name + "-" + temporaryIds.incrementAndGet();
         lock.lock();
         try {
-            names.add(created);
+            checkOpen(connection);
+            (topic ? temporaryTopics : temporaryQueues).add(created);
+            (topic ? connection.temporaryTopics : connection.temporaryQueues).add(created);
+            temporaryOwners.put(created, connection);
             return created;
         } finally {
             lock.unlock();
@@ -338,7 +409,7 @@ public final class Broker {
     }
 
     /** Returns whether the temporary queue of that name still exists. */
-    public boolean hasTemporaryQueue(String queue) {
+    boolean hasTemporaryQueue(String queue) {
         lock.lock();
         try {
             return temporaryQueues.contains(queue);
@@ -348,7 +419,7 @@ public final class Broker {
     }
 
     /** Returns whether the temporary topic of that name still exists. */
-    public boolean hasTemporaryTopic(String topic) {
+    boolean hasTemporaryTopic(String topic) {
         lock.lock();
         try {
             return temporaryTopics.contains(topic);
@@ -358,7 +429,7 @@ public final class Broker {
     }
 
     /** Deletes a temporary queue and its messages; fails while a consumer is attached to it (§6.2.2). */
-    public void deleteTemporaryQueue(String queue) throws JMSException {
+    void deleteTemporaryQueue(String queue) throws JMSException {
         lock.lock();
         try {
             Storage storage = queues.get(queue);
@@ -371,17 +442,16 @@ public final class Broker {
         }
     }
 
-    /** Deletes a temporary queue whose connection is closing, whatever is attached to it. */
-    public void dropTemporaryQueue(String queue) {
-        lock.lock();
-        try {
-            temporaryQueues.remove(queue);
-            Storage storage = queues.remove(queue);
-            if (storage != null) {
-                storage.deleted = true;
-            }
-        } finally {
-            lock.unlock();
+    /** Deletes a temporary queue, whatever is attached to it. Under the lock. */
+    private void dropTemporaryQueue(String queue) {
+        temporaryQueues.remove(queue);
+        LocalConnection owner = temporaryOwners.remove(queue);
+        if (owner != null) {
+            owner.temporaryQueues.remove(queue);
+        }
+        Storage storage = queues.remove(queue);
+        if (storage != null) {
+            storage.deleted = true;
         }
     }
 
@@ -389,7 +459,7 @@ public final class Broker {
      * Deletes a temporary topic; fails while a consumer is subscribed to it (§6.2.2). Its
      * subscriptions without a consumer, which can only be durable ones, go with it.
      */
-    public void deleteTemporaryTopic(String topic) throws JMSException {
+    void deleteTemporaryTopic(String topic) throws JMSException {
         lock.lock();
         try {
             for (Subscription subscription : subscriptionsByTopic.getOrDefault(topic, List.of())) {
@@ -403,34 +473,37 @@ public final class Broker {
         }
     }
 
-    /** Deletes a temporary topic whose connection is closing, with its subscriptions. */
-    public void dropTemporaryTopic(String topic) {
-        lock.lock();
-        try {
-            temporaryTopics.remove(topic);
-            for (Subscription subscription : List.copyOf(subscriptionsByTopic.getOrDefault(topic, List.of()))) {
-                remove(subscription);
-            }
-            changed.signalAll();
-        } finally {
-            lock.unlock();
+    /** Deletes a temporary topic with its subscriptions, whatever is attached to them. Under the lock. */
+    private void dropTemporaryTopic(String topic) {
+        temporaryTopics.remove(topic);
+        LocalConnection owner = temporaryOwners.remove(topic);
+        if (owner != null) {
+            owner.temporaryTopics.remove(topic);
         }
+        for (Subscription subscription : List.copyOf(subscriptionsByTopic.getOrDefault(topic, List.of()))) {
+            remove(subscription);
+        }
+        changed.signalAll();
     }
 
     // ---- sending ---------------------------------------------------------
 
     /**
-     * Adds messages, which the broker now owns, to their destinations: all of them, or none if
-     * one names a temporary destination that no longer exists. A message sent to a queue waits
-     * there; a message published to a topic is added to each of its subscriptions, and to none
-     * if it has none (§4.2.3).
+     * Adds messages, which the broker now owns, to their destinations, and settles deliveries:
+     * all of it, or nothing if one of the messages names a temporary destination that no longer
+     * exists. This is a commit (§6.2.7), and a send outside a transaction is a commit of one
+     * message. A message sent to a queue waits there; a message published to a topic is added
+     * to each of its subscriptions, and to none if it has none (§4.2.3).
      */
-    public void send(Collection<Outgoing> messages) throws InvalidDestinationException {
+    void commit(LocalConnection connection, Collection<Outgoing> messages,
+            Collection<? extends BrokerConnection.Delivery> consumed) throws JMSException {
         lock.lock();
         try {
+            checkOpen(connection);
             for (Outgoing outgoing : messages) {
                 checkExists(outgoing.destination(), outgoing.topic(), outgoing.temporary());
             }
+            Object publisher = connection.identity();
             for (Outgoing outgoing : messages) {
                 if (!outgoing.topic()) {
                     store(storageOf(outgoing.destination()), outgoing.message());
@@ -438,7 +511,7 @@ public final class Broker {
                 }
                 for (Subscription subscription : subscriptionsByTopic.getOrDefault(outgoing.destination(), List.of())) {
                     // §8.3.1: a noLocal subscription ignores what its own connection publishes.
-                    boolean local = Objects.equals(subscription.request.subscriber(), outgoing.publisher());
+                    boolean local = Objects.equals(subscription.subscriber, publisher);
                     Selector selector = subscription.request.selector();
                     // §4.2.2: a message the selector rejects is never part of the subscription.
                     boolean selected = selector == null || selector.matches(outgoing.message(), 1);
@@ -446,6 +519,9 @@ public final class Broker {
                         store(subscription.storage, outgoing.message());
                     }
                 }
+            }
+            for (BrokerConnection.Delivery delivery : consumed) {
+                connection.unsettled.remove(delivery);
             }
             changed.signalAll();
         } finally {
@@ -457,19 +533,43 @@ public final class Broker {
         storage.add(new Stored(storage, message, sequence++));
     }
 
+    // ---- settling --------------------------------------------------------
+
+    /** Returns false if the delivery was no longer the connection's to settle. */
+    boolean settle(LocalConnection connection, BrokerConnection.Delivery delivery) {
+        lock.lock();
+        try {
+            return connection.unsettled.remove(delivery);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    void settle(LocalConnection connection, Collection<? extends BrokerConnection.Delivery> deliveries) {
+        lock.lock();
+        try {
+            for (BrokerConnection.Delivery delivery : deliveries) {
+                connection.unsettled.remove(delivery);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /**
      * Puts back a message that was taken from the broker but never reached the application,
      * as if it had not been taken: this delivery does not count.
      */
-    public void returnUndelivered(Delivery delivery) {
+    void returnUndelivered(LocalConnection connection, BrokerConnection.Delivery returned) {
         lock.lock();
         try {
-            delivery.stored.deliveryCount--;
-            Storage storage = delivery.stored.storage;
-            if (!storage.deleted) {
-                storage.add(delivery.stored);
+            // Not the connection's any more: settled, or given back already, by it or by its closing.
+            if (connection.unsettled.remove(returned)) {
+                Delivery delivery = (Delivery) returned;
+                delivery.stored.deliveryCount--;
+                giveBack(delivery);
+                changed.signalAll();
             }
-            changed.signalAll();
         } finally {
             lock.unlock();
         }
@@ -479,13 +579,12 @@ public final class Broker {
      * Puts back messages that were delivered and not settled. Their next delivery will be
      * marked as a redelivery. A message of a deleted queue or subscription is dropped.
      */
-    public void redeliver(Collection<Delivery> deliveries) {
+    void redeliver(LocalConnection connection, Collection<? extends BrokerConnection.Delivery> deliveries) {
         lock.lock();
         try {
-            for (Delivery delivery : deliveries) {
-                Storage storage = delivery.stored.storage;
-                if (!storage.deleted) {
-                    storage.add(delivery.stored);
+            for (BrokerConnection.Delivery delivery : deliveries) {
+                if (connection.unsettled.remove(delivery)) {
+                    giveBack((Delivery) delivery);
                 }
             }
             changed.signalAll();
@@ -494,20 +593,22 @@ public final class Broker {
         }
     }
 
+    /** Returns a message to the place its sequence number gives it. Under the lock. */
+    private static void giveBack(Delivery delivery) {
+        Storage storage = delivery.stored.storage;
+        if (!storage.deleted) {
+            storage.add(delivery.stored);
+        }
+    }
+
     // ---- consuming -------------------------------------------------------
 
-    /**
-     * Attaches a consumer to a queue.
-     *
-     * @param temporary whether {@code queue} names a temporary queue, which must then still exist
-     * @param selector the messages the consumer takes, or {@code null} for all; the others stay
-     *        on the queue for other consumers (§4.1.2)
-     * @param started tells whether the consumer's connection is started; read under the broker lock
-     */
-    public Consumer attach(String queue, boolean temporary, Selector selector, BooleanSupplier started)
-            throws InvalidDestinationException {
+    /** Attaches a consumer to a queue: see {@link BrokerConnection#attach}. */
+    Consumer attach(LocalConnection connection, String queue, boolean temporary, Selector selector)
+            throws JMSException {
         lock.lock();
         try {
+            checkOpen(connection);
             checkExists(queue, false, temporary);
             Storage storage = storageOf(queue);
             storage.consumers++;
@@ -526,7 +627,9 @@ public final class Broker {
                 }
                 view.consumers++;
             }
-            return new Consumer(storage, null, selector, view, started);
+            Consumer consumer = new Consumer(connection, storage, null, selector, view);
+            connection.consumers.add(consumer);
+            return consumer;
         } finally {
             lock.unlock();
         }
@@ -535,25 +638,27 @@ public final class Broker {
     /**
      * Attaches a consumer to a topic subscription, creating, reusing or replacing the
      * subscription as §8.3 prescribes for its kind.
-     *
-     * @param started tells whether the consumer's connection is started; read under the broker lock
      */
-    public Consumer subscribe(Subscribing request, BooleanSupplier started) throws JMSException {
+    Consumer subscribe(LocalConnection connection, Subscribing request) throws JMSException {
         lock.lock();
         try {
+            checkOpen(connection);
             checkExists(request.topic(), true, request.temporary());
-            Subscription subscription = request.name() == null ? add(request) : named(request);
+            Subscription subscription =
+                    request.name() == null ? add(connection, request) : named(connection, request);
             subscription.storage.consumers++;
-            return new Consumer(subscription.storage, subscription, null, null, started);
+            Consumer consumer = new Consumer(connection, subscription.storage, subscription, null, null);
+            connection.consumers.add(consumer);
+            return consumer;
         } finally {
             lock.unlock();
         }
     }
 
-    private Subscription named(Subscribing request) throws JMSException {
-        Subscription existing = namedSubscriptions.get(nameOf(request));
+    private Subscription named(LocalConnection connection, Subscribing request) throws JMSException {
+        Subscription existing = namedSubscriptions.get(nameOf(connection.clientId, request));
         if (existing == null) {
-            return add(request);
+            return add(connection, request);
         }
         boolean active = existing.storage.consumers > 0;
         if (existing.request.shared() != request.shared()) {
@@ -572,14 +677,14 @@ public final class Broker {
         }
         // Same name, another topic or selector: the old subscription is deleted and a new one starts.
         remove(existing);
-        return add(request);
+        return add(connection, request);
     }
 
-    private Subscription add(Subscribing request) {
-        Subscription subscription = new Subscription(request);
+    private Subscription add(LocalConnection connection, Subscribing request) {
+        Subscription subscription = new Subscription(request, connection);
         subscriptionsByTopic.computeIfAbsent(request.topic(), topic -> new ArrayList<>()).add(subscription);
         if (request.name() != null) {
-            namedSubscriptions.put(nameOf(request), subscription);
+            namedSubscriptions.put(nameOf(subscription.clientId, request), subscription);
         }
         return subscription;
     }
@@ -594,19 +699,21 @@ public final class Broker {
             subscriptionsByTopic.remove(request.topic());
         }
         if (request.name() != null) {
-            namedSubscriptions.remove(nameOf(request));
+            namedSubscriptions.remove(nameOf(subscription.clientId, request));
         }
     }
 
-    private static SubscriptionName nameOf(Subscribing request) {
-        return new SubscriptionName(request.durable(), request.clientId(), request.name());
+    private static SubscriptionName nameOf(String clientId, Subscribing request) {
+        return new SubscriptionName(request.durable(), clientId, request.name());
     }
 
     /** Deletes a durable subscription; fails while it has an active consumer (§8.3.5). */
-    public void unsubscribe(String clientId, String name) throws JMSException {
+    void unsubscribe(LocalConnection connection, String name) throws JMSException {
         lock.lock();
         try {
-            Subscription subscription = namedSubscriptions.get(new SubscriptionName(true, clientId, name));
+            checkOpen(connection);
+            Subscription subscription =
+                    namedSubscriptions.get(new SubscriptionName(true, connection.clientId, name));
             if (subscription == null) {
                 throw new InvalidDestinationException("there is no durable subscription named " + name);
             }
@@ -623,7 +730,7 @@ public final class Broker {
      * Closes the consumer; returns once its receive in progress, if any, has completed (§8.8).
      * Every caller waits for that, including one that finds the consumer already closing.
      */
-    public void detach(Consumer consumer) {
+    void detach(Consumer consumer) {
         lock.lock();
         try {
             consumer.closed = true;
@@ -633,6 +740,7 @@ public final class Broker {
             }
             if (!consumer.detached) {
                 consumer.detached = true;
+                consumer.connection.consumers.remove(consumer);
                 consumer.storage.consumers--;
                 if (consumer.view != null && --consumer.view.consumers == 0) {
                     consumer.storage.views.remove(consumer.selector);
@@ -649,36 +757,45 @@ public final class Broker {
         }
     }
 
-    /**
-     * Takes the next message the consumer is attached to. The caller owns the delivery from
-     * then on: the message is gone unless it is handed back to {@link #redeliver}.
-     *
-     * @param timeoutNanos how long to wait for one: 0 not at all, {@link #FOREVER} without limit
-     * @return the delivery, or {@code null} if the timeout expires or the consumer is closed
-     */
-    public Delivery receive(Consumer consumer, long timeoutNanos) throws JMSException {
-        return receive(consumer, timeoutNanos, () -> true);
+    /** Says whether the consumer has a listener: what {@link BrokerConnection.Consumer#take} waits on. */
+    long listen(Consumer consumer, boolean listening) {
+        lock.lock();
+        try {
+            if (consumer.listening && !listening) {
+                consumer.period++;
+            }
+            consumer.listening = listening;
+            changed.signalAll();
+            return consumer.period;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
-     * Like {@link #receive(Consumer, long)}, for a caller that may lose interest while it waits.
+     * Takes the next message the consumer is attached to.
      *
-     * @param wanted tells whether the caller still wants a message; read under the broker lock,
-     *        so whoever changes its answer must do it through {@link #update}
-     * @return the delivery, or {@code null} if the timeout expires, the consumer is closed or the
-     *         caller no longer wants a message
+     * @param timeoutNanos how long to wait for one: 0 not at all, {@link #FOREVER} without limit
+     * @param settleOnDelivery whether the delivery is settled at once; otherwise the broker keeps
+     *        it among the unsettled deliveries of the connection
+     * @param ofPeriod the period of listening the caller serves, to give up as soon as it is
+     *        over, or {@link #NO_PERIOD} for a receive that does not depend on a listener
+     * @return the delivery, or {@code null} if the timeout expires, the consumer is closed or
+     *         the period is over
      */
-    public Delivery receive(Consumer consumer, long timeoutNanos, BooleanSupplier wanted) throws JMSException {
+    private Delivery receive(Consumer consumer, long timeoutNanos, boolean settleOnDelivery, long ofPeriod)
+            throws JMSException {
         // The timeout runs from the call, not from the moment the lock is obtained.
         long start = System.nanoTime();
         lock.lock();
         try {
             consumer.receiving++;
-            while (!consumer.closed && wanted.getAsBoolean()) {
+            while (!consumer.closed
+                    && (ofPeriod == NO_PERIOD || consumer.listening && consumer.period == ofPeriod)) {
                 long now = System.currentTimeMillis();
                 long nextDeliveryTime = Long.MAX_VALUE;
                 // A stopped connection delivers nothing, but its receive timers keep running (§6.1.5).
-                if (consumer.started.getAsBoolean()) {
+                if (consumer.connection.started) {
                     // Through its view a consumer only meets the messages its selector accepts.
                     TreeSet<Stored> candidates =
                             consumer.view != null ? consumer.view.messages : consumer.storage.messages;
@@ -707,7 +824,11 @@ public final class Broker {
                         TassisMessage delivered = taken.message.copy();
                         delivered.markDelivered(++taken.deliveryCount);
                         consumer.storage.remove(taken);
-                        return new Delivery(taken, delivered);
+                        Delivery delivery = new Delivery(taken, delivered);
+                        if (!settleOnDelivery) {
+                            consumer.connection.unsettled.add(delivery);
+                        }
+                        return delivery;
                     }
                 }
                 long wait = timeoutNanos == FOREVER ? FOREVER : timeoutNanos - (System.nanoTime() - start);
@@ -738,7 +859,7 @@ public final class Broker {
      * Returns copies of the messages a consumer with that selector could take from the queue
      * right now, in delivery order.
      */
-    public List<TassisMessage> browse(String queue, Selector selector) {
+    List<TassisMessage> browse(String queue, Selector selector) {
         lock.lock();
         try {
             long now = System.currentTimeMillis();

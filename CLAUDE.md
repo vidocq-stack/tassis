@@ -96,26 +96,42 @@ message in the state a consumer sees it in (properties and body read-only, body 
 
 `Broker` is the in-VM broker, one per name per JVM (`Broker.named`). Messages wait in a
 `Storage`: one per queue, one per topic subscription. Publishing to a topic adds the message to
-each subscription's storage, after which a subscription behaves exactly like a queue. A single
-lock guards the broker **and** the delivery-related state of its clients (connection started,
-consumer closed):
-change such state only through `Broker.update(...)`, which also wakes the waiting receives. A
-send hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
+each subscription's storage, after which a subscription behaves exactly like a queue. A send
+hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
 `Destinations.resolve(...)` is the one place that decides which `Destination` objects are ours.
 The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the private
-`Broker.named(Subscribing)`, not to be confused with the registry lookup `Broker.named(String)`.
+`Broker.named(LocalConnection, Subscribing)`, not to be confused with the registry lookup
+`Broker.named(String)`.
+
+**The seam.** `internal.client` never names `Broker`: it knows the broker through the interface
+`BrokerConnection`, obtained from `Broker.connect(user, password)` and implemented for the
+broker of the JVM by `LocalConnection`. The network transport (M11.3) will be another
+implementation, so the contract is written for a broker that is far away:
+
+- **The broker reads nothing from the client**, and no client code runs under the broker lock.
+  What delivery depends on is broker state, set by a request: `start()` / `stop()`, and
+  `Consumer.listen(boolean)` for a consumer's listener. It returns a listening period, which
+  a dispatcher passes to `take(period)`: a `take` that returns null means the period is over or
+  the consumer closed, and ends the dispatcher. Do not reintroduce a callback or a supplier
+  from the broker into the client.
+- **The broker keeps every unsettled delivery** (`LocalConnection.unsettled`). The session that
+  answers for it must `settle` it (alone or in a `commit`), `redeliver` it or
+  `returnUndelivered` it; all three ignore a delivery that is no longer the connection's.
+  `receive(timeout, settleOnDelivery = true)` is for the one caller that will do none of them:
+  the synchronous receive of an automatically acknowledged session.
+- **A commit is one request**, `commit(sends, consumed)`: all of it or none of it.
+- **`close()` takes back what is left**: consumers, unsettled deliveries (redelivered),
+  temporary destinations, client identifier. That is the whole treatment of a lost connection,
+  so keep whatever a connection owns reachable from `LocalConnection`.
 
 `Users` is the user registry of a broker (§6.1.1), administered through the public
 `TassisBroker`. It guards itself: never read or write it under the broker lock. The check is
-made by `TassisConnectionFactory.connect`, before anything is taken from the broker, so that a
-rejected client holds nothing (no client identifier). A broker is open until a first user is
-declared and secured for good afterwards: do not make removing the last user reopen it.
+made by `Broker.connect`, before anything is kept for the client, so that a rejected client
+leaves no trace. A broker is open until a first user is declared and secured for good
+afterwards: do not make removing the last user reopen it.
 
-`Broker.receive` returns a `Delivery`; from then on the consumer's **session owns it** and must
-either settle it (commit, acknowledge, or automatic acknowledgement on delivery) or hand it back
-with `Broker.redeliver`. Losing a `Delivery` loses the message. `TassisSession.work` guards the
-session's unsettled deliveries and uncommitted sends; the only lock order is `work`, then the
-broker lock.
+`TassisSession.work` guards the session's unsettled deliveries and uncommitted sends; the only
+lock order is `work`, then the broker lock.
 
 ## Threads and callbacks
 
@@ -130,9 +146,11 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
 - `close()` is the public method, with the restrictions on callbacks where the spec has some
   (session, connection, producer; a consumer or a browser may be closed from anywhere, so their
   `close()` is their `shut()`). `shut()` is what a parent uses to close a child, with no
-  restriction. A `shut()` never throws and returns once the child is quiet.
+  restriction. A `shut()` never throws and returns once the child is quiet. A session's
+  `shut()` also waits for the listener in progress, which may no longer belong to any
+  consumer (BUG.md T-001).
 - A dispatcher that cannot deliver the message it took gives it back with
-  `Broker.returnUndelivered`, not `redeliver`: the application never saw it.
+  `returnUndelivered`, not `redeliver`: the application never saw it.
 
 ## Settings (`internal.settings`)
 
@@ -176,7 +194,7 @@ equal keys share a context within a request. Rules:
 `Selector.parse` compiles a selector, or returns `null` for none. `SelectorParser` holds the
 grammar (as a comment) and the checks made when a selector is given; `Expression` is the tree and
 its evaluation, where `null` is SQL's NULL / unknown. A subscription filters at publication
-(`Broker.send`). A queue keeps one `View` per selector in use, updated by `Storage.add` and
+(`Broker.commit`). A queue keeps one `View` per selector in use, updated by `Storage.add` and
 `Storage.remove`: always go through those two to change what a queue holds.
 
 ## Conventions

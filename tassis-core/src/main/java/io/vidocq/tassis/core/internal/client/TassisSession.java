@@ -21,7 +21,7 @@ package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.TassisQueue;
 import io.vidocq.tassis.core.TassisTopic;
-import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.message.TassisBytesMessage;
 import io.vidocq.tassis.core.internal.message.TassisMapMessage;
 import io.vidocq.tassis.core.internal.message.TassisMessage;
@@ -66,10 +66,12 @@ import java.util.concurrent.locks.ReentrantLock;
  * A single-threaded context for producing and consuming messages (Jakarta
  * Messaging 3.1 §6.2).
  *
- * <p>The session owns every message its consumers took and that is not settled yet: the
+ * <p>The session answers for every message its consumers took and that is not settled yet: the
  * messages of the current transaction, or the unacknowledged ones of a client-acknowledged
- * session. It settles them (commit, acknowledge) or gives them back to the broker (rollback,
- * recover, close). An automatically acknowledged session settles on delivery and owns nothing.
+ * session. It tells the broker to settle them (commit, acknowledge) or gives them back
+ * (rollback, recover, close). The broker keeps them meanwhile, and gives them back itself if
+ * the connection ends first. For a receive of an automatically acknowledged session the broker
+ * settles on delivery, and the session answers for nothing.
  */
 public final class TassisSession implements QueueSession, TopicSession {
 
@@ -80,8 +82,8 @@ public final class TassisSession implements QueueSession, TopicSession {
     private final List<SessionChild> children = new CopyOnWriteArrayList<>();
     // Guards the two lists below, which the session's thread and a concurrent close() both touch.
     private final ReentrantLock work = new ReentrantLock();
-    private final List<Broker.Delivery> unsettled = new ArrayList<>();
-    private final List<Broker.Outgoing> uncommittedSends = new ArrayList<>();
+    private final List<BrokerConnection.Delivery> unsettled = new ArrayList<>();
+    private final List<BrokerConnection.Outgoing> uncommittedSends = new ArrayList<>();
     private volatile boolean closed;
 
     private static final System.Logger LOG = System.getLogger(TassisSession.class.getName());
@@ -110,9 +112,9 @@ public final class TassisSession implements QueueSession, TopicSession {
     }
 
     /** Sends now, or with the current transaction's commit (§6.2.7). */
-    void send(Broker.Outgoing outgoing) throws JMSException {
+    void send(BrokerConnection.Outgoing outgoing) throws JMSException {
         if (!transacted) {
-            broker().send(List.of(outgoing));
+            link().send(outgoing);
             return;
         }
         work.lock();
@@ -129,7 +131,7 @@ public final class TassisSession implements QueueSession, TopicSession {
      * the message to hand to the application: {@code null} if there is no delivery, or if the
      * session was closed in the meantime, in which case the message goes back to its queue.
      */
-    Message delivered(Broker.Delivery delivery) {
+    Message delivered(BrokerConnection.Delivery delivery) {
         return delivered(delivery, false);
     }
 
@@ -137,7 +139,7 @@ public final class TassisSession implements QueueSession, TopicSession {
      * @param toAListener whether the message goes to a listener: an automatically acknowledged
      *        session then owns it until onMessage returns, where a receive settles it at once
      */
-    private Message delivered(Broker.Delivery delivery, boolean toAListener) {
+    private Message delivered(BrokerConnection.Delivery delivery, boolean toAListener) {
         if (delivery == null) {
             return null;
         }
@@ -148,7 +150,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         try {
             if (closed) {
                 // The application will not see this message: the delivery does not count.
-                broker().returnUndelivered(delivery);
+                link().returnUndelivered(delivery);
                 return null;
             }
             if (acknowledgeMode == CLIENT_ACKNOWLEDGE) {
@@ -174,6 +176,7 @@ public final class TassisSession implements QueueSession, TopicSession {
         work.lock();
         try {
             checkOpen();
+            link().settle(unsettled);
             unsettled.clear();
         } finally {
             work.unlock();
@@ -185,12 +188,13 @@ public final class TassisSession implements QueueSession, TopicSession {
     }
 
     /**
-     * Settles a message an automatically acknowledged listener has just processed.
+     * Stops answering for the message an automatically acknowledged listener has just been
+     * given, so that the caller decides what becomes of it.
      *
-     * @return false if the session no longer owns it, because the listener called recover or the
-     *         session was closed meanwhile: it has then been given back already
+     * @return false if the session no longer answers for it, because the listener called recover
+     *         or the session was closed meanwhile: it has then been given back already
      */
-    private boolean settle(Broker.Delivery delivery) {
+    private boolean disown(BrokerConnection.Delivery delivery) {
         work.lock();
         try {
             return unsettled.remove(delivery);
@@ -201,7 +205,7 @@ public final class TassisSession implements QueueSession, TopicSession {
 
     /** Gives every unsettled message back to the broker, to be redelivered (§6.2.11). */
     private void giveBackUnsettled() {
-        broker().redeliver(unsettled);
+        link().redeliver(unsettled);
         unsettled.clear();
     }
 
@@ -209,8 +213,9 @@ public final class TassisSession implements QueueSession, TopicSession {
         return connection;
     }
 
-    Broker broker() {
-        return connection.broker();
+    /** The broker, as this session's connection knows it. */
+    BrokerConnection link() {
+        return connection.link();
     }
 
     void forget(SessionChild child) {
@@ -305,7 +310,8 @@ public final class TassisSession implements QueueSession, TopicSession {
         try {
             checkOpen();
             try {
-                broker().send(uncommittedSends);
+                // One request: the sends and the acknowledgements are made together, or not at all.
+                link().commit(uncommittedSends, unsettled);
             } catch (JMSException e) {
                 // Nothing was sent: the whole transaction is rolled back.
                 uncommittedSends.clear();
@@ -381,6 +387,12 @@ public final class TassisSession implements QueueSession, TopicSession {
         for (SessionChild child : children) {
             child.shut();
         }
+        // A consumer waits for its dispatcher, but a listener that removed itself from its
+        // consumer is still running with nobody waiting for it: the message it holds must not be
+        // given back under it (§6.2.15).
+        if (!inOwnListener()) {
+            awaitListenerInProgress();
+        }
         work.lock();
         try {
             // §7.3.4: the completion callbacks of the sends already made must have returned.
@@ -430,7 +442,7 @@ public final class TassisSession implements QueueSession, TopicSession {
      * Hands a delivery to a consumer's listener, in turn with the other listeners of the session
      * and only while the connection is started. Called by the consumer's dispatcher thread.
      */
-    void dispatch(TassisMessageConsumer consumer, Broker.Delivery delivery) {
+    void dispatch(TassisMessageConsumer consumer, BrokerConnection.Delivery delivery) {
         listeners.lock();
         try {
             MessageListener listener = consumer.listenerToCall();
@@ -440,7 +452,7 @@ public final class TassisSession implements QueueSession, TopicSession {
             }
             if (listener == null) {
                 // Closed, or no longer listening: the message was never seen by the application.
-                broker().returnUndelivered(delivery);
+                link().returnUndelivered(delivery);
                 return;
             }
             Message message = delivered(delivery, true);
@@ -450,9 +462,9 @@ public final class TassisSession implements QueueSession, TopicSession {
             listenerThread = Thread.currentThread();
             try {
                 listener.onMessage(message);
-                if (automaticallyAcknowledged()) {
+                if (automaticallyAcknowledged() && disown(delivery)) {
                     // §6.2.10: acknowledged when the listener has successfully returned.
-                    settle(delivery);
+                    link().settle(delivery);
                 }
             } catch (RuntimeException | Error failure) {
                 // An Error is handled like any other failure: the message must not stay in
@@ -470,14 +482,15 @@ public final class TassisSession implements QueueSession, TopicSession {
      * §8.7: with automatic acknowledgement the message is redelivered at once; in the other
      * modes the session carries on with the next message and the application decides.
      */
-    private void listenerFailed(Broker.Delivery delivery, Throwable failure) {
-        if (!automaticallyAcknowledged() || !settle(delivery)) {
+    private void listenerFailed(BrokerConnection.Delivery delivery, Throwable failure) {
+        if (!automaticallyAcknowledged() || !disown(delivery)) {
             LOG.log(System.Logger.Level.WARNING, "a message listener threw an exception", failure);
         } else if (delivery.deliveryCount() < connection.maxListenerDeliveries()) {
             LOG.log(System.Logger.Level.WARNING,
                     "a message listener threw an exception; the message is redelivered", failure);
-            broker().redeliver(List.of(delivery));
+            link().redeliver(List.of(delivery));
         } else {
+            link().settle(delivery);
             LOG.log(System.Logger.Level.ERROR, "a message listener threw an exception on each of "
                     + connection.maxListenerDeliveries() + " deliveries; the message is dropped", failure);
         }
@@ -586,7 +599,7 @@ public final class TassisSession implements QueueSession, TopicSession {
             return subscribe(destination, address, null, false, false, noLocal, selector);
         }
         return register(new TassisMessageConsumer(this, destination, false, selector,
-                broker().attach(address.name(), address.temporary(), selector, connection::isStarted)));
+                link().attach(address.name(), address.temporary(), selector)));
     }
 
     @Override
@@ -652,10 +665,9 @@ public final class TassisSession implements QueueSession, TopicSession {
 
     private TassisMessageConsumer subscribe(Destination topic, Destinations.Address address, String name,
             boolean durable, boolean shared, boolean noLocal, Selector selector) throws JMSException {
-        Broker.Subscribing request = new Broker.Subscribing(address.name(), address.temporary(), name, durable,
-                shared, connection.clientId(), noLocal, selector, connection.localIdentity());
-        return register(new TassisMessageConsumer(this, topic, noLocal, selector,
-                broker().subscribe(request, connection::isStarted)));
+        BrokerConnection.Subscribing request = new BrokerConnection.Subscribing(address.name(),
+                address.temporary(), name, durable, shared, noLocal, selector);
+        return register(new TassisMessageConsumer(this, topic, noLocal, selector, link().subscribe(request)));
     }
 
     private TassisMessageConsumer subscribeByName(String method, Topic topic, String name, String messageSelector,
@@ -725,7 +737,7 @@ public final class TassisSession implements QueueSession, TopicSession {
     public void unsubscribe(String name) throws JMSException {
         checkOpen();
         notForA(Domain.QUEUE, "unsubscribe");
-        broker().unsubscribe(connection.clientId(), name);
+        link().unsubscribe(name);
     }
 
     // ---- destinations --------------------------------------------------

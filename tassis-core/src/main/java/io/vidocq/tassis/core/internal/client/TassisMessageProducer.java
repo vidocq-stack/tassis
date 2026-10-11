@@ -19,7 +19,7 @@
  */
 package io.vidocq.tassis.core.internal.client;
 
-import io.vidocq.tassis.core.internal.broker.Broker;
+import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.message.Messages;
 import jakarta.jms.CompletionListener;
 import jakarta.jms.DeliveryMode;
@@ -245,9 +245,9 @@ final class TassisMessageProducer implements QueueSender, TopicPublisher, Sessio
         message.setJMSTimestamp(now);
         message.setJMSExpiration(timeToLive == 0 ? 0 : now + timeToLive);
         message.setJMSDeliveryTime(now + deliveryDelay);
-        message.setJMSMessageID(session.broker().nextMessageId());
-        session.send(new Broker.Outgoing(address.name(), address.topic(), address.temporary(),
-                session.connection().localIdentity(), Messages.snapshot(message)));
+        message.setJMSMessageID(session.link().nextMessageId());
+        session.send(new BrokerConnection.Outgoing(address.name(), address.topic(), address.temporary(),
+                Messages.snapshot(message)));
     }
 
     private static void checkDeliveryMode(int deliveryMode) throws JMSException {
