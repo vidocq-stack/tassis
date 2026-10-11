@@ -81,6 +81,7 @@
     <modules>
         <module>tassis-api</module>
         <module>tassis-core</module>
+        <module>tassis-amqp</module>
         <module>tassis-cdi-vauban</module>
         <module>tassis-cdi-vauban-module-it</module>
         <module>tassis-bench</module>
@@ -141,6 +142,11 @@
             </dependency>
             <dependency>
                 <groupId>io.vidocq.tassis</groupId>
+                <artifactId>tassis-amqp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.tassis</groupId>
                 <artifactId>tassis-cdi-vauban</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -158,6 +164,18 @@
             <id>tck</id>
             <modules>
                 <module>tassis-tck</module>
+            </modules>
+        </profile>
+        <!--
+            The interoperability tests, the one module that depends on third-party code (in
+            test scope, and never published), join the reactor only when this profile is active:
+
+                ./mvnw -Pinterop -pl tassis-interop -am verify
+        -->
+        <profile>
+            <id>interop</id>
+            <modules>
+                <module>tassis-interop</module>
             </modules>
         </profile>
     </profiles>

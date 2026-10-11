@@ -34,10 +34,13 @@ sdk env
 
 # Another TCK selection
 ./run-official-tck-messaging-3.1.sh -Dtck.test='**/core/selectorQueue/*IT'
+
+# Interoperability tests of the AMQP codec (Proton-J, embedded Artemis)
+./mvnw -ntp -Pinterop -pl tassis-interop -am verify
 ```
 
-> `tassis-tck` is **in-reactor behind the `tck` Maven profile**. A plain `./mvnw install`
-> neither builds nor downloads anything TCK-related.
+> `tassis-tck` is **in-reactor behind the `tck` Maven profile**, and `tassis-interop` behind
+> `interop`. A plain `./mvnw install` builds neither and downloads nothing for them.
 
 ## Architecture
 
@@ -50,11 +53,13 @@ tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, 
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
                      TassisTopic), broker administration (TassisBroker),
                      internal.message, internal.broker, internal.client, internal.selector
+tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec so far, used by nothing yet
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
 tassis-bench       ← Placeholder — JMH (M12)
 tassis-examples    ← The examples of the documentation, compiled and run by the build
 tassis-tck         ← Official TCK runner, in-reactor behind `tck`, class path, test scope only
+tassis-interop     ← Tests against third-party AMQP peers, behind `interop`; never published
 ```
 
 `ROADMAP.md` records the design decisions, the spike findings (API module descriptor, TCK
@@ -64,7 +69,9 @@ a milestone.
 ## Architecture Constraints Not to Violate
 
 1. **`tassis-core` depends on nothing beyond `jakarta.jms-api`** — no CDI, no JNDI, no
-   third-party library.
+   third-party library. `tassis-amqp` depends on nothing at all. Third-party code is allowed
+   in one place, `tassis-interop`, in test scope: that module is never published and is not
+   part of the default build.
 2. **`io.vidocq.tassis.core` is the only exported package**, and holds only what an
    application must name (the administered objects, and `TassisBroker`). Everything else
    lives under `io.vidocq.tassis.core.internal.*`.
@@ -189,6 +196,27 @@ equal keys share a context within a request. Rules:
 - A change here is proven twice: `JmsContextInjectionTest`, and the module-path vehicle
   `tassis-cdi-vauban-module-it`, which must keep passing with nothing opened.
 
+## AMQP 1.0 (`tassis-amqp`)
+
+The codec of the network transport (ROADMAP M11.3): `internal.types` (values, `AmqpEncoder`,
+`AmqpDecoder`), `internal.transport` (frames, performatives), `internal.messaging`,
+`internal.transactions`, `internal.security`. It knows AMQP and nothing of JMS, and exports
+nothing yet. Rules:
+
+- **The specification is the source.** A format code, a descriptor, the order of the fields of
+  a composite type are written from the OASIS text, and the test that covers them cites the
+  section. A new described type is a record that implements `DescribedType`, is registered in
+  `AmqpTypes`, and gets its line in `CompositeTypesTest` **and** in
+  `tassis-interop`'s `DescribedTypesInteropTest`, whose accessors by name are what proves the
+  order of the fields.
+- **A field left out is `null`.** The defaults of the specification belong to whoever reads
+  the field: the codec must give back what it was given.
+- **The decoder trusts nothing.** Check a size against what is left before allocating for it,
+  and report whatever is wrong as an `AmqpDecodeException`: no other exception may come out
+  because of what a peer sent. Any change there adds its case to `HostileInputTest`.
+- **No reflection**: a record lists its own fields.
+- A change to the codec is proven twice: `./mvnw install`, and the `interop` profile.
+
 ## Selectors (`internal.selector`)
 
 `Selector.parse` compiles a selector, or returns `null` for none. `SelectorParser` holds the
@@ -201,7 +229,8 @@ its evaluation, where `null` is SQL's NULL / unknown. A subscription filters at 
 
 - **Maven groupId**: `io.vidocq.tassis`. Version `0.4.0-SNAPSHOT`, parent
   `io.vidocq:vidocq-parent:0.4.0-SNAPSHOT`.
-- **Java modules**: `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.cdi.vauban`.
+- **Java modules**: `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.amqp`,
+  `io.vidocq.tassis.cdi.vauban`.
 - **Licence header** on every Java file (`etc/license-header.txt`, checked by the build).
 
 ## TDD — Test-Driven Development (mandatory)

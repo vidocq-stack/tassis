@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    tassis-tck: runs the official Jakarta Messaging TCK (jakarta.tck:jms-tck, JUnit 5,
+    "Jakarta Messaging Outside container") against Tassis.
+
+    In-reactor module gated by the `tck` Maven profile of tassis-parent: a plain
+    `mvn install` neither downloads nor runs anything TCK-related. Use
+    run-official-tck-messaging-3.1.sh at the repository root.
+
+    The TCK jars are not Java modules, so this module has no module-info and its
+    tests run on the class path. Everything here is test scope and never released.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.vidocq.tassis</groupId>
+        <artifactId>tassis-parent</artifactId>
+        <version>0.4.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+        Interoperability tests: Tassis against third-party AMQP 1.0 implementations.
+
+        This module is the one place where third-party code is allowed (ROADMAP M11.3), in
+        test scope only. It is never published, and joins the reactor only under the
+        `interop` Maven profile of the parent:
+
+            ./mvnw -Pinterop -pl tassis-interop -am verify
+
+        It has no module-info.java and runs on the class path on purpose, like tassis-tck:
+        it tests the internal packages of tassis-amqp, which no module could read.
+    -->
+    <artifactId>tassis-interop</artifactId>
+    <name>Tassis :: Interoperability tests</name>
+    <description>Tests of Tassis against third-party AMQP 1.0 implementations. Never published: the one place where third-party code is allowed, in test scope</description>
+
+    <properties>
+        <!-- Never released as a dependency: skip every release-time attachment. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <gpg.skip>true</gpg.skip>
+
+        <!-- Apache Qpid Proton-J: the reference AMQP 1.0 codec in Java, to compare ours with. -->
+        <qpid.proton-j.version>0.35.0</qpid.proton-j.version>
+        <!-- Apache ActiveMQ Artemis, embedded: a real AMQP 1.0 broker to talk to, with no Docker. -->
+        <artemis.version>2.57.0</artemis.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-amqp</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.qpid</groupId>
+            <artifactId>proton-j</artifactId>
+            <version>${qpid.proton-j.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.artemis</groupId>
+            <artifactId>artemis-server</artifactId>
+            <version>${artemis.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.artemis</groupId>
+            <artifactId>artemis-amqp-protocol</artifactId>
+            <version>${artemis.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

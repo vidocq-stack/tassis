@@ -237,7 +237,7 @@ graph TB
         CDI[tassis-cdi-vauban<br/><i>JMSContext injection</i>] --> CORE
     end
     subgraph "Testing"
-        TCK[tassis-tck<br/><i>901/903</i>]
+        TCK[tassis-tck<br/><i>903/903</i>]
         EX[tassis-examples]
     end
     TCK --> CORE
@@ -251,11 +251,14 @@ tassis/
 ├── tassis-api            Aggregator: re-exposes jakarta.jms-api, a Java module upstream
 ├── tassis-core           The provider: administered objects, client API, in-VM broker,
 │                         message model, selectors
+├── tassis-amqp           AMQP 1.0, written from scratch: the codec so far (M11.3)
 ├── tassis-cdi-vauban     JMSContext injection (§12.4) for applications on Vauban
 ├── tassis-cdi-vauban-module-it   Its proof on the module path; never published
 ├── tassis-examples       The examples of the documentation, compiled and run by the build
 ├── tassis-bench          Placeholder: JMH benchmarks (M12)
-└── tassis-tck            Official TCK runner, in-reactor behind the `tck` Maven profile
+├── tassis-tck            Official TCK runner, in-reactor behind the `tck` Maven profile
+└── tassis-interop        Tests against third-party AMQP implementations, behind the
+                          `interop` profile; never published
 ```
 
 Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectionFactory`,
@@ -285,7 +288,7 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Priority, expiration, delivery delay | ✅ |
 | Persistence across a restart | Not planned: the broker is in memory by design |
 | Authentication (user registry per broker, `TassisBroker`) | ✅ |
-| Network transport, over AMQP 1.0 | M11.3 |
+| Network transport, over AMQP 1.0 | M11.3: the codec is written, the server and the client are next |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |

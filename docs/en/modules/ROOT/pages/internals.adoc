@@ -12,11 +12,13 @@ For contributors: where the code lives and the rules it obeys. Users do not need
 
 | `tassis-api` | Aggregator: `requires transitive jakarta.messaging`. It holds no class of its own; the API artifact `jakarta.jms-api` is a Java module upstream and is not forked.
 | `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
+| `tassis-amqp` | AMQP 1.0, written from scratch. So far the codec only: nothing in it is used by the provider yet. See <<amqp>>.
 | `tassis-cdi-vauban` | The injection of `JMSContext`: a producer, a request-scoped holder of the contexts of a request, and the facade that is injected. See <<injection>>.
 | `tassis-cdi-vauban-module-it` | The proof of the above on the module path: an application module whose beans are processed at build time. Never published.
 | `tassis-bench` | Placeholder without sources. JMH benchmarks are milestone M12.
 | `tassis-examples` | The examples of xref:getting-started.adoc[Getting started], compiled and run by the build.
 | `tassis-tck` | The runner of the official TCK. It joins the reactor only under the `tck` Maven profile, runs on the class path and is never published. See xref:tck.adoc[TCK status].
+| `tassis-interop` | Tests against third-party AMQP implementations. It joins the reactor only under the `interop` Maven profile, runs on the class path and is never published: it is the one module allowed to depend on third-party code, in test scope.
 |===
 
 Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
@@ -180,6 +182,48 @@ A context creates its session on first need, not in its constructor, so that `se
 Nothing is reflective. Vauban's annotation processor generates, in the package of the beans, a `VaubanComponentProvider` that instantiates and injects them from inside the module, and the module descriptor declares it. That is why the package is neither exported nor opened. CDI and Vauban are `requires static`: the application that injects has them on its module path through Vauban, and the module asks nothing of an application that does not.
 
 `tassis-cdi-vauban-module-it` proves it: an application module, its bean processed at build time, runs on the module path with no `--add-opens` and checks that the annotations of its injection points reached the producer.
+
+[#amqp]
+== The AMQP 1.0 codec
+
+`tassis-amqp` (Java module `io.vidocq.tassis.amqp`) is the start of the network transport of milestone M11.3. It depends on nothing, not even on `tassis-core` or on the Jakarta Messaging API: it knows AMQP 1.0 and nothing of JMS. It exports nothing yet, and no connection, session or link exists: it reads and writes octets.
+
+[cols="1,3",options="header"]
+|===
+| Package | Content
+
+| `internal.types`
+| The values of AMQP (part 1 of the specification) and their encodings. Java types where they are exact, and one small type for each AMQP type Java lacks: `UByte`, `UShort`, `UInt`, `ULong`, `Symbol`, `Binary`, `Timestamp`, `AmqpChar`, the decimals, `AmqpArray`, `Described`. `AmqpEncoder` writes the shortest encoding a value allows; `AmqpDecoder` reads them all.
+
+| `internal.transport`
+| The protocol headers, the frame and `FrameCodec`, the nine performatives, `AmqpError` (part 2).
+
+| `internal.messaging`
+| The sections of a message and `AmqpMessage`, sources and targets, delivery states (part 3).
+
+| `internal.transactions`
+| The coordinator, `declare`, `discharge`, and the transactional state (part 4).
+
+| `internal.security`
+| The five bodies of a SASL frame (part 5).
+|===
+
+`AmqpTypes.ALL` is the registry of the 40 described types Tassis knows, by numeric and by symbolic descriptor. A described value whose descriptor it does not know stays a `Described`, as the specification asks.
+
+Each composite type is a record whose fields are those of the specification, in its order. A field the peer left out is `null`: the defaults the specification gives are applied by whoever reads the field, not by the codec, so that a value read and written back is unchanged. There is no reflection: each record lists its fields and rebuilds itself from them.
+
+The decoder reads octets that come from a peer and trusts them for nothing. A size is checked against what is left to read before anything is allocated for it, a count against the octets that could hold it, nesting is bounded (`AmqpDecoder.MAX_DEPTH`), and whatever is wrong is an `AmqpDecodeException`. `HostileInputTest` holds the cases, among them hundreds of thousands of random and mutated inputs.
+
+The proof that these octets are AMQP 1.0, and not a private reading of it, is in `tassis-interop`:
+
+* every primitive value and every described type is written by Tassis and read by Apache Qpid Proton-J, and the reverse; for the primitive values the octets are compared too;
+* for each composite type, the accessors of Proton-J, named after the fields of the specification, must return what Tassis wrote at each position: this is what catches two fields in the wrong order;
+* an embedded Apache ActiveMQ Artemis is spoken to frame by frame: SASL, `open`, a session, a link, a message sent to a queue and received back.
+
+[source,bash]
+----
+./mvnw -Pinterop -pl tassis-interop -am verify
+----
 
 == House rules
 

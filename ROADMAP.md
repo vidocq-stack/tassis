@@ -741,8 +741,8 @@ The seam of M11.2 stands: nothing in the study asks for it to be reshaped before
 Slices, each merged on its own with the TCK green, each opened in plan mode since they add
 modules:
 
-- [ ] **M11.3a — The codec** (`tassis-amqp`): types, frames, performatives, message sections.
-      Pure code, tested on byte vectors.
+- [x] **M11.3a — The codec** (`tassis-amqp`): types, frames, performatives, message sections.
+      Pure code, with no dependency, not even on `tassis-core`. See below.
 - [ ] **M11.3b — The server, queues only** (`tassis-server`): SASL PLAIN and ANONYMOUS over the
       registry of M11.1, connection, session, links, credit, settlement. First
       interoperability test, with Qpid JMS as the client.
@@ -754,6 +754,39 @@ modules:
       connection. **Proof: the whole TCK replayed through the network**, besides the in-VM run.
 - [ ] **M11.3e — The Tassis client against a third-party broker**: what differs from one
       broker to another in the conventions above, found by running against a real one.
+
+#### M11.3a — The codec ✅
+
+- [x] `internal.types`: every primitive type and every encoding of part 1, described values,
+      arrays. The encoder writes the shortest encoding; the decoder reads them all.
+- [x] `internal.transport`: protocol headers, frames (AMQP, SASL, empty), the nine
+      performatives, `error`. `internal.messaging`: the nine sections and `AmqpMessage`, source
+      and target, delivery states, lifetime policies. `internal.transactions` and
+      `internal.security`. 40 described types, known by numeric and by symbolic descriptor.
+- [x] **A decoder that trusts nothing**: sizes and counts checked before allocating, nesting
+      bounded, one exception type. `HostileInputTest`, with random and mutated inputs.
+- [x] **`tassis-interop`**, behind the `interop` profile, never published: every type crossed
+      with Apache Qpid Proton-J in both directions, the order of the fields of each composite
+      type checked against Proton-J's accessors by name, and a real exchange, frame by frame,
+      with an embedded Apache ActiveMQ Artemis (SASL, open, session, links, a message sent to
+      a queue and received back).
+
+What it taught, for the next slices:
+
+- **Hand-computed octets are not a proof.** Four of the test vectors written by hand had a
+  wrong size in them; the code was right each time, and it is Proton-J that settled it. The
+  cross-check is the proof, the hand-written vectors are documentation.
+- **Docker is not needed**, and was not available on the machine this was written on: Artemis
+  runs embedded in the test JVM. That is what M11.3e will build on.
+- **Artemis grants credit as soon as a sender attaches, and adds no header** to a message that
+  has none. Small facts of that kind are what M11.3e is for.
+- **The codec gives `null` for a field left out.** The connection, session and link logic of
+  M11.3b will need the defaults of the specification in one place (`max-frame-size`,
+  `channel-max`, the settle modes, `durable`, `priority`), rather than at each read.
+- **Reading a frame from a blocking stream** is three lines over `FrameCodec.size`; it is left
+  to M11.3b, with the virtual threads that will do it.
+- Not done: `declare.global-id` is carried as any value and was not crossed with Proton-J,
+  which types it for distributed transactions, a part AMQP 1.0 leaves unspecified.
 
 ### M11b — Connection pool
 
