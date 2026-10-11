@@ -52,6 +52,9 @@ final class Limits {
     /** How long the server waits for a client to read the last frames it is sent, in milliseconds. */
     static final int LAST_WORDS_TIME_OUT = 5_000;
 
+    /** How long the closing of an encrypted socket waits for the client to say goodbye too, in milliseconds. */
+    static final int GOODBYE_TIME_OUT = 200;
+
     /** The session window the server grants: how many transfer frames it accepts (§2.5.6). */
     static final long INCOMING_WINDOW = Integer.MAX_VALUE;
 

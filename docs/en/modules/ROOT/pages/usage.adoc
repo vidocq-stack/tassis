@@ -480,7 +480,7 @@ try (JMSContext context = factory.createContext()) {
 
 It needs one more artifact, `io.vidocq.tassis:tassis-amqp`, which holds the transport. `tassis-core` finds it as a service: on the module path, a module that only provides a service is not resolved by itself, so the application names it, with `requires io.vidocq.tassis.amqp;` in its `module-info.java` or `--add-modules io.vidocq.tassis.amqp` on the command line. An application that also `requires io.vidocq.tassis.server` has it already.
 
-The same address can be given as a setting, `tassis.server=amqp://broker-host:5672`; the port is 5672 when left out. The user name and the password of `createConnection(userName, password)` are those the broker checks.
+The same address can be given as a setting, `tassis.server=amqp://broker-host:5672`; the port is 5672 when left out. With `amqps` instead of `amqp` the connection is encrypted: see <<tls>>. The user name and the password of `createConnection(userName, password)` are those the broker checks.
 
 What differs from the broker of the JVM:
 
@@ -489,6 +489,42 @@ What differs from the broker of the JVM:
 * **A consumer asks for one message at a time.** A message stays with the broker until an application asks for it, so that another consumer can take it: nothing is fetched ahead. Each message costs a round trip.
 * **A consumer closed with unacknowledged messages keeps its place** until its session acknowledges them, commits or gives them back: the broker would otherwise deliver them again at once. A durable subscription is therefore still in use, for another connection, until then.
 * **A message larger than 16 MiB ends the connection**: it is the limit of the server.
+
+[#tls]
+=== Encrypting the connection
+
+A server encrypts when it is given a TLS context, which holds its key and its certificate. The application builds it, with the classes of the JDK, from a key store of its own; Tassis reads no file.
+
+[source,java]
+----
+KeyStore keys = KeyStore.getInstance("PKCS12");
+try (InputStream in = Files.newInputStream(Path.of("broker.p12"))) {
+    keys.load(in, password);
+}
+KeyManagerFactory keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+keyManagers.init(keys, password);
+SSLContext context = SSLContext.getInstance("TLS");
+context.init(keyManagers.getKeyManagers(), null, null);
+
+TassisServer server = TassisServer.forBroker("orders").host("0.0.0.0").tls(context).start();
+----
+
+Such a server listens on port 5671, the port of AMQP over TLS, unless told otherwise. It is encrypted from the first octet: a client that speaks in clear to it is turned away, and a server that must serve both starts two listeners, one with a context and one without.
+
+A client says `amqps` instead of `amqp`:
+
+[source,java]
+----
+ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://broker-host");
+----
+
+* **The certificate must be trusted.** By default a factory trusts what the JVM trusts: the certificate authorities of the JDK, or the trust store named by the system property `javax.net.ssl.trustStore`. For anything else, such as a certificate the organisation issued itself, the application gives the factory a context: `factory.withSslContext(context)`.
+* **The certificate must bear the name of the host.** The name in the URL is checked against the certificate, as a browser does for HTTPS. There is no setting to turn that off: a certificate is issued to the name clients use.
+* **A broker that is not trusted is refused** with a `JMSException` before anything is sent, the password included.
+* **The client proves who it is with its user name and password**, now encrypted. The server asks clients for no certificate.
+* **The versions of TLS** are those the JDK enables: 1.3 and 1.2 today.
+
+Apache Qpid JMS connects the same way, with `amqps://broker-host:5671` and its own settings for the trust store.
 
 === Any other AMQP 1.0 client
 
@@ -515,7 +551,7 @@ try (JMSContext context = factory.createContext()) {
 
 What to know:
 
-* **Nothing is encrypted yet.** Messages and passwords travel in clear. That is why the server listens on the loopback address unless told otherwise: open it to a network you trust, or put it behind a tunnel. Encryption with TLS is the second half of milestone M11.3d.
+* **Nothing is encrypted unless asked.** In clear, messages and passwords can be read on the way. That is why the server listens on the loopback address unless told otherwise: before opening it to a network, give it a TLS context (see <<tls>>).
 * **The users are those of the broker.** A secured broker (see <<authentication>>) asks a client of the network for the name and the password of a declared user, and offers anonymous access only if it allows it. A refused client gets a `JMSSecurityException` from its own provider.
 * **A client of the network has the whole of Jakarta Messaging.** Queues and topics, the four kinds of subscription and `unsubscribe`, message selectors, temporary destinations, local transactions, queue browsers, delivery delay: what the application of the JVM has, a client such as Qpid JMS has too. What AMQP 1.0 does not carry is distributed transactions: there is no XA over the network.
 * **A client that vanishes loses nothing.** What it had received and not acknowledged goes back to its queue and is delivered again, marked as a redelivery. A transaction it had not committed is rolled back, its temporary destinations are deleted and its non-durable subscriptions end; its durable subscriptions stay.

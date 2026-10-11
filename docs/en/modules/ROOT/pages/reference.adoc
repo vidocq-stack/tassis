@@ -88,6 +88,9 @@ Implements `ConnectionFactory`, `QueueConnectionFactory` and `TopicConnectionFac
 | `TassisConnectionFactory withClientID(String clientId)`
 | Returns a new factory for the same broker whose connections are created with this client identifier. Such a connection rejects `setClientID`, and only one of them can be open at a time. Throws `NullPointerException` if the identifier is null, `IllegalArgumentException` if it is empty.
 
+| `TassisConnectionFactory withSslContext(SSLContext context)`
+| A factory whose encrypted connections (`tassis:amqps://`) trust what that context trusts, instead of what the JVM trusts. Not part of `toUrl()`. Throws `NullPointerException` if the context is null.
+
 | `TassisConnectionFactory withMaxListenerDeliveries(int maximum)`
 | Returns a new factory whose sessions deliver a message at most that many times to a listener that keeps failing. Throws `IllegalArgumentException` below 1.
 
@@ -161,7 +164,10 @@ In the module `tassis-server`, package `io.vidocq.tassis.server`. See xref:usage
 | Starts describing a server for the broker of that name in this JVM. Throws `NullPointerException` if the name is null, `IllegalArgumentException` if it is empty.
 
 | `port(int)` (on the builder)
-| The port to listen on: `TassisServer.DEFAULT_PORT` (5672) by default, 0 for any free port. Throws `IllegalArgumentException` outside 0..65535.
+| The port to listen on: `TassisServer.DEFAULT_PORT` (5672) by default, `TassisServer.DEFAULT_TLS_PORT` (5671) for a server that encrypts, 0 for any free port. Throws `IllegalArgumentException` outside 0..65535.
+
+| `tls(SSLContext)` (on the builder)
+| Encrypts the connections with TLS, from their first octet: the server shows the certificate of that context, and clients connect with `amqps`. Clients are asked for no certificate.
 
 | `host(String)` (on the builder)
 | The address to listen on: the loopback address by default.
@@ -269,7 +275,7 @@ A connection factory is configured in code, by settings, or by a connection URL.
 | `tassis.server`
 | `tassis:amqp://<host>[:<port>]`
 | none
-| A broker of the network, opened by a `TassisServer`: `amqp://<host>[:<port>]`, port 5672 when left out, an IPv6 address in brackets. When set, the factory connects there instead of to the in-VM broker. Needs `tassis-amqp`.
+| A broker of the network, opened by a `TassisServer`: `amqp://<host>[:<port>]`, port 5672 when left out, or over TLS `amqps://<host>[:<port>]`, port 5671; an IPv6 address in brackets. When set, the factory connects there instead of to the in-VM broker. Needs `tassis-amqp`.
 
 | `tassis.clientId`
 | `clientId`
@@ -292,9 +298,9 @@ A connection factory is configured in code, by settings, or by a connection URL.
 
 === Connection URL
 
-`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]` or `tassis:amqp://<host>[:<port>][?clientId=...&listener.maxDeliveries=...]`
+`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]` or `tassis:amqp://<host>[:<port>][?clientId=...&listener.maxDeliveries=...]` (`amqps` for TLS)
 
-* What follows `tassis:` is the transport: `vm`, the broker of this JVM, or `amqp`, a broker of the network. Another transport is rejected.
+* What follows `tassis:` is the transport: `vm`, the broker of this JVM, or `amqp`, a broker of the network, `amqps` when the connection is encrypted. Another transport is rejected.
 * Values are percent-encoded.
 * An unknown parameter, a parameter given twice or a value that is not valid throws `IllegalArgumentException`.
 
@@ -366,9 +372,10 @@ A secured broker checks who connects, and gives every user the same rights: ther
 
 === The network transport is partial
 
-A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. A network client has the whole of Jakarta Messaging, short of XA. Two things are missing:
+A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. A network client has the whole of Jakarta Messaging, short of XA. What is missing:
 
-* **No encryption.** Messages and passwords travel in clear, and the server listens on the loopback address by default. Milestone M11.3d.
+* **No encryption unless asked.** A server without a TLS context speaks in clear, messages and passwords alike; it listens on the loopback address by default. See xref:usage.adoc#tls[Encrypting the connection].
+* **No certificate for the client.** Over TLS the server proves who it is; a client is who its user name and password say.
 * **No reconnection.** A Tassis client whose connection is lost is told through its `ExceptionListener` and creates another connection itself.
 * **The Tassis client has been run against a Tassis server only.** Another AMQP 1.0 broker may follow other conventions. Milestone M11.3e.
 

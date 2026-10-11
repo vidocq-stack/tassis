@@ -21,6 +21,7 @@ package io.vidocq.tassis.core.internal.broker;
 import io.vidocq.tassis.core.internal.settings.Settings;
 import jakarta.jms.JMSException;
 import java.util.ServiceLoader;
+import javax.net.ssl.SSLContext;
 
 /** Where a connection factory finds the broker its settings name. */
 public final class Transports {
@@ -35,20 +36,20 @@ public final class Transports {
      * @throws JMSException if no module on the module path provides that transport, or the
      *         broker rejects the credentials or cannot be reached
      */
-    public static BrokerConnection connect(Settings settings, String user, String password) throws JMSException {
+    public static BrokerConnection connect(Settings settings, SSLContext tls, String user, String password)
+            throws JMSException {
         String wanted = settings.serverTransport();
         if (wanted == null) {
             return Broker.named(settings.broker()).connect(user, password);
         }
         for (Transport transport : ServiceLoader.load(Transport.class)) {
-            if (transport.name().equals(wanted)) {
-                return transport.connect(settings, user, password);
+            if (transport.serves(wanted)) {
+                return transport.connect(settings, tls, user, password);
             }
         }
         // A module that only provides a service is not resolved because somebody uses that service:
         // on the module path the application has to name it.
-        throw new JMSException("no transport for " + settings.server() + ": the artifact tassis-" + wanted
-                + " is missing, or its module io.vidocq.tassis." + wanted
-                + " is not resolved (requires it, or --add-modules)");
+        throw new JMSException("no transport for " + settings.server() + ": the artifact tassis-amqp"
+                + " is missing, or its module io.vidocq.tassis.amqp is not resolved (requires it, or --add-modules)");
     }
 }

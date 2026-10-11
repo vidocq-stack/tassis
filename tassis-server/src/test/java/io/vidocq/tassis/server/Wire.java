@@ -64,7 +64,12 @@ final class Wire implements AutoCloseable {
     long maxFrameSize = MAX_FRAME_SIZE;
 
     Wire(int port) throws IOException {
-        socket = new Socket("127.0.0.1", port);
+        this(new Socket("127.0.0.1", port));
+    }
+
+    /** On a socket the test made itself: an encrypted one, for instance. */
+    Wire(Socket connected) throws IOException {
+        socket = connected;
         socket.setSoTimeout(5_000);
         in = socket.getInputStream();
         out = socket.getOutputStream();

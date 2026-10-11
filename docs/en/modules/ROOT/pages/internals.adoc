@@ -284,7 +284,7 @@ How the seam meets AMQP, from the client's side:
 |===
 | `BrokerConnection` | AMQP
 
-| `Transport.connect(settings, user, password)` | The socket, SASL `PLAIN` or `ANONYMOUS`, `open`, `begin`, and a sending link without an address
+| `Transport.connect(settings, tls, user, password)` | The socket, with a TLS handshake first for `amqps`, then SASL `PLAIN` or `ANONYMOUS`, `open`, `begin`, and a sending link without an address
 | `claimClientId` | Another connection, opened with that container identifier and `sole-connection-for-container`: AMQP says who a connection is when it opens. A connection without a client identifier asks for no such thing, so that its subscription names are the broker's
 | `send` | A transfer on the link without an address (an anonymous relay), then the wait for its disposition
 | `commit(sends, consumed)` | `declare`, the transfers and the dispositions in the transaction, `discharge`. A commit that only acknowledges, or sends one message, needs no transaction
@@ -301,7 +301,9 @@ How the seam meets AMQP, from the client's side:
 
 Two exchanges have no answer of their own in AMQP, and the client needs one. To know the broker has given back what it was told to (`redeliver`, `returnUndelivered`), it sends a session `flow` that asks for an echo: the server answers in the order it reads. And a `drain` is over when the credit is used, by a transfer, or given up, by a `flow` whose delivery count accounts for all of it; an answer that does not is that of an earlier drain.
 
-`NetworkClientTest`, in `tassis-server`, runs the Jakarta Messaging API through a real socket; the TCK run with `network` does the same with the whole suite.
+TLS is that of the JDK, from the first octet, and changes the socket only. On both ends the TLS socket is layered on a plain one that stays within reach: closing a TLS socket first says goodbye, which waits its turn behind whoever is writing, so a connection is cut by closing the plain socket under it. The server makes the handshake at the first read, by the reader of the connection and within the time a client has to open one, so that the thread that accepts is never held up. The client asks for the name of its URL to be checked against the certificate.
+
+`NetworkClientTest`, in `tassis-server`, runs the Jakarta Messaging API through a real socket, and `TlsNetworkClientTest` runs the same scenarios again over TLS, with a certificate the JDK's `keytool` makes for the test; the TCK run with `network` does the same with the whole suite.
 
 == House rules
 

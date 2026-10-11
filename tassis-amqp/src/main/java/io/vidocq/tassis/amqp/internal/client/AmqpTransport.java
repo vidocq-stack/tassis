@@ -23,18 +23,24 @@ import io.vidocq.tassis.core.internal.broker.BrokerConnection;
 import io.vidocq.tassis.core.internal.broker.Transport;
 import io.vidocq.tassis.core.internal.settings.Settings;
 import jakarta.jms.JMSException;
+import javax.net.ssl.SSLContext;
 
-/** The transport {@code amqp} of a connection URL: a broker opened to the network by a server. */
+/**
+ * The transports {@code amqp} and {@code amqps} of a connection URL: a broker opened to the
+ * network by a server, the second one over TLS.
+ */
 public final class AmqpTransport implements Transport {
 
     @Override
-    public String name() {
-        return "amqp";
+    public boolean serves(String transport) {
+        return transport.equals("amqp") || transport.equals("amqps");
     }
 
     @Override
-    public BrokerConnection connect(Settings settings, String user, String password) throws JMSException {
-        return new AmqpBrokerConnection(settings.serverHost(), settings.serverPort(), settings.clientId(), user,
-                password);
+    public BrokerConnection connect(Settings settings, SSLContext tls, String user, String password)
+            throws JMSException {
+        boolean encrypted = settings.serverTransport().equals("amqps");
+        return new AmqpBrokerConnection(settings.serverHost(), settings.serverPort(), encrypted, tls,
+                settings.clientId(), user, password);
     }
 }

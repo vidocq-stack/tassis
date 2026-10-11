@@ -73,8 +73,7 @@ the Italian *Tasso* and the German *Taxis*.
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. The network transport has no
-encryption yet. Messages live in memory and do not survive the JVM: that
+🚧 **In development, not released.** No artifact is published. Messages live in memory and do not survive the JVM: that
 one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
 the milestones, and the limits a user must know are in the
 [reference](docs/en/modules/ROOT/pages/reference.adoc).
@@ -202,7 +201,7 @@ ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?cl
 |---|---|---|---|
 | `tassis.url` | | | A connection URL holding the settings below; a setting given by its own key overrides it |
 | `tassis.broker` | `tassis:vm:<broker>` | `default` | The name of the in-VM broker |
-| `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default), instead of the in-VM one; needs `tassis-amqp` |
+| `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default) or, over TLS, `amqps://<host>[:<port>]` (port 5671), instead of the in-VM one; needs `tassis-amqp` |
 | `tassis.clientId` | `clientId` | none | The client identifier of the connections |
 | `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
 
@@ -252,9 +251,18 @@ A client needs nothing of Tassis, though. With Apache Qpid JMS, for instance:
 ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
 ```
 
-A client of the network has the whole of Jakarta Messaging, short of XA. **Nothing is encrypted
-yet**: the server listens on the loopback address unless told otherwise. See
-[Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
+A client of the network has the whole of Jakarta Messaging, short of XA.
+
+**Nothing is encrypted unless asked.** The server listens on the loopback address unless told
+otherwise, and encrypts with TLS when it is given a context; clients then say `amqps`:
+
+```java
+TassisServer server = TassisServer.forBroker("orders").host("0.0.0.0").tls(sslContext).start();  // port 5671
+
+ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://broker-host");
+```
+
+See [Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
 
 ## Architecture
 
@@ -320,7 +328,7 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Authentication (user registry per broker, `TassisBroker`) | ✅ |
 | A broker open to AMQP 1.0 clients: queues, topics and subscriptions, selectors, temporary destinations, local transactions, browsers | ✅ |
 | The Tassis client over AMQP (`tassis:amqp://host`), with heartbeats and the `ExceptionListener` for a lost connection | ✅ |
-| Over AMQP: TLS | M11.3d |
+| Over AMQP: TLS (`amqps`), for the server and for the Tassis client | ✅ |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |

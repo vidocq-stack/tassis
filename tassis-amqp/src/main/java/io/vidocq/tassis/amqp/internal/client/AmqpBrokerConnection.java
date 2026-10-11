@@ -97,6 +97,10 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 
 /**
  * A client's connection to a broker of the network, over AMQP 1.0: what {@code LocalConnection}
@@ -128,6 +132,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private static final int IDLE_TIME_OUT = 60_000;
     /** How long the client waits for the broker to accept a connection, then for each step of its opening. */
     private static final int CONNECT_TIME_OUT = 10_000;
+    /** How long the closing of an encrypted socket waits for the broker to say goodbye too. */
+    private static final int GOODBYE_TIME_OUT = 200;
     /** How long the client waits for the broker to answer its close before it closes the socket. */
     private static final long CLOSE_TIME_OUT = 5_000;
     /** The session window the client grants and assumes: how many transfer frames (§2.5.6). */
@@ -147,6 +153,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     /** One socket and what serves it: replaced when a client identifier is claimed. */
     private static final class Wire {
         final Socket socket;
+        /** The TCP socket under an encrypted one, or the socket itself. */
+        final Socket transport;
         final LinkedBlockingQueue<byte[]> outbound = new LinkedBlockingQueue<>();
         long peerMaxFrameSize;
         int heartbeat;
@@ -156,8 +164,18 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         boolean closing;
         boolean ended;
 
-        Wire(Socket socket) {
+        Wire(Socket socket, Socket transport) {
             this.socket = socket;
+            this.transport = transport;
+        }
+
+        /**
+         * Ends the conversation at once. The TCP socket first: a writer the broker holds up
+         * fails at once, where the close of a TLS socket would wait behind it to say goodbye.
+         */
+        void cut() {
+            closeQuietly(transport);
+            closeQuietly(socket);
         }
     }
 
@@ -193,6 +211,9 @@ public final class AmqpBrokerConnection implements BrokerConnection {
 
     private final String host;
     private final int port;
+    private final boolean encrypted;
+    // Whom to trust on an encrypted connection; null for what the JVM trusts by default.
+    private final SSLContext tls;
     private final String user;
     private final String password;
     private final String messageIdPrefix = "ID:" + UUID.randomUUID() + "-";
@@ -237,9 +258,12 @@ public final class AmqpBrokerConnection implements BrokerConnection {
      * @throws JMSSecurityException if the broker rejects the credentials
      * @throws InvalidClientIDException if another connection holds that client identifier
      */
-    AmqpBrokerConnection(String host, int port, String clientId, String user, String password) throws JMSException {
+    AmqpBrokerConnection(String host, int port, boolean encrypted, SSLContext tls, String clientId, String user,
+            String password) throws JMSException {
         this.host = host;
         this.port = port;
+        this.encrypted = encrypted;
+        this.tls = tls;
         this.user = user;
         this.password = password;
         establish(clientId);
@@ -256,13 +280,17 @@ public final class AmqpBrokerConnection implements BrokerConnection {
      * @param identifier the client identifier to hold, alone, or {@code null} for none
      */
     private void establish(String identifier) throws JMSException {
-        Socket socket = new Socket();
+        Socket transport = new Socket();
+        Socket socket = transport;
         Wire installed = null;
         boolean established = false;
         try {
-            socket.connect(new InetSocketAddress(host, port), CONNECT_TIME_OUT);
-            socket.setTcpNoDelay(true);
-            socket.setSoTimeout(CONNECT_TIME_OUT);
+            transport.connect(new InetSocketAddress(host, port), CONNECT_TIME_OUT);
+            transport.setTcpNoDelay(true);
+            transport.setSoTimeout(CONNECT_TIME_OUT);
+            if (encrypted) {
+                socket = secured(transport);
+            }
             InputStream in = new BufferedInputStream(socket.getInputStream());
             OutputStream out = socket.getOutputStream();
             authenticate(in, out);
@@ -292,7 +320,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
             }
             Begin begin = expect(in, Begin.class);
 
-            Wire opened = new Wire(socket);
+            Wire opened = new Wire(socket, transport);
             long peerMax = open.maxFrameSize() == null ? MAX_FRAME_SIZE : open.maxFrameSize();
             opened.peerMaxFrameSize = Math.max(FrameCodec.MIN_MAX_FRAME_SIZE, Math.min(peerMax, Integer.MAX_VALUE));
             if (open.idleTimeOut() != null && open.idleTimeOut() > 0) {
@@ -303,7 +331,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                 throw new JMSException("the broker at " + host + ":" + port
                         + " does not let a client send by a link without an address (ANONYMOUS-RELAY)");
             }
-            socket.setSoTimeout(2 * IDLE_TIME_OUT);
+            transport.setSoTimeout(2 * IDLE_TIME_OUT);
             lock.lock();
             try {
                 wire = opened;
@@ -334,6 +362,13 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                 lock.unlock();
             }
             established = true;
+        } catch (SSLException e) {
+            if (aboutTheCertificate(e)) {
+                // Not one the client trusts, or issued to another name than the one asked for.
+                throw problem("the broker at " + host + ":" + port + " is not trusted: " + e.getMessage(), e);
+            }
+            throw problem("the broker at " + host + ":" + port
+                    + " and the client could not make an encrypted connection (TLS): " + e.getMessage(), e);
         } catch (IOException e) {
             throw problem("the broker at " + host + ":" + port + " cannot be reached: " + e.getMessage(), e);
         } catch (AmqpDecodeException e) {
@@ -349,9 +384,44 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                         lock.unlock();
                     }
                 }
+                closeQuietly(transport);
                 closeQuietly(socket);
             }
         }
+    }
+
+    /** Whether a handshake failed because of the certificate the broker showed, rather than for want of TLS. */
+    private static boolean aboutTheCertificate(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.security.cert.CertificateException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The TLS handshake of {@code amqps}, from the first octet, on a socket that is connected:
+     * the broker must show a certificate the client trusts and that was issued to the name the
+     * client connects to (RFC 2818, as for HTTPS).
+     *
+     * @return the encrypted socket, layered on the one given, which stays the one to close in haste
+     */
+    private SSLSocket secured(Socket transport) throws IOException {
+        SSLContext context;
+        try {
+            context = tls != null ? tls : SSLContext.getDefault();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new SSLException("TLS is not available", e);
+        }
+        // The name is that of the URL: it is what the certificate is checked against, and what
+        // the handshake asks the server for, unless it is an address (RFC 6066, §3).
+        SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket(transport, host, port, true);
+        SSLParameters parameters = socket.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        socket.setSSLParameters(parameters);
+        socket.startHandshake();
+        return socket;
     }
 
     /** The security layer (part 5, §5.3.2): a user name and a password, or nobody in particular. */
@@ -449,7 +519,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     // ---- the writer and the reader --------------------------------------------
 
     private void write(Wire wire, OutputStream raw) {
-        try (OutputStream out = new BufferedOutputStream(raw)) {
+        try {
+            OutputStream out = new BufferedOutputStream(raw);
             while (true) {
                 byte[] octets = wire.heartbeat > 0 ? wire.outbound.poll(wire.heartbeat, TimeUnit.MILLISECONDS)
                         : wire.outbound.take();
@@ -468,8 +539,16 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            // Ends the reader, if it has not ended already: it is the reader that says so.
+            // Ends the reader, if it has not ended already: it is the reader that says so. A TLS
+            // socket says goodbye, which nothing holds up since only this thread writes, and
+            // must not then wait long for the broker to answer: TLS 1.3 would.
+            try {
+                wire.socket.setSoTimeout(GOODBYE_TIME_OUT);
+            } catch (IOException e) {
+                LOG.log(System.Logger.Level.DEBUG, "closing a socket", e);
+            }
             closeQuietly(wire.socket);
+            wire.cut();
         }
     }
 
@@ -565,12 +644,12 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         ending.outbound.add(NO_MORE);
         try {
             if (ending.writer != null && !ending.writer.join(java.time.Duration.ofMillis(CLOSE_TIME_OUT))) {
-                closeQuietly(ending.socket);
+                ending.cut();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        closeQuietly(ending.socket);
+        ending.cut();
     }
 
     private void queue(byte[] octets) {

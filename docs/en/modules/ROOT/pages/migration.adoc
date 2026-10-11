@@ -10,7 +10,7 @@ Nothing to migrate: no version has been published. This section will get its fir
 
 == From another Jakarta Messaging provider
 
-Migrating a production application is premature: read the xref:reference.adoc#limits[limits] first. Messages do not survive the JVM, and the network transport has no encryption yet.
+Migrating a production application is premature: read the xref:reference.adoc#limits[limits] first. Messages do not survive the JVM, and a Tassis client has been run against a Tassis server only.
 
 === What stays the same
 
@@ -57,8 +57,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | None
 
 | A broker shared by several processes or machines
-| `TassisServer` opens a broker to AMQP 1.0 clients, without encryption. The Tassis client itself reaches the broker of its own JVM only
-| M11.3d
+| `TassisServer` opens a broker to AMQP 1.0 clients, over TLS if asked, and a Tassis client reaches it with `tassis:amqp://host` or `tassis:amqps://host`. Against another broker than Tassis, the Tassis client is untried
+| M11.3e
 
 | Authentication
 | Supported once users are declared on the broker with `TassisBroker`; until then any user name and password are accepted. Users live in memory and are declared by the application, not in a file

@@ -31,6 +31,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
 
 /**
  * Opens a broker of this JVM to the network: clients connect to it with AMQP 1.0.
@@ -46,9 +48,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * declared with {@code TassisBroker}: a secured broker asks network clients for a user name
  * and a password too.
  *
- * <p><strong>The connection is not encrypted.</strong> A password travels in clear, like the
- * messages. The server therefore listens on the loopback address unless told otherwise with
- * {@link Builder#host(String)}: open it to a network you trust, or not at all.
+ * <p><strong>The connection is not encrypted unless asked</strong>, with
+ * {@link Builder#tls(SSLContext)}. Without it a password travels in clear, like the messages.
+ * The server listens on the loopback address unless told otherwise with
+ * {@link Builder#host(String)}: open it in clear to a network you trust, or not at all.
  *
  * <p>A client of the network has what a client of the JVM has: queues and topics, durable
  * and shared subscriptions, message selectors, temporary destinations, local transactions,
@@ -58,6 +61,8 @@ public final class TassisServer implements AutoCloseable {
 
     /** The port AMQP is registered with, used when none is given. */
     public static final int DEFAULT_PORT = 5672;
+    /** The port AMQP over TLS is registered with, used when none is given to a server that encrypts. */
+    public static final int DEFAULT_TLS_PORT = 5671;
 
     private static final System.Logger LOG = System.getLogger(TassisServer.class.getName());
 
@@ -66,12 +71,15 @@ public final class TassisServer implements AutoCloseable {
 
     private final String brokerName;
     private final ServerSocket listener;
+    // What encrypts the connections, or null for a server that speaks in clear.
+    private final SSLContext tls;
     private final Set<AmqpConnection> connections = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
 
-    private TassisServer(String brokerName, ServerSocket listener) {
+    private TassisServer(String brokerName, ServerSocket listener, SSLContext tls) {
         this.brokerName = brokerName;
         this.listener = listener;
+        this.tls = tls;
     }
 
     /** Starts describing a server for the broker of that name in this JVM. */
@@ -88,15 +96,17 @@ public final class TassisServer implements AutoCloseable {
 
         private final String brokerName;
         private String host;
-        private int port = DEFAULT_PORT;
+        // -1: the port of AMQP, with or without TLS
+        private int port = -1;
+        private SSLContext tls;
 
         private Builder(String brokerName) {
             this.brokerName = brokerName;
         }
 
         /**
-         * The port to listen on: 5672 by default, or 0 for any free port, which
-         * {@link TassisServer#port()} then tells.
+         * The port to listen on: 5672 by default, 5671 for a server that encrypts, or 0 for any
+         * free port, which {@link TassisServer#port()} then tells.
          */
         public Builder port(int newPort) {
             if (newPort < 0 || newPort > 0xFFFF) {
@@ -116,21 +126,36 @@ public final class TassisServer implements AutoCloseable {
         }
 
         /**
+         * Encrypts the connections with TLS: the server shows the certificate of this context,
+         * and clients connect with {@code amqps} instead of {@code amqp}. The application
+         * builds the context, from a key store of its own; the server reads no file. A server
+         * either encrypts or does not: clients that speak in clear to it are turned away.
+         *
+         * <p>The versions of TLS are those the JDK enables by default. Clients are not asked for
+         * a certificate: they are who their user name and password say.
+         */
+        public Builder tls(SSLContext context) {
+            tls = Objects.requireNonNull(context, "context");
+            return this;
+        }
+
+        /**
          * Starts listening.
          *
          * @throws UncheckedIOException if the address cannot be listened on
          */
         public TassisServer start() {
+            int listeningPort = port >= 0 ? port : tls == null ? DEFAULT_PORT : DEFAULT_TLS_PORT;
             try {
                 InetAddress address = host == null ? InetAddress.getLoopbackAddress() : InetAddress.getByName(host);
                 ServerSocket listener = new ServerSocket();
                 listener.setReuseAddress(true);
-                listener.bind(new InetSocketAddress(address, port));
-                TassisServer server = new TassisServer(brokerName, listener);
+                listener.bind(new InetSocketAddress(address, listeningPort));
+                TassisServer server = new TassisServer(brokerName, listener, tls);
                 Thread.ofVirtual().name("tassis-server-" + brokerName).start(server::accept);
                 return server;
             } catch (IOException e) {
-                throw new UncheckedIOException("cannot listen on port " + port, e);
+                throw new UncheckedIOException("cannot listen on port " + listeningPort, e);
             }
         }
     }
@@ -145,12 +170,33 @@ public final class TassisServer implements AutoCloseable {
         return brokerName;
     }
 
+    /**
+     * The socket a connection is served on: for a server that encrypts, a TLS socket layered on
+     * the one that was accepted, which stays within reach to be closed without ceremony. The
+     * handshake is not made here but at the first read, by the thread that serves the
+     * connection and within the time a client has to open one.
+     */
+    private Socket encrypted(Socket accepted) throws IOException {
+        if (tls == null) {
+            return accepted;
+        }
+        try {
+            SSLSocket layered = (SSLSocket) tls.getSocketFactory().createSocket(accepted, null, accepted.getPort(), true);
+            layered.setUseClientMode(false);
+            return layered;
+        } catch (IOException | RuntimeException e) {
+            accepted.close();
+            throw e;
+        }
+    }
+
     private void accept() {
         Broker broker = Broker.named(brokerName);
         while (!closed) {
             try {
-                Socket socket = listener.accept();
-                AmqpConnection connection = new AmqpConnection(socket, broker, connections::remove);
+                Socket accepted = listener.accept();
+                AmqpConnection connection =
+                        new AmqpConnection(encrypted(accepted), accepted, broker, connections::remove);
                 connections.add(connection);
                 if (closed) {
                     // close() may have gone through the connections before this one was among them

@@ -252,6 +252,14 @@ that never writes and a writer that alone writes. Rules:
 - **An AMQP connection says who it is when it opens**: `claimClientId` reconnects, and a
   connection without a client identifier never asks for `sole-connection-for-container`.
 - The names both ends agree on are in `internal.jms.Conventions`, and nowhere else.
+- **TLS is the JDK's, and changes the socket only** (`amqps`, TLS from the first octet). The
+  application hands over an `SSLContext`, to the server (`TassisServer.Builder.tls`) and, if
+  the JVM's trust store is not enough, to the factory (`withSslContext`): Tassis reads no key
+  store. The client always checks the host name against the certificate; do not add a way to
+  turn that off. **To cut a connection, close the plain socket under the TLS one** (`cut`,
+  `abort`): closing a TLS socket waits behind whoever is writing. Whatever a scenario of
+  `NetworkClientTest` proves, `TlsNetworkClientTest` proves again over TLS by inheriting it:
+  add network scenarios to the first.
 - A change here is proven by `NetworkClientTest` (in `tassis-server`) **and by the TCK through
   the network**: `./run-official-tck-messaging-3.1.sh network`.
 

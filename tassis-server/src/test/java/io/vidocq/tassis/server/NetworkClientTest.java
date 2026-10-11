@@ -69,15 +69,30 @@ class NetworkClientTest {
     private static final long BRIEFLY = 200;
 
     private String brokerName;
-    private TassisServer server;
-    private TassisConnectionFactory network;
+    TassisServer server;
+    TassisConnectionFactory network;
     private TassisConnectionFactory inVm;
+
+    /** What the server of a test is started with, beyond its broker and a free port. */
+    TassisServer.Builder configured(TassisServer.Builder server) {
+        return server;
+    }
+
+    /** A client of the same broker that does not go through the network. */
+    JMSContext inVmContext() {
+        return inVm.createContext();
+    }
+
+    /** The factory of a client of that server. */
+    TassisConnectionFactory factoryFor(int port) {
+        return TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + port);
+    }
 
     @BeforeEach
     void startServer() {
         brokerName = "network-" + UUID.randomUUID();
-        server = TassisServer.forBroker(brokerName).port(0).start();
-        network = TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + server.port());
+        server = configured(TassisServer.forBroker(brokerName).port(0)).start();
+        network = factoryFor(server.port());
         inVm = new TassisConnectionFactory(brokerName);
     }
 

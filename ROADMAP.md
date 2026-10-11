@@ -752,8 +752,7 @@ modules:
       `BrokerConnection`, selected by the connection URL beside `tassis:vm:`; heartbeats; the
       `ExceptionListener` (§6.1.7), stored and never called so far, for a lost connection.
       **Proof: the whole TCK replayed through the network**, besides the in-VM run. See below.
-- [ ] **M11.3d-2 — TLS**: `amqps`, for the server and for the client. Until then nothing is
-      encrypted, and the server listens on the loopback address unless told otherwise.
+- [x] **M11.3d-2 — TLS**: `amqps`, for the server and for the client. See below.
 - [ ] **M11.3e — The Tassis client against a third-party broker**: what differs from one
       broker to another in the conventions above, found by running against a real one.
 
@@ -945,9 +944,43 @@ What it decided, and what it taught:
   around them, fixed here: two commits attaching the coordinator link at once, a
   `setClientID` refused late that left the connection marked lost, waits that a link ended by
   the broker would never end. The last cannot happen with a Tassis server: it is for M11.3e.
-- Still not there: TLS (M11.3d-2), reconnection, fetching ahead, and any broker but ours
+- Still not there: reconnection, fetching ahead, and any broker but ours
   (M11.3e). A message over the 16 MiB a server accepts ends the connection instead of failing
   the send.
+
+#### M11.3d-2 — TLS ✅
+
+- [x] **Server**: `TassisServer.Builder.tls(SSLContext)`. The listener is then encrypted from
+      the first octet, on port 5671 by default. The handshake is made by the thread that serves
+      the connection, within the time a client has to open one.
+- [x] **Client**: `tassis:amqps://<host>[:<port>]`. The certificate must be one the JVM trusts,
+      or the context given with `TassisConnectionFactory.withSslContext` does, and must bear
+      the name of the URL (RFC 2818). A broker that fails either is refused before anything is
+      sent, with an exception that tells a certificate from a port that does not speak TLS.
+- [x] **Proof**: every scenario of `NetworkClientTest` again over TLS, seven more about trust
+      and about closing, and Apache Qpid JMS in `amqps` against the server
+      (`QpidJmsOverTlsTest`).
+
+What it decided:
+
+- **TLS from the first octet only.** AMQP also allows a connection to start in clear and
+  switch (its TLS protocol header). Clients and brokers use a port of its own, 5671, and so
+  does Tassis; a server that must serve both starts two listeners.
+- **Tassis reads no key store.** The application builds an `SSLContext` with the JDK and hands
+  it over. A key store setting would have put a file path and a password in the settings and
+  in the URL; the JVM's own properties (`javax.net.ssl.trustStore`) already serve the client.
+- **The host name is always checked**, with no setting to turn it off.
+- **No certificate for the client**, and so no SASL `EXTERNAL`: to be added if it is asked for.
+- **The TCK was not replayed over TLS.** TLS changes the socket and nothing above it, and the
+  end-to-end scenarios cover that; the TCK through the network, in clear, was replayed.
+- **Closing a TLS socket is not closing a socket.** It first says goodbye, and waits its turn
+  to write: behind a writer that a peer no longer reads, for ever. The review found it, and a
+  test showed `TassisServer.close()` hanging on one client that had stopped reading, which a
+  server in clear survives. On both ends the TLS socket is now layered on a plain one, and it
+  is the plain one that is closed to cut a connection. With TLS 1.3 the goodbye also waits
+  for the peer's, as long as a read may: the last close is given a fifth of a second.
+- **A certificate for a test** is made by the `keytool` of the JDK that runs the build: the
+  JDK has no API that issues one, and no key is kept in the repository.
 
 ### M11b — Connection pool
 

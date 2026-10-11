@@ -20,6 +20,7 @@ package io.vidocq.tassis.core.internal.broker;
 
 import io.vidocq.tassis.core.internal.settings.Settings;
 import jakarta.jms.JMSException;
+import javax.net.ssl.SSLContext;
 
 /**
  * A way to reach a broker that is not in this JVM. {@code tassis-core} knows none: a transport
@@ -27,15 +28,20 @@ import jakarta.jms.JMSException;
  */
 public interface Transport {
 
-    /** The name of the transport in a connection URL: {@code amqp} in {@code tassis:amqp://host}. */
-    String name();
+    /**
+     * Whether this is the transport a connection URL names: {@code amqp} in
+     * {@code tassis:amqp://host}. One transport may go by several names.
+     */
+    boolean serves(String transport);
 
     /**
      * Connects to the broker the settings name, as this user.
      *
+     * @param tls whom to trust and who to be on an encrypted connection, or {@code null} for
+     *        what the JVM trusts by default; of no use to a transport that does not encrypt
      * @param user the user name, or {@code null} for none
      * @throws jakarta.jms.JMSSecurityException if the broker rejects the credentials (§6.1.1)
      * @throws JMSException if the broker cannot be reached
      */
-    BrokerConnection connect(Settings settings, String user, String password) throws JMSException;
+    BrokerConnection connect(Settings settings, SSLContext tls, String user, String password) throws JMSException;
 }

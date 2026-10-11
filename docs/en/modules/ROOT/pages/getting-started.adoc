@@ -143,7 +143,7 @@ try (TassisServer server = TassisServer.forBroker("orders").port(0).start()) {
 }
 ----
 
-The host needs the artifact `tassis-server` and `requires io.vidocq.tassis.server;`. A process that only connects needs `tassis-amqp` and `requires io.vidocq.tassis.amqp;`. Nothing is encrypted yet: see xref:usage.adoc#network[Opening a broker to the network].
+The host needs the artifact `tassis-server` and `requires io.vidocq.tassis.server;`. A process that only connects needs `tassis-amqp` and `requires io.vidocq.tassis.amqp;`. Nothing is encrypted unless the server is given a TLS context: see xref:usage.adoc#network[Opening a broker to the network].
 
 == Next steps
 

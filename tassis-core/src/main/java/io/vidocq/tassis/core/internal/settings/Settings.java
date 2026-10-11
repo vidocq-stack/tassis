@@ -32,8 +32,9 @@ import java.util.Set;
  * same thing, and every new setting is added here, to both.
  *
  * @param broker the name of the in-VM broker to connect to, when there is no {@code server}
- * @param server the broker of the network to connect to, as {@code <transport>://<host>:<port>},
- *        or {@code null} for a broker of this JVM
+ * @param server the broker of the network to connect to, as {@code <transport>://<host>:<port>}
+ *        where the transport is {@code amqp} or, over TLS, {@code amqps}; {@code null} for a
+ *        broker of this JVM
  * @param clientId the client identifier of the connections, or {@code null} for none
  * @param maxListenerDeliveries how many times a message is delivered to a listener that keeps
  *        failing before it is dropped
@@ -58,7 +59,7 @@ public record Settings(String broker, String server, String clientId, int maxLis
     /** The transport that needs no network: the broker of this JVM. */
     private static final String URL_PREFIX = URL_SCHEME + "vm:";
     /** The transports to a broker of the network, and the port each uses unless told otherwise. */
-    private static final Map<String, Integer> SERVER_TRANSPORTS = Map.of("amqp", 5672);
+    private static final Map<String, Integer> SERVER_TRANSPORTS = Map.of("amqp", 5672, "amqps", 5671);
 
     private static final Set<String> KEYS = Set.of(URL, BROKER, SERVER, CLIENT_ID, MAX_LISTENER_DELIVERIES);
 
@@ -118,7 +119,7 @@ public record Settings(String broker, String server, String clientId, int maxLis
         Integer defaultPort = SERVER_TRANSPORTS.get(transport);
         if (defaultPort == null) {
             throw new IllegalArgumentException(SERVER + " is <transport>://<host>[:<port>] with a transport among "
-                    + SERVER_TRANSPORTS.keySet() + ", unlike '" + server + "'");
+                    + SERVER_TRANSPORTS.keySet().stream().sorted().toList() + ", unlike '" + server + "'");
         }
         String address = server.substring(separator + 3);
         String host;
@@ -230,7 +231,7 @@ public record Settings(String broker, String server, String clientId, int maxLis
 
     /**
      * Reads a connection URL: {@code tassis:vm:<broker>} for a broker of this JVM, or
-     * {@code tassis:amqp://<host>[:<port>]} for one of the network, each followed by
+     * {@code tassis:amqp://<host>[:<port>]} for one of the network ({@code amqps} for TLS), each followed by
      * {@code [?clientId=...&listener.maxDeliveries=...]}.
      */
     public static Settings fromUrl(String url) {

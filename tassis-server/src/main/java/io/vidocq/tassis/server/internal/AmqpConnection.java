@@ -119,6 +119,9 @@ public final class AmqpConnection {
     final Condition changed = lock.newCondition();
 
     private final Socket socket;
+    // The TCP socket under an encrypted one, or the socket itself: what is closed to end the
+    // connection at once. Closing a TLS socket first says goodbye, behind whoever is writing.
+    private final Socket transport;
     private final Broker broker;
     private final Consumer<AmqpConnection> onEnd;
     private final LinkedBlockingQueue<byte[]> outbound = new LinkedBlockingQueue<>();
@@ -139,8 +142,13 @@ public final class AmqpConnection {
     // What waits to be written, in octets: the measure of a client that does not read.
     private final java.util.concurrent.atomic.AtomicLong pending = new java.util.concurrent.atomic.AtomicLong();
 
-    public AmqpConnection(Socket socket, Broker broker, Consumer<AmqpConnection> onEnd) {
+    /**
+     * @param socket what frames are read from and written to
+     * @param transport the TCP socket {@code socket} is layered on, or {@code socket} itself
+     */
+    public AmqpConnection(Socket socket, Socket transport, Broker broker, Consumer<AmqpConnection> onEnd) {
         this.socket = socket;
+        this.transport = transport;
         this.broker = broker;
         this.onEnd = onEnd;
     }
@@ -167,6 +175,9 @@ public final class AmqpConnection {
     /** Ends the connection at once, without the exchange of close frames: the server is stopping. */
     public void abort() {
         try {
+            // The TCP socket first: a writer the client holds up fails at once, where the close
+            // of a TLS socket would wait behind it for its turn to write.
+            transport.close();
             socket.close();
         } catch (IOException e) {
             LOG.log(System.Logger.Level.DEBUG, "closing a socket", e);
@@ -176,7 +187,8 @@ public final class AmqpConnection {
     // ---- the writer ----------------------------------------------------------
 
     private void write() {
-        try (OutputStream out = new BufferedOutputStream(socket.getOutputStream())) {
+        try {
+            OutputStream out = new BufferedOutputStream(socket.getOutputStream());
             while (true) {
                 int pace = heartbeat;
                 byte[] octets = pace > 0 ? outbound.poll(pace, TimeUnit.MILLISECONDS) : outbound.take();
@@ -198,9 +210,24 @@ public final class AmqpConnection {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            abort();
+            hangUp();
             onEnd.accept(this);
         }
+    }
+
+    /**
+     * Closes the socket once the writer has nothing more to write. A TLS socket says goodbye,
+     * which nothing holds up since only the writer writes, and must not then wait long for the
+     * client to answer: TLS 1.3 would, for as long as a read may take.
+     */
+    private void hangUp() {
+        try {
+            socket.setSoTimeout(Limits.GOODBYE_TIME_OUT);
+            socket.close();
+        } catch (IOException e) {
+            LOG.log(System.Logger.Level.DEBUG, "closing a socket", e);
+        }
+        abort();
     }
 
     private void queue(byte[] octets) {

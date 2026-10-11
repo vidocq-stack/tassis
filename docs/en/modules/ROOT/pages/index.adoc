@@ -8,7 +8,7 @@ Tassis is a Jakarta Messaging 3.1 provider written in Java 25. It depends on the
 
 [IMPORTANT]
 ====
-Tassis is **in development and not released**: no artifact has been published. The classic API, the simplified API and the legacy domain-specific API work on the in-VM broker. Messages live in memory, and the network transport has no encryption yet. The limits a user must know are listed in the xref:reference.adoc#limits[reference]. This documentation describes the `{project-version}` development line.
+Tassis is **in development and not released**: no artifact has been published. The classic API, the simplified API and the legacy domain-specific API work on the in-VM broker. Messages live in memory. The limits a user must know are listed in the xref:reference.adoc#limits[reference]. This documentation describes the `{project-version}` development line.
 ====
 
 == Origin of the name

@@ -42,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import javax.net.ssl.SSLContext;
 
 /**
  * The Tassis {@link ConnectionFactory}: the administered object a client uses to
@@ -64,7 +65,8 @@ import java.util.Properties;
  * <td>the name of the in-VM broker</td></tr>
  * <tr><td>{@code tassis.server}</td><td>{@code tassis:amqp://<host>[:<port>]}</td><td>none</td>
  * <td>a broker of the network, opened by a {@code TassisServer}, as {@code amqp://<host>[:<port>]}
- * (port 5672 unless told otherwise); needs the module {@code io.vidocq.tassis.amqp}. Without
+ * (port 5672 unless told otherwise) or, encrypted with TLS, {@code amqps://<host>[:<port>]} (port
+ * 5671); needs the module {@code io.vidocq.tassis.amqp}. Without
  * it, the broker is the in-VM one</td></tr>
  * <tr><td>{@code tassis.clientId}</td><td>{@code clientId}</td><td>none</td>
  * <td>the client identifier of the connections (§6.1.2)</td></tr>
@@ -84,6 +86,8 @@ public final class TassisConnectionFactory
     public static final String DEFAULT_BROKER = Settings.DEFAULT_BROKER;
 
     private final Settings settings;
+    // Whom to trust on an encrypted connection; null for what the JVM trusts by default.
+    private final SSLContext tls;
 
     public TassisConnectionFactory() {
         this(Settings.DEFAULTS);
@@ -94,7 +98,12 @@ public final class TassisConnectionFactory
     }
 
     private TassisConnectionFactory(Settings settings) {
+        this(settings, null);
+    }
+
+    private TassisConnectionFactory(Settings settings, SSLContext tls) {
         this.settings = settings;
+        this.tls = tls;
     }
 
     /**
@@ -155,7 +164,7 @@ public final class TassisConnectionFactory
      * {@code setClientID}, and only one of them can be open at a time.
      */
     public TassisConnectionFactory withClientID(String clientId) {
-        return new TassisConnectionFactory(settings.withClientId(Objects.requireNonNull(clientId, "clientId")));
+        return new TassisConnectionFactory(settings.withClientId(Objects.requireNonNull(clientId, "clientId")), tls);
     }
 
     /**
@@ -164,7 +173,20 @@ public final class TassisConnectionFactory
      * provider). The default is 10.
      */
     public TassisConnectionFactory withMaxListenerDeliveries(int maximum) {
-        return new TassisConnectionFactory(settings.withMaxListenerDeliveries(maximum));
+        return new TassisConnectionFactory(settings.withMaxListenerDeliveries(maximum), tls);
+    }
+
+    /**
+     * Returns a factory for the same broker whose encrypted connections ({@code tassis:amqps://})
+     * are made with this context: it says which certificates to trust. Without one, a factory
+     * trusts what the JVM trusts ({@link SSLContext#getDefault()}), which the system properties
+     * {@code javax.net.ssl.trustStore} and the like configure. The name of the host is checked
+     * against the certificate of the broker in every case.
+     *
+     * <p>The context is no part of {@link #toUrl()}: it is not a string.
+     */
+    public TassisConnectionFactory withSslContext(SSLContext context) {
+        return new TassisConnectionFactory(settings, Objects.requireNonNull(context, "context"));
     }
 
     /** The connection URL of this factory: {@link #fromUrl(String)} gives an equivalent factory. */
@@ -182,7 +204,7 @@ public final class TassisConnectionFactory
      * @throws JMSSecurityException if the broker rejects the credentials (§6.1.1, §10.3)
      */
     private TassisConnection connect(Domain domain, String userName, String password) throws JMSException {
-        BrokerConnection link = Transports.connect(settings, userName, password);
+        BrokerConnection link = Transports.connect(settings, tls, userName, password);
         try {
             return new TassisConnection(link, domain, settings.clientId(), settings.maxListenerDeliveries());
         } catch (JMSException | RuntimeException e) {

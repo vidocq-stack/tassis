@@ -239,6 +239,20 @@ class ConnectionFactorySettingsTest {
     }
 
     @Test
+    void urlMayAskForAnEncryptedConnection() throws Exception {
+        assertEquals("tassis:amqps://broker.example:5671",
+                TassisConnectionFactory.fromUrl("tassis:amqps://broker.example").toUrl(),
+                "5671 is the port of AMQP over TLS");
+        assertEquals("tassis:amqps://broker.example:5999?clientId=a",
+                TassisConnectionFactory.from(Map.of("tassis.server", "amqps://broker.example:5999",
+                        "tassis.clientId", "a")).toUrl());
+        // whom to trust is given in code, and is no part of the URL
+        TassisConnectionFactory trusting = TassisConnectionFactory.fromUrl("tassis:amqps://broker.example")
+                .withSslContext(javax.net.ssl.SSLContext.getDefault());
+        assertEquals("tassis:amqps://broker.example:5671?clientId=b", trusting.withClientID("b").toUrl());
+    }
+
+    @Test
     void theServerIsASettingOfItsOwn() {
         assertEquals("tassis:amqp://broker.example:5672?clientId=a",
                 TassisConnectionFactory.from(Map.of("tassis.server", "amqp://broker.example", "tassis.clientId", "a"))
