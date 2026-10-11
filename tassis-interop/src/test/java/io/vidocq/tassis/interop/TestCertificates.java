@@ -43,8 +43,21 @@ record TestCertificates(SSLContext server, SSLContext client) {
 
     private static final char[] PASSWORD = "changeit".toCharArray();
 
+    /** The password of a key store kept with {@link #issuedTo(String, Path)}. */
+    static final String STORE_PASSWORD = "changeit";
+
     /** A self-signed certificate issued to that DNS name. */
     static TestCertificates issuedTo(String name) {
+        return issuedTo(name, null);
+    }
+
+    /**
+     * A self-signed certificate issued to that DNS name.
+     *
+     * @param keyStore where to leave the PKCS12 key store, for a broker that wants a file, or
+     *        {@code null} to keep none
+     */
+    static TestCertificates issuedTo(String name, Path keyStore) {
         try {
             Path directory = Files.createTempDirectory("tassis-tls");
             Path store = directory.resolve("server.p12");
@@ -62,6 +75,9 @@ record TestCertificates(SSLContext server, SSLContext client) {
                 if (!keytool.waitFor(60, TimeUnit.SECONDS) || keytool.exitValue() != 0) {
                     throw new IllegalStateException("keytool could not make a certificate: "
                             + Files.readString(output, StandardCharsets.UTF_8));
+                }
+                if (keyStore != null) {
+                    Files.copy(store, keyStore, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 }
                 KeyStore keys = KeyStore.getInstance("PKCS12");
                 try (InputStream in = Files.newInputStream(store)) {

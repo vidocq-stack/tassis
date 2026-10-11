@@ -38,6 +38,13 @@ public final class Conventions {
     public static final Symbol SOLE_CONNECTION = Symbol.of("sole-connection-for-container");
     public static final Symbol SHARED_SUBS = Symbol.of("SHARED-SUBS");
     public static final Symbol DELAYED_DELIVERY = Symbol.of("DELAYED_DELIVERY");
+    /**
+     * Offered by a broker that answers a session flow asking for an echo (part 2, §2.7.4), in
+     * the order it reads: how a client knows the broker has done what it was told so far. The
+     * specification asks every peer for that answer, and not every implementation gives it,
+     * so a Tassis server says that it does.
+     */
+    public static final Symbol FLOW_ECHO = Symbol.of("tassis:flow-echo");
     /** The property of an open that says the connection is about to be refused. */
     public static final Symbol CONNECTION_ESTABLISHMENT_FAILED = Symbol.of("amqp:connection-establishment-failed");
 

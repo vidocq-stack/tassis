@@ -753,8 +753,8 @@ modules:
       `ExceptionListener` (§6.1.7), stored and never called so far, for a lost connection.
       **Proof: the whole TCK replayed through the network**, besides the in-VM run. See below.
 - [x] **M11.3d-2 — TLS**: `amqps`, for the server and for the client. See below.
-- [ ] **M11.3e — The Tassis client against a third-party broker**: what differs from one
-      broker to another in the conventions above, found by running against a real one.
+- [x] **M11.3e — The Tassis client against a third-party broker**: what differs from one
+      broker to another in the conventions above, found by running against a real one. See below.
 
 #### M11.3a — The codec ✅
 
@@ -944,8 +944,7 @@ What it decided, and what it taught:
   around them, fixed here: two commits attaching the coordinator link at once, a
   `setClientID` refused late that left the connection marked lost, waits that a link ended by
   the broker would never end. The last cannot happen with a Tassis server: it is for M11.3e.
-- Still not there: reconnection, fetching ahead, and any broker but ours
-  (M11.3e). A message over the 16 MiB a server accepts ends the connection instead of failing
+- Still not there: reconnection and fetching ahead. A message over the 16 MiB a server accepts ends the connection instead of failing
   the send.
 
 #### M11.3d-2 — TLS ✅
@@ -981,6 +980,42 @@ What it decided:
   for the peer's, as long as a read may: the last close is given a fifth of a second.
 - **A certificate for a test** is made by the `keytool` of the JDK that runs the build: the
   JDK has no API that issues one, and no key is kept in the repository.
+
+#### M11.3e — The Tassis client against a third-party broker ✅
+
+The Tassis client is run against Apache ActiveMQ Artemis, embedded in `tassis-interop`: 25
+scenarios on a broker left open (`TassisClientAgainstArtemisTest`), 4 on one that asks who
+connects and encrypts (`TassisClientAgainstSecuredArtemisTest`). Everything passed against a
+Tassis server before; four things did not against Artemis, and that is what the slice is.
+
+- **An echo nobody answers.** The client waited for the broker to echo a session flow, to know
+  it had taken back what it was given back. The specification asks for that answer (part 2,
+  §2.7.4) and Artemis, like what is built on Qpid Proton, does not give it: the first
+  `recover` waited for ever. A Tassis server now offers a capability, `tassis:flow-echo`, and
+  the client waits only when it is offered. Elsewhere, what is given back is back a moment
+  later.
+- **A connection without a client identifier must say so.** Against a Tassis server it was
+  enough not to ask to be the only connection of its container. Artemis scopes a subscription
+  by the container identifier unless the link says `global`: two such connections did not
+  share a shared subscription. The client now says `global` whenever it has no identifier.
+- **The names of links are a convention too.** A broker reads the name of a subscription, and
+  whether it is durable or the broker's, from the name of the link: `sub`, `sub|2`,
+  `sub|volatile1`, `sub|global`, `sub|global-volatile1`. The Tassis server only read up to the
+  separator, so any suffix did; the client now writes exactly what Apache Qpid JMS writes. The
+  same for the link that looks a subscription up: without the capability `shared` beside
+  `global`, Artemis found the subscription and did not delete it.
+- **A refusal for want of credentials may come late.** Artemis lets a client that gives no
+  name through the security layer and closes at the open with `amqp:unauthorized-access`:
+  now a `JMSSecurityException`, as when the security layer refuses.
+
+What held without change: the transfer of every kind of message in both directions with Qpid
+JMS on the same broker, one credit at a time and `drain`, transactions by the coordinator and
+several at once, temporary destinations by a dynamic target, browsers by a link in the mode
+`copy`, selectors, `no-local`, delivery delay and expiration, the deferred closing of a
+consumer, the reconnection of `setClientID`, TLS and `PLAIN`.
+
+Not tried: a connection lost by Artemis, a link it ends of its own accord, its limits (frame
+and message sizes), and any other broker. `tasks/todo.md` holds what is known and waits.
 
 ### M11b — Connection pool
 

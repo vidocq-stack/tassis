@@ -419,6 +419,34 @@ class NetworkClientTest {
     }
 
     @Test
+    void aSharedDurableSubscriptionIsSharedByConnectionsWithoutAClientIdentifier() {
+        String topic = "news";
+        String subscription = "pool";
+        try (JMSContext one = network.createContext(); JMSContext two = network.createContext()) {
+            Topic news = one.createTopic(topic);
+            JMSConsumer first = one.createSharedDurableConsumer(news, subscription);
+            JMSConsumer second = two.createSharedDurableConsumer(news, subscription);
+            // and a second consumer of the same connection, which is another link to it
+            JMSConsumer third = one.createSharedDurableConsumer(news, subscription);
+
+            one.createProducer().send(news, "only once");
+
+            int received = 0;
+            for (JMSConsumer consumer : List.of(first, second, third)) {
+                received += consumer.receiveBody(String.class, BRIEFLY) == null ? 0 : 1;
+            }
+            assertEquals(1, received, "one of them, and only one");
+            first.close();
+            second.close();
+            third.close();
+
+            // §8.3.5: the name is the broker's, so any connection without an identifier deletes it
+            two.unsubscribe(subscription);
+            assertThrows(jakarta.jms.InvalidDestinationRuntimeException.class, () -> one.unsubscribe(subscription));
+        }
+    }
+
+    @Test
     void aSubscriberThatWantsNoLocalMessagesGetsNoneOfItsOwnConnection() {
         try (JMSContext context = network.createContext(); JMSContext other = network.createContext()) {
             Topic news = context.createTopic("news");

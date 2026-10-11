@@ -415,7 +415,7 @@ public final class AmqpConnection {
         }
         queue(FrameCodec.encode(Frame.amqp(0, new Open("tassis-" + broker.name(), null, Limits.MAX_FRAME_SIZE,
                 Limits.CHANNEL_MAX, (long) Limits.IDLE_TIME_OUT, null, null,
-                List.of(ANONYMOUS_RELAY, SOLE_CONNECTION, SHARED_SUBS, DELAYED_DELIVERY),
+                List.of(ANONYMOUS_RELAY, SOLE_CONNECTION, SHARED_SUBS, DELAYED_DELIVERY, FLOW_ECHO),
                 null, properties)), FrameCodec.MIN_MAX_FRAME_SIZE));
         peerMaxFrameSize = Math.min(peerMax, Limits.MAX_FRAME_SIZE);
         if (refused != null) {

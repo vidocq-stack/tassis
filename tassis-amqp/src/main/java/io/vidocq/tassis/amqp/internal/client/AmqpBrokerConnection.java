@@ -143,6 +143,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private static final long BROWSE_CREDIT = 200;
     private static final Symbol NOT_FOUND = Symbol.of("amqp:not-found");
     private static final Symbol INVALID_FIELD = Symbol.of("amqp:invalid-field");
+    private static final Symbol UNAUTHORIZED_ACCESS = Symbol.of("amqp:unauthorized-access");
 
     private static final Source NO_SOURCE = new Source(null, null, null, null, null, null, null, null, null, null, null);
     private static final Target NO_TARGET = new Target(null, null, null, null, null, null, null);
@@ -158,6 +159,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         final LinkedBlockingQueue<byte[]> outbound = new LinkedBlockingQueue<>();
         long peerMaxFrameSize;
         int heartbeat;
+        /** Whether the broker answers a session flow that asks for an echo: see {@code sync}. */
+        boolean echoes;
         Thread reader;
         Thread writer;
         // Guarded by the lock of the connection.
@@ -234,6 +237,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private long nextHandle;
     private final TreeSet<Long> freeHandles = new TreeSet<>();
     private long names;
+    // How many links this connection has attached to each shared subscription, by its name.
+    private final Map<String, Integer> subscriptionLinks = new HashMap<>();
     private final Map<Long, Reply> attaching = new HashMap<>();
     private final Map<Long, Reply> detaching = new HashMap<>();
     private final Map<Long, SenderLink> senders = new HashMap<>();
@@ -327,6 +332,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                 // Half of what the broker allows, which is what it asks for (§2.4.5).
                 opened.heartbeat = (int) Math.max(1, Math.min(open.idleTimeOut() / 2, Integer.MAX_VALUE));
             }
+            opened.echoes = open.offeredCapabilities() != null && open.offeredCapabilities().contains(FLOW_ECHO);
             if (open.offeredCapabilities() == null || !open.offeredCapabilities().contains(ANONYMOUS_RELAY)) {
                 throw new JMSException("the broker at " + host + ":" + port
                         + " does not let a client send by a link without an address (ANONYMOUS-RELAY)");
@@ -350,6 +356,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                 unsettled.clear();
                 temporaryQueues.clear();
                 temporaryTopics.clear();
+                subscriptionLinks.clear();
                 coordinator = null;
                 coordinatorAttaching = false;
                 String peer = host + ":" + port;
@@ -496,6 +503,11 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private static JMSException refusal(AmqpError error) {
         String reason = error == null || error.description() == null ? "the broker refused the connection"
                 : error.description();
+        if (error != null && UNAUTHORIZED_ACCESS.equals(error.condition())) {
+            // A broker may let the security layer pass and refuse at the open: Artemis does, to
+            // a client that gave no name.
+            return new JMSSecurityException(reason);
+        }
         // What a broker says of a container identifier that another connection holds (§6.1.2).
         return error != null && INVALID_FIELD.equals(error.condition()) ? new InvalidClientIDException(reason)
                 : new JMSException(reason);
@@ -866,8 +878,17 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     /**
      * Returns once the broker has read every frame queued so far, and so has done what they
      * ask: it answers an echo in the order it reads (§2.5.6). Under the lock.
+     *
+     * <p>Only with a broker that says it answers ({@code Conventions.FLOW_ECHO}). With another,
+     * this returns at once: what was asked is done a moment later, which only another
+     * connection could notice.
      */
     private void sync() {
+        if (!wire.echoes) {
+            // A broker that does not say it answers: what it was told is on its way, in order,
+            // and the client does not know when it is done.
+            return;
+        }
         long asked = ++syncsAsked;
         send(new Flow(nextIncomingId, WINDOW, nextOutgoingId, WINDOW, null, null, null, null, null, true, null));
         awaitQuietly(() -> syncsAnswered >= asked);
@@ -930,6 +951,9 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private static JMSException failure(AmqpError error) {
         String reason = error == null || error.description() == null ? "the broker refused, and gave no reason"
                 : error.description();
+        if (error != null && UNAUTHORIZED_ACCESS.equals(error.condition())) {
+            return new JMSSecurityException(reason);
+        }
         return error != null && NOT_FOUND.equals(error.condition()) ? new InvalidDestinationException(reason)
                 : new JMSException(reason);
     }
@@ -1327,15 +1351,12 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         lock.lock();
         try {
             checkUsable();
-            // The name of the link is that of the subscription, up to a separator.
-            String name;
-            if (request.name() == null) {
-                name = "tassis-subscriber-" + names++;
-            } else if (request.shared()) {
-                name = request.name() + SUBSCRIPTION_NAME_END + (request.global() ? GLOBAL_SUFFIX + "-" : "") + names++;
-            } else {
-                name = request.global() ? request.name() + SUBSCRIPTION_NAME_END + GLOBAL_SUFFIX : request.name();
-            }
+            // A connection without a client identifier has no names of its own: those of its
+            // subscriptions are the broker's, which a broker must be told (it sees a container
+            // identifier on every connection).
+            boolean global = request.global() || clientId == null;
+            String name = request.name() == null ? "tassis-subscriber-" + names++
+                    : subscriptionLinkName(request.name(), request.durable(), request.shared(), global);
             if (request.name() != null) {
                 // A consumer the application closed may still hold the subscription: see ReceiverLink.close.
                 detachDeferred(link -> request.name().equals(link.subscription));
@@ -1345,7 +1366,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
             if (request.shared()) {
                 capabilities.add(CAPABILITY_SHARED);
             }
-            if (request.global()) {
+            if (global && request.name() != null) {
                 capabilities.add(CAPABILITY_GLOBAL);
             }
             return attachReceiver(name,
@@ -1359,14 +1380,36 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     }
 
     /**
+     * The name of the link of a subscription, which is how a broker knows the subscription: its
+     * name, then what tells apart the links one connection has to it, as Apache Qpid JMS writes
+     * them and brokers read them. {@code sub}, {@code sub|2} for a durable one;
+     * {@code sub|volatile1} for one that is not; {@code sub|global}, {@code sub|global2} and
+     * {@code sub|global-volatile1} when the name is the broker's. Under the lock.
+     */
+    private String subscriptionLinkName(String subscription, boolean durable, boolean shared, boolean global) {
+        if (!shared) {
+            return global ? subscription + SUBSCRIPTION_NAME_END + GLOBAL_SUFFIX : subscription;
+        }
+        int link = subscriptionLinks.merge(subscription, 1, Integer::sum);
+        if (!durable) {
+            return subscription + SUBSCRIPTION_NAME_END + (global ? GLOBAL_SUFFIX + "-" : "") + "volatile" + link;
+        }
+        if (global) {
+            return subscription + SUBSCRIPTION_NAME_END + GLOBAL_SUFFIX + (link > 1 ? String.valueOf(link) : "");
+        }
+        return link > 1 ? subscription + SUBSCRIPTION_NAME_END + link : subscription;
+    }
+
+    /**
      * Attaches the link by which a durable subscription is looked up: a receiving link that
      * names it and says nothing of what it reads. Under the lock.
      *
      * @throws InvalidDestinationException if there is no such subscription
      */
-    private Attach lookUp(String name, boolean global) throws JMSException {
+    private Attach lookUp(String name, boolean asked) throws JMSException {
+        boolean global = asked || clientId == null;
         return attach(new Attach(global ? name + SUBSCRIPTION_NAME_END + GLOBAL_SUFFIX : name, allocateHandle(), true,
-                null, null, null, NO_TARGET, null, null, null, null, null, global ? List.of(CAPABILITY_GLOBAL) : null,
+                null, null, null, NO_TARGET, null, null, null, null, null, global ? List.of(CAPABILITY_SHARED, CAPABILITY_GLOBAL) : List.of(CAPABILITY_SHARED),
                 null));
     }
 

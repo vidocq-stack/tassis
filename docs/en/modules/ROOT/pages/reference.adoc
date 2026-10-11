@@ -377,7 +377,7 @@ A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1
 * **No encryption unless asked.** A server without a TLS context speaks in clear, messages and passwords alike; it listens on the loopback address by default. See xref:usage.adoc#tls[Encrypting the connection].
 * **No certificate for the client.** Over TLS the server proves who it is; a client is who its user name and password say.
 * **No reconnection.** A Tassis client whose connection is lost is told through its `ExceptionListener` and creates another connection itself.
-* **The Tassis client has been run against a Tassis server only.** Another AMQP 1.0 broker may follow other conventions. Milestone M11.3e.
+* **Against another broker than Tassis, the Tassis client is tried on one.** It is run against Apache ActiveMQ Artemis: see xref:usage.adoc#third-party[A broker that is not Tassis]. The conventions of Jakarta Messaging over AMQP 1.0 are no standard, and another broker may read them otherwise.
 
 Distributed transactions will not go through the network: AMQP 1.0 leaves them unspecified. Local transactions do.
 

@@ -143,6 +143,8 @@ class TassisServerTest {
             assertNotNull(open.maxFrameSize());
             assertNotNull(open.idleTimeOut());
             assertTrue(open.offeredCapabilities().contains(Symbol.of("ANONYMOUS-RELAY")));
+            // what tells a Tassis client that an echo it asks for is answered (§2.7.4)
+            assertTrue(open.offeredCapabilities().contains(Symbol.of("tassis:flow-echo")));
 
             wire.send(new Close(null));
             assertNull(wire.expect(Close.class).error());

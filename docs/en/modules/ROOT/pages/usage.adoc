@@ -526,6 +526,19 @@ ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://brok
 
 Apache Qpid JMS connects the same way, with `amqps://broker-host:5671` and its own settings for the trust store.
 
+[#third-party]
+=== A broker that is not Tassis
+
+The URL `tassis:amqp://host` may name a broker that is not Tassis, as long as it speaks AMQP 1.0 the way Jakarta Messaging clients expect: no standard says how, and Tassis follows the conventions of Apache Qpid JMS, which brokers read. It is tried against one, **Apache ActiveMQ Artemis**, on queues and topics, the kinds of subscription, selectors, transactions, temporary destinations, browsers, delivery delay, authentication and TLS.
+
+What differs there:
+
+* **The broker's rules are the broker's.** What a destination is, how long a message waits, what happens to one that is never acknowledged: Tassis only carries the requests.
+* **Giving a message back is not instantaneous.** After `recover`, `rollback` or the closing of a consumer, a Tassis server has the messages back before the call returns; with another broker they are back a moment later, which only another connection could notice.
+* **A connection must offer to send without a link per destination** (the capability `ANONYMOUS-RELAY`): a broker that does not is refused when the connection is created.
+
+Another broker than Artemis is untried.
+
 === Any other AMQP 1.0 client
 
 With Apache Qpid JMS, a Jakarta Messaging client, an application on another machine writes ordinary Jakarta Messaging code, with nothing of Tassis:

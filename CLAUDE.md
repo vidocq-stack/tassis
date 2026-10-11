@@ -38,7 +38,7 @@ sdk env
 # The same TCK through the network: Tassis client, socket, TassisServer
 ./run-official-tck-messaging-3.1.sh network
 
-# Interoperability tests (Proton-J, embedded Artemis, Qpid JMS against TassisServer)
+# Interoperability tests (Proton-J, Qpid JMS against TassisServer, the Tassis client against Artemis)
 ./mvnw -ntp -Pinterop -pl tassis-interop -am verify
 ```
 
@@ -248,7 +248,13 @@ that never writes and a writer that alone writes. Rules:
   (`ReceiverLink.close`, `forget`): a broker gives back the unsettled deliveries of a link
   that goes. `detachDeferred` is for what needs the link gone now.
 - **`sync()`** is how the client knows the broker has done what it was told: use it after what
-  another connection must be able to see at once (`redeliver`, `returnUndelivered`).
+  another connection must be able to see at once (`redeliver`, `returnUndelivered`). It only
+  waits for a broker that offers `tassis:flow-echo`, so **nothing may depend on it for
+  correctness**: with another broker it returns at once.
+- **The client is also run against a broker that is not Tassis** (`TassisClientAgainstArtemisTest`
+  in `tassis-interop`). What a link is named and which capabilities it carries are what
+  Apache Qpid JMS sends (`subscriptionLinkName`): change them against that test, not against
+  the Tassis server alone, which reads more forms than other brokers do.
 - **An AMQP connection says who it is when it opens**: `claimClientId` reconnects, and a
   connection without a client identifier never asks for `sole-connection-for-container`.
 - The names both ends agree on are in `internal.jms.Conventions`, and nowhere else.
