@@ -12,7 +12,7 @@ For contributors: where the code lives and the rules it obeys. Users do not need
 
 | `tassis-api` | Aggregator: `requires transitive jakarta.messaging`. It holds no class of its own; the API artifact `jakarta.jms-api` is a Java module upstream and is not forked.
 | `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
-| `tassis-amqp` | AMQP 1.0, written from scratch: the codec, and how a Jakarta Messaging message travels as an AMQP one. See <<amqp>>.
+| `tassis-amqp` | AMQP 1.0, written from scratch: the codec, how a Jakarta Messaging message travels as an AMQP one, and the transport of a client to a broker of the network. See <<amqp>> and <<client>>.
 | `tassis-server` | `TassisServer`: the listener that opens a broker to AMQP 1.0 clients. See <<server>>.
 | `tassis-cdi-vauban` | The injection of `JMSContext`: a producer, a request-scoped holder of the contexts of a request, and the facade that is injected. See <<injection>>.
 | `tassis-cdi-vauban-module-it` | The proof of the above on the module path: an application module whose beans are processed at build time. Never published.
@@ -52,7 +52,7 @@ There is no storage interface: messages live in the memory of the broker, in `Br
 
 == The seam between client and broker
 
-The client objects never name the class `Broker`. `TassisConnectionFactory` obtains a `BrokerConnection` from `Broker.connect(userName, password)`, which is also where the credentials are checked, and every client object goes through it: `TassisConnection.link()`, `TassisSession.link()`. It is the place where the network transport of milestone M11.3 (over AMQP 1.0) will put another implementation, and it is written for a broker that may be far away and whose client may vanish:
+The client objects never name the class `Broker`. `TassisConnectionFactory` obtains a `BrokerConnection` from `Broker.connect(userName, password)`, which is also where the credentials are checked, and every client object goes through it: `TassisConnection.link()`, `TassisSession.link()`. It has two implementations: `LocalConnection`, for the broker of the JVM, and `AmqpBrokerConnection`, in `tassis-amqp`, for a broker of the network (see <<client>>). `Transports.connect` chooses from the settings of the factory. It is written for a broker that may be far away and whose client may vanish:
 
 * **The broker reads nothing from the client.** It is told what it needs to know: `start()` and `stop()` for the connection, `listen(boolean)` for a consumer that gains or loses its listener. No client code runs under the broker lock.
 * **The broker keeps every delivery that is not settled**, in `LocalConnection.unsettled`, until the client settles it or gives it back.
@@ -270,6 +270,38 @@ The listening period of `Consumer.listen`, made for message listeners, is what d
 A link the server cannot attach (an invalid selector, a temporary destination that is gone, a subscription in use) is refused the way AMQP prescribes: attached with nothing at the server's end, then detached with the reason, which leaves the session usable. What a peer does out of place ends the connection with the matching error. `Limits` holds what the server announces and accepts.
 
 `TassisServerTest` drives the server frame by frame with the codec. `QpidJmsAgainstTassisTest`, in `tassis-interop`, runs Apache Qpid JMS against it.
+
+[#client]
+== The AMQP client
+
+`tassis-core` does not depend on `tassis-amqp`. It declares that it `uses` the service `Transport`, an interface of `internal.broker`, and `tassis-amqp` `provides` it with `AmqpTransport`; a file under `META-INF/services` says the same for a class path. `Transports.connect` asks the `ServiceLoader` for the transport a URL names.
+
+An `AmqpBrokerConnection` is one socket, one AMQP connection and one session. Two virtual threads serve it, as on the server: a reader that records what the broker says and never writes, and a writer that alone writes, and sends an empty frame when it has had nothing to say for half the time-out the broker announced. One lock guards everything and one condition wakes whoever waits; every wait releases the lock, and frames are queued under it, so that the order of the wire is the order of the decisions.
+
+How the seam meets AMQP, from the client's side:
+
+[cols="1,1",options="header"]
+|===
+| `BrokerConnection` | AMQP
+
+| `Transport.connect(settings, user, password)` | The socket, SASL `PLAIN` or `ANONYMOUS`, `open`, `begin`, and a sending link without an address
+| `claimClientId` | Another connection, opened with that container identifier and `sole-connection-for-container`: AMQP says who a connection is when it opens. A connection without a client identifier asks for no such thing, so that its subscription names are the broker's
+| `send` | A transfer on the link without an address (an anonymous relay), then the wait for its disposition
+| `commit(sends, consumed)` | `declare`, the transfers and the dispositions in the transaction, `discharge`. A commit that only acknowledges, or sends one message, needs no transaction
+| `attach`, `subscribe` | A receiving link, described as the server reads it
+| `receive`, `take` | One credit, then the wait. Out of time, or the listener gone: a `flow` with `drain`, so that the broker sends what it has or says it has nothing
+| `stop` | `drain` on every link, and `released` for what came and nobody had seen
+| `settle`, `redeliver`, `returnUndelivered` | Dispositions `accepted`, `modified` with `delivery-failed`, `released`
+| `Consumer.close()` | `drain`, then `detach`: put off while the session still answers for deliveries of the link, which a broker gives back when a link goes
+| `browse` | A link in the mode `copy`, credit and `drain` together until the broker has nothing more
+| `createTemporaryQueue`, `deleteTemporaryQueue` | A sending link with a dynamic target, kept until the destination is deleted
+| `unsubscribe` | A receiving link without a source, closed
+| `onLost` | The reader ended and nobody had closed: every wait ends, and the listener is called on a thread of its own
+|===
+
+Two exchanges have no answer of their own in AMQP, and the client needs one. To know the broker has given back what it was told to (`redeliver`, `returnUndelivered`), it sends a session `flow` that asks for an echo: the server answers in the order it reads. And a `drain` is over when the credit is used, by a transfer, or given up, by a `flow` whose delivery count accounts for all of it; an answer that does not is that of an earlier drain.
+
+`NetworkClientTest`, in `tassis-server`, runs the Jakarta Messaging API through a real socket; the TCK run with `network` does the same with the whole suite.
 
 == House rules
 

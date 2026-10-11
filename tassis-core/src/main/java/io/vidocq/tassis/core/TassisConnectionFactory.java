@@ -19,8 +19,8 @@
  */
 package io.vidocq.tassis.core;
 
-import io.vidocq.tassis.core.internal.broker.Broker;
 import io.vidocq.tassis.core.internal.broker.BrokerConnection;
+import io.vidocq.tassis.core.internal.broker.Transports;
 import io.vidocq.tassis.core.internal.client.Domain;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
 import io.vidocq.tassis.core.internal.client.TassisContext;
@@ -62,6 +62,10 @@ import java.util.Properties;
  * below; a setting given by its own key overrides it</td></tr>
  * <tr><td>{@code tassis.broker}</td><td>{@code tassis:vm:<broker>}</td><td>{@code default}</td>
  * <td>the name of the in-VM broker</td></tr>
+ * <tr><td>{@code tassis.server}</td><td>{@code tassis:amqp://<host>[:<port>]}</td><td>none</td>
+ * <td>a broker of the network, opened by a {@code TassisServer}, as {@code amqp://<host>[:<port>]}
+ * (port 5672 unless told otherwise); needs the module {@code io.vidocq.tassis.amqp}. Without
+ * it, the broker is the in-VM one</td></tr>
  * <tr><td>{@code tassis.clientId}</td><td>{@code clientId}</td><td>none</td>
  * <td>the client identifier of the connections (§6.1.2)</td></tr>
  * <tr><td>{@code tassis.listener.maxDeliveries}</td><td>{@code listener.maxDeliveries}</td>
@@ -127,8 +131,9 @@ public final class TassisConnectionFactory
     }
 
     /**
-     * Returns a factory configured by a connection URL,
-     * {@code tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]}, values percent-encoded.
+     * Returns a factory configured by a connection URL: {@code tassis:vm:<broker>} for a broker of
+     * this JVM or {@code tassis:amqp://<host>[:<port>]} for one of the network, followed by
+     * {@code [?clientId=...&listener.maxDeliveries=...]}, values percent-encoded.
      *
      * @throws IllegalArgumentException if the URL is not one, or names an unknown parameter
      */
@@ -177,7 +182,7 @@ public final class TassisConnectionFactory
      * @throws JMSSecurityException if the broker rejects the credentials (§6.1.1, §10.3)
      */
     private TassisConnection connect(Domain domain, String userName, String password) throws JMSException {
-        BrokerConnection link = Broker.named(settings.broker()).connect(userName, password);
+        BrokerConnection link = Transports.connect(settings, userName, password);
         try {
             return new TassisConnection(link, domain, settings.clientId(), settings.maxListenerDeliveries());
         } catch (JMSException | RuntimeException e) {

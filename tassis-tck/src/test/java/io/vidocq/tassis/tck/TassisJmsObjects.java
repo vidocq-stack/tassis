@@ -24,6 +24,7 @@ import io.vidocq.tassis.core.TassisBroker;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.tassis.core.TassisQueue;
 import io.vidocq.tassis.core.TassisTopic;
+import io.vidocq.tassis.server.TassisServer;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.Queue;
 import jakarta.jms.QueueConnectionFactory;
@@ -33,7 +34,8 @@ import jakarta.jms.TopicConnectionFactory;
 /**
  * The TCK's porting class: hands the test suite the administered objects it asks
  * for by name. Selected by the property {@code porting.ts.jmsObjects.class.1} of the
- * harness. Every factory connects to the default in-VM broker, secured with the user of the
+ * harness. Every factory connects to the default in-VM broker, directly or, with the system
+ * property {@code tassis.tck.transport=amqp}, through a server and a socket. It is secured with the user of the
  * TCK's configuration, and a destination is whatever name the TCK asks for, since Tassis
  * creates destinations on first use.
  */
@@ -50,8 +52,18 @@ public final class TassisJmsObjects implements TSJMSObjectsInterface {
                 .allowAnonymous(true);
     }
 
+    /**
+     * The URL of the broker when the TCK is run through the network, {@code null} when it uses
+     * the broker of its JVM directly. The server lasts as long as the JVM of the tests.
+     */
+    private static final String SERVER_URL = "amqp".equals(System.getProperty("tassis.tck.transport"))
+            ? "tassis:amqp://localhost:"
+                    + TassisServer.forBroker(TassisConnectionFactory.DEFAULT_BROKER).port(0).start().port()
+            : null;
+
     private static TassisConnectionFactory factory(String name) {
-        TassisConnectionFactory factory = new TassisConnectionFactory();
+        TassisConnectionFactory factory =
+                SERVER_URL == null ? new TassisConnectionFactory() : TassisConnectionFactory.fromUrl(SERVER_URL);
         return DURABLE_FACTORY.equals(name) ? factory.withClientID("cts") : factory;
     }
 

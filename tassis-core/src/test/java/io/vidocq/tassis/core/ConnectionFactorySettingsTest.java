@@ -225,4 +225,42 @@ class ConnectionFactorySettingsTest {
                 () -> TassisConnectionFactory.named("orders", Map.of("tassis.factory.orders.brokr", "typo")));
         assertThrows(IllegalArgumentException.class, () -> TassisConnectionFactory.named("", Map.of()));
     }
+
+    // ---- a broker in another process (ROADMAP M11.3d) ------------------------
+
+    @Test
+    void urlMayNameABrokerOfTheNetwork() {
+        assertEquals("tassis:amqp://broker.example:5673?clientId=orders-reader",
+                TassisConnectionFactory.fromUrl("tassis:amqp://broker.example:5673?clientId=orders-reader").toUrl());
+        assertEquals("tassis:amqp://broker.example:5672",
+                TassisConnectionFactory.fromUrl("tassis:amqp://broker.example").toUrl(),
+                "5672 is the port of AMQP");
+        assertEquals("tassis:amqp://[::1]:5672", TassisConnectionFactory.fromUrl("tassis:amqp://[::1]").toUrl());
+    }
+
+    @Test
+    void theServerIsASettingOfItsOwn() {
+        assertEquals("tassis:amqp://broker.example:5672?clientId=a",
+                TassisConnectionFactory.from(Map.of("tassis.server", "amqp://broker.example", "tassis.clientId", "a"))
+                        .toUrl());
+        assertEquals("tassis:amqp://other.example:5672",
+                TassisConnectionFactory.from(Map.of("tassis.url", "tassis:amqp://broker.example",
+                        "tassis.server", "amqp://other.example")).toUrl(),
+                "a setting given by its own key overrides the URL");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tassis:amqp://", "tassis:amqp://:5672", "tassis:amqp://host:0", "tassis:amqp://host:70000",
+            "tassis:amqp://host:port", "tassis:amqp://host/path", "tassis:amqp://user@host", "tassis:http://host"})
+    void invalidServerIsRejected(String url) {
+        assertThrows(IllegalArgumentException.class, () -> TassisConnectionFactory.fromUrl(url), url);
+    }
+
+    @Test
+    void aBrokerOfTheNetworkNeedsTheTransportThatReachesIt() {
+        // tassis-core alone: the AMQP transport is the module io.vidocq.tassis.amqp
+        JMSException missing = assertThrows(JMSException.class,
+                () -> TassisConnectionFactory.fromUrl("tassis:amqp://localhost:1").createConnection());
+        assertTrue(missing.getMessage().contains("tassis-amqp"), missing.getMessage());
+    }
 }

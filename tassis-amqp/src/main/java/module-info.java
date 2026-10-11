@@ -18,8 +18,9 @@
  * SPDX-License-Identifier: EPL-2.0 OR EUPL-1.2 OR GPL-2.0-or-later
  */
 /**
- * AMQP 1.0 (OASIS Standard, 2012) for Tassis: the codec, and how a Jakarta Messaging message
- * travels as an AMQP one. Nothing is exported to applications; the server reads it all.
+ * AMQP 1.0 (OASIS Standard, 2012) for Tassis: the codec, how a Jakarta Messaging message
+ * travels as an AMQP one, and the transport by which a Tassis client reaches a broker of the
+ * network. Nothing is exported to applications; the server reads the codec.
  */
 module io.vidocq.tassis.amqp {
     requires io.vidocq.tassis.core;
@@ -30,4 +31,8 @@ module io.vidocq.tassis.amqp {
     exports io.vidocq.tassis.amqp.internal.transactions to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.transport to io.vidocq.tassis.server;
     exports io.vidocq.tassis.amqp.internal.types to io.vidocq.tassis.server;
+
+    // How a connection factory of tassis-core reaches a broker of the network: tassis:amqp://host
+    provides io.vidocq.tassis.core.internal.broker.Transport
+            with io.vidocq.tassis.amqp.internal.client.AmqpTransport;
 }

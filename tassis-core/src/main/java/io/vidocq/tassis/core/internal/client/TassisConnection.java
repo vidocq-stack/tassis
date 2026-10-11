@@ -68,10 +68,22 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
         this.link = link;
         this.domain = domain;
         this.maxListenerDeliveries = maxListenerDeliveries;
+        link.onLost(this::lost);
         if (configuredClientId != null) {
             link.claimClientId(configuredClientId);
             clientId = configuredClientId;
             used = true;
+        }
+    }
+
+    /**
+     * The connection to the broker is lost: the application is told, if it asked to be (§6.1.7).
+     * Called by the transport, on a thread of its own.
+     */
+    private void lost(JMSException problem) {
+        ExceptionListener listener = exceptionListener;
+        if (listener != null && !closed) {
+            listener.onException(problem);
         }
     }
 

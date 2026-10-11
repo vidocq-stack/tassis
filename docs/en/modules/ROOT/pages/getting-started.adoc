@@ -130,6 +130,21 @@ ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:vm:orders?cl
 
 Tassis reads nothing by itself: the application decides where the settings come from, and hands over a `Map` or `Properties`. The keys are listed in the xref:reference.adoc#configuration[reference].
 
+== Step 7: reach a broker in another process
+
+A broker lives in the JVM that uses it. To share it, the process that hosts it starts a `TassisServer`, and the others give their connection factory the address of that server:
+
+[source,java]
+----
+// Port 0: any free port. A real server listens on a known one, 5672 by default.
+try (TassisServer server = TassisServer.forBroker("orders").port(0).start()) {
+    ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + server.port());
+    // ... the code of step 4, unchanged
+}
+----
+
+The host needs the artifact `tassis-server` and `requires io.vidocq.tassis.server;`. A process that only connects needs `tassis-amqp` and `requires io.vidocq.tassis.amqp;`. Nothing is encrypted yet: see xref:usage.adoc#network[Opening a broker to the network].
+
 == Next steps
 
 * xref:usage.adoc[Usage]: topics and subscriptions, acknowledgement and transactions, selectors, listeners.

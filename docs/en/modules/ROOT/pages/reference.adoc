@@ -22,7 +22,7 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `TassisServer`, which opens a broker to the network with AMQP 1.0. Declared in addition to `tassis-core` by the application that hosts a broker for others. It brings `tassis-amqp`. See xref:usage.adoc#network[Usage].
 
 | `io.vidocq.tassis:tassis-amqp:{project-version}`
-| AMQP 1.0, written for Tassis. A dependency of `tassis-server`; an application names nothing in it.
+| AMQP 1.0, written for Tassis, and the transport by which a `TassisConnectionFactory` reaches a broker of the network (`tassis:amqp://host`). A dependency of `tassis-server`; declared in addition to `tassis-core` by an application that only connects to a broker elsewhere. An application names no class of it.
 
 | `io.vidocq.tassis:tassis-cdi-vauban:{project-version}`
 | The injection of `JMSContext` with CDI, for an application on Vauban. Declared in addition to `tassis-core` by the applications that inject. See xref:usage.adoc#injection[Usage].
@@ -38,19 +38,19 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `requires transitive jakarta.messaging`. No package of its own.
 
 | `io.vidocq.tassis.core`
-| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported to applications, and no package is opened. Two internal packages are exported to the modules of the network transport only.
+| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported to applications, and no package is opened. Internal packages are exported to the two modules of the network transport only, and it `uses` the transport service one of them provides.
 
 | `io.vidocq.tassis.server`
 | `requires io.vidocq.tassis.core` and `io.vidocq.tassis.amqp`, `exports io.vidocq.tassis.server`. No package is opened.
 
 | `io.vidocq.tassis.amqp`
-| `requires io.vidocq.tassis.core`. Its packages are exported to `io.vidocq.tassis.server` only.
+| `requires io.vidocq.tassis.core`, and provides the transport `amqp` to it. Its packages are exported to `io.vidocq.tassis.server` only.
 
 | `io.vidocq.tassis.cdi.vauban`
 | `requires transitive io.vidocq.tassis.core`, `requires static` the CDI, injection and annotation APIs and `io.vidocq.vauban.api`, `exports io.vidocq.tassis.cdi`, and provides a `VaubanComponentProvider`. No package is opened.
 |===
 
-An application module declares `requires io.vidocq.tassis.core;`, `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`, and `requires io.vidocq.tassis.server;` when it opens a broker to the network.
+An application module declares `requires io.vidocq.tassis.core;`, `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`, and `requires io.vidocq.tassis.server;` when it opens a broker to the network. One that only connects to a broker of the network declares `requires io.vidocq.tassis.amqp;`: nothing else would bring the module that provides the transport into the module graph.
 
 == Administered objects
 
@@ -266,6 +266,11 @@ A connection factory is configured in code, by settings, or by a connection URL.
 | `default`
 | The name of the in-VM broker.
 
+| `tassis.server`
+| `tassis:amqp://<host>[:<port>]`
+| none
+| A broker of the network, opened by a `TassisServer`: `amqp://<host>[:<port>]`, port 5672 when left out, an IPv6 address in brackets. When set, the factory connects there instead of to the in-VM broker. Needs `tassis-amqp`.
+
 | `tassis.clientId`
 | `clientId`
 | none
@@ -287,9 +292,9 @@ A connection factory is configured in code, by settings, or by a connection URL.
 
 === Connection URL
 
-`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]`
+`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]` or `tassis:amqp://<host>[:<port>][?clientId=...&listener.maxDeliveries=...]`
 
-* `vm` is the transport: the broker of this JVM. It is the only one today; another transport is rejected.
+* What follows `tassis:` is the transport: `vm`, the broker of this JVM, or `amqp`, a broker of the network. Another transport is rejected.
 * Values are percent-encoded.
 * An unknown parameter, a parameter given twice or a value that is not valid throws `IllegalArgumentException`.
 
@@ -364,7 +369,8 @@ A secured broker checks who connects, and gives every user the same rights: ther
 A broker lives in the JVM that created it, and `TassisServer` opens it to AMQP 1.0 clients: see xref:usage.adoc#network[Opening a broker to the network]. A network client has the whole of Jakarta Messaging, short of XA. Two things are missing:
 
 * **No encryption.** Messages and passwords travel in clear, and the server listens on the loopback address by default. Milestone M11.3d.
-* **No Tassis client over the network.** `TassisConnectionFactory` reaches the broker of its own JVM only; a network client is a third-party AMQP client. Milestone M11.3d.
+* **No reconnection.** A Tassis client whose connection is lost is told through its `ExceptionListener` and creates another connection itself.
+* **The Tassis client has been run against a Tassis server only.** Another AMQP 1.0 broker may follow other conventions. Milestone M11.3e.
 
 Distributed transactions will not go through the network: AMQP 1.0 leaves them unspecified. Local transactions do.
 

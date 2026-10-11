@@ -222,7 +222,15 @@ public interface BrokerConnection {
      * Returns copies of the messages a consumer with that selector could take from the queue
      * right now, in delivery order.
      */
-    List<TassisMessage> browse(String queue, Selector selector);
+    List<TassisMessage> browse(String queue, Selector selector) throws JMSException;
+
+    /**
+     * Says who to tell if the connection is lost: the broker went away, or stopped answering.
+     * Every request then fails, and the waits for a message end. The listener is called once,
+     * from a thread of the transport that holds no lock. A broker of this JVM is never lost.
+     */
+    default void onLost(java.util.function.Consumer<JMSException> listener) {
+    }
 
     /**
      * Ends the connection. Its consumers are closed, its unsettled deliveries given back as

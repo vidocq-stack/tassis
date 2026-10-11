@@ -28,6 +28,11 @@
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-core</artifactId>
         </dependency>
+        <!-- For the example that crosses the network: the server, which brings the AMQP transport. -->
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-server</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

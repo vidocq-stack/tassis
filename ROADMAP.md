@@ -748,10 +748,12 @@ modules:
       client. See below.
 - [x] **M11.3c — The rest of the mapping, server side**: topics, subscriptions, selectors,
       `noLocal`, temporary destinations, transactions, browsing, delivery delay. See below.
-- [ ] **M11.3d — The Tassis client over AMQP**: the client transport behind
-      `BrokerConnection`, selected by the connection URL beside `tassis:vm:`; optional TLS;
-      heartbeats; the `ExceptionListener` (§6.1.7), stored and never called so far, for a lost
-      connection. **Proof: the whole TCK replayed through the network**, besides the in-VM run.
+- [x] **M11.3d-1 — The Tassis client over AMQP**: the client transport behind
+      `BrokerConnection`, selected by the connection URL beside `tassis:vm:`; heartbeats; the
+      `ExceptionListener` (§6.1.7), stored and never called so far, for a lost connection.
+      **Proof: the whole TCK replayed through the network**, besides the in-VM run. See below.
+- [ ] **M11.3d-2 — TLS**: `amqps`, for the server and for the client. Until then nothing is
+      encrypted, and the server listens on the loopback address unless told otherwise.
 - [ ] **M11.3e — The Tassis client against a third-party broker**: what differs from one
       broker to another in the conventions above, found by running against a real one.
 
@@ -896,6 +898,56 @@ What it changed in the seam, and what it taught:
   hold undischarged, and the octets one may hold.
 - Still not there: a `Settings`-like description of a server and configurable limits (with
   M11.3d), a dead-letter queue, and anything of XA.
+
+#### M11.3d-1 — The Tassis client over AMQP ✅
+
+`TassisConnectionFactory.fromUrl("tassis:amqp://host:5672")` reaches a broker in another
+process. M11.3d was cut in two on 2026-10-11: this is the transport, TLS is M11.3d-2.
+
+- [x] **A transport is a service.** `tassis-core` declares `uses Transport` and `tassis-amqp`
+      `provides` it: the provider does not depend on its transport, and a URL that names one
+      which is not there fails by saying which artifact is missing. An application on the
+      module path that only connects must name the module (`requires io.vidocq.tassis.amqp`):
+      a module that only provides a service is not resolved by itself.
+- [x] **Settings**: `tassis.server`, and the URL `tassis:amqp://<host>[:<port>]`.
+- [x] **`AmqpBrokerConnection`**: the seam of M11.2 over one AMQP connection and one session.
+      Sends by an anonymous relay, one receiving link per consumer, transactions by the
+      coordinator, temporary destinations, browsers, durable subscription lookup.
+- [x] **Heartbeats**, and a broker silent for twice the time-out is given up.
+- [x] **A lost connection**: `BrokerConnection.onLost`, the one addition to the seam; the
+      `ExceptionListener` is called, the waits end, every later request fails. No reconnection.
+- [x] **Proof**: `NetworkClientTest` (26 scenarios through a socket), an example run by the
+      build (`NetworkHello`), and **the official TCK through the network: 903 passed out of
+      903**, with nothing excluded (`./run-official-tck-messaging-3.1.sh network`).
+
+What it decided, and what it taught:
+
+- **The open is not put off.** The plan was to open the AMQP connection at the first use, so
+  that `setClientID` could still name it. But a server gives a client ten seconds to open, and
+  an application may create a connection long before it uses it. The connection is opened at
+  once, and `setClientID` closes it and opens another: it must be the first thing done with a
+  connection (§6.1.2), so nothing is lost. The identifier of a factory costs nothing.
+- **One credit at a time.** A consumer asks the broker for a message when the application
+  asks it for one, and takes its credit back (`drain`) when it stops waiting. A message nobody
+  asked for stays where another consumer can take it, as with the broker of the JVM: that is
+  what let the TCK pass unchanged. Fetching ahead is an optimisation for M12, with its price.
+- **A closed consumer may have to stay.** A broker gives back the unsettled deliveries of a
+  link that goes, and a session may still acknowledge or commit what a consumer it closed had
+  delivered (§8.8). The link is kept, without credit, until then. Apache Qpid JMS does the same.
+- **Two questions AMQP does not answer.** "Has the broker done what I told it?" is asked with
+  a session flow that wants an echo, answered in the order of reading. "Is the drain over?" is
+  answered by the transfer that uses the credit or by a flow that accounts for all of it.
+- **No `global` for our own client.** A connection without a client identifier does not ask
+  to be the only one with its container identifier, so the server claims nothing for it and
+  its subscription names are the broker's. The flag of M11.3c is for clients that always ask.
+- **`browse` may now fail**, like any request: its signature in the seam says so.
+- **The concurrency review** found no fault in the credit and drain exchanges, and several
+  around them, fixed here: two commits attaching the coordinator link at once, a
+  `setClientID` refused late that left the connection marked lost, waits that a link ended by
+  the broker would never end. The last cannot happen with a Tassis server: it is for M11.3e.
+- Still not there: TLS (M11.3d-2), reconnection, fetching ahead, and any broker but ours
+  (M11.3e). A message over the 16 MiB a server accepts ends the connection instead of failing
+  the send.
 
 ### M11b — Connection pool
 

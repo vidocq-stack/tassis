@@ -44,6 +44,11 @@
         <jakarta.tck.sigtest.version>2.7</jakarta.tck.sigtest.version>
         <!-- How long a TCK test waits for a message, in milliseconds (the TCK's own default is 10000). -->
         <tck.jms.timeout>3000</tck.jms.timeout>
+        <!--
+            How the TCK reaches the broker: vm, the broker of the test JVM, or amqp, the same
+            broker through a TassisServer and a socket (run-official-tck-messaging-3.1.sh network).
+        -->
+        <tassis.tck.transport>vm</tassis.tck.transport>
 
         <!--
             What the TCK run executes: the packages Tassis is expected to pass. A test of one
@@ -98,6 +103,17 @@
         <dependency>
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- For the run through the network: the client transport, and the server it talks to. -->
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-amqp</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-server</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -195,6 +211,7 @@
                         <jms_timeout>${tck.jms.timeout}</jms_timeout>
                         <user>j2ee</user>
                         <password>j2ee</password>
+                        <tassis.tck.transport>${tassis.tck.transport}</tassis.tck.transport>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

@@ -202,6 +202,7 @@ ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?cl
 |---|---|---|---|
 | `tassis.url` | | | A connection URL holding the settings below; a setting given by its own key overrides it |
 | `tassis.broker` | `tassis:vm:<broker>` | `default` | The name of the in-VM broker |
+| `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default), instead of the in-VM one; needs `tassis-amqp` |
 | `tassis.clientId` | `clientId` | none | The client identifier of the connections |
 | `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
 
@@ -238,7 +239,14 @@ try (TassisServer server = TassisServer.forBroker("orders").port(5672).start()) 
 }
 ```
 
-A client needs nothing of Tassis. With Apache Qpid JMS, for instance:
+A Tassis client in another process reaches it by changing its URL, with `tassis-amqp` among its
+dependencies:
+
+```java
+ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://broker-host:5672");
+```
+
+A client needs nothing of Tassis, though. With Apache Qpid JMS, for instance:
 
 ```java
 ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
@@ -311,7 +319,8 @@ Inside `tassis-core`, only `io.vidocq.tassis.core` is exported (`TassisConnectio
 | Persistence across a restart | Not planned: the broker is in memory by design |
 | Authentication (user registry per broker, `TassisBroker`) | ✅ |
 | A broker open to AMQP 1.0 clients: queues, topics and subscriptions, selectors, temporary destinations, local transactions, browsers | ✅ |
-| Over AMQP: TLS, and the Tassis client itself | M11.3d |
+| The Tassis client over AMQP (`tassis:amqp://host`), with heartbeats and the `ExceptionListener` for a lost connection | ✅ |
+| Over AMQP: TLS | M11.3d |
 | `JMSContext` injection with CDI, request scope (on Vauban) | ✅ |
 | `JMSContext` injection in a JTA transaction | M13 |
 | XA and JTA | M13 |

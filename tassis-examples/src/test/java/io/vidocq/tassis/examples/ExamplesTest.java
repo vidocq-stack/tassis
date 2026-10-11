@@ -22,6 +22,7 @@ package io.vidocq.tassis.examples;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.vidocq.tassis.core.TassisConnectionFactory;
+import io.vidocq.tassis.server.TassisServer;
 import jakarta.jms.JMSException;
 import java.util.Map;
 import java.util.UUID;
@@ -40,6 +41,13 @@ class ExamplesTest {
     @Test
     void classicExampleReceivesWhatItSent() throws JMSException {
         assertEquals("hello", ClassicHello.sendAndReceive(new TassisConnectionFactory(broker)));
+    }
+
+    @Test
+    void networkExampleReceivesWhatItSentThroughAServer() {
+        try (TassisServer server = TassisServer.forBroker(broker).port(0).start()) {
+            assertEquals("hello", NetworkHello.sendAndReceive(server.port()));
+        }
     }
 
     @Test

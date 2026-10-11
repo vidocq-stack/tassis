@@ -455,7 +455,7 @@ With CDI, `@JMSPasswordCredential` gives the credentials of an injected context.
 [#network]
 == Opening a broker to the network
 
-A broker lives in a JVM. `TassisServer`, in the module `tassis-server`, opens it to other processes: it listens on a port and speaks AMQP 1.0, a standard protocol, so the clients need nothing of Tassis.
+A broker lives in a JVM. `TassisServer`, in the module `tassis-server`, opens it to other processes: it listens on a port and speaks AMQP 1.0, a standard protocol. A Tassis client reaches it by its URL, and so does any other AMQP 1.0 client, which needs nothing of Tassis.
 
 [source,java]
 ----
@@ -466,7 +466,33 @@ try (TassisServer server = TassisServer.forBroker("orders").port(5672).start()) 
 
 The broker is the one `new TassisConnectionFactory("orders")` reaches in the same JVM: an application that starts a server keeps using its broker directly, and the clients of the network share its queues.
 
-A client is any AMQP 1.0 client. With Apache Qpid JMS, a Jakarta Messaging client, an application on another machine writes ordinary Jakarta Messaging code:
+=== A Tassis client in another process
+
+The application on the other side keeps its code and changes the URL of its connection factory:
+
+[source,java]
+----
+ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://broker-host:5672");
+try (JMSContext context = factory.createContext()) {
+    context.createProducer().send(context.createQueue("orders"), "hello");
+}
+----
+
+It needs one more artifact, `io.vidocq.tassis:tassis-amqp`, which holds the transport. `tassis-core` finds it as a service: on the module path, a module that only provides a service is not resolved by itself, so the application names it, with `requires io.vidocq.tassis.amqp;` in its `module-info.java` or `--add-modules io.vidocq.tassis.amqp` on the command line. An application that also `requires io.vidocq.tassis.server` has it already.
+
+The same address can be given as a setting, `tassis.server=amqp://broker-host:5672`; the port is 5672 when left out. The user name and the password of `createConnection(userName, password)` are those the broker checks.
+
+What differs from the broker of the JVM:
+
+* **A connection can be lost.** When the broker goes away, or says nothing for two minutes, the `ExceptionListener` of the connection is called, once, with a `JMSException`; every call on the connection then fails, and a `receive` in progress ends with a `JMSException`. Tassis does not reconnect: the application creates another connection. What the lost connection had not acknowledged is delivered again, by the broker, to whoever consumes next.
+* **`setClientID` reconnects.** AMQP says who a connection is when it opens. A client identifier set in the settings of the factory is there from the start; one set with `setClientID` closes the connection made without it and opens another. Prefer the factory, as the specification does.
+* **A consumer asks for one message at a time.** A message stays with the broker until an application asks for it, so that another consumer can take it: nothing is fetched ahead. Each message costs a round trip.
+* **A consumer closed with unacknowledged messages keeps its place** until its session acknowledges them, commits or gives them back: the broker would otherwise deliver them again at once. A durable subscription is therefore still in use, for another connection, until then.
+* **A message larger than 16 MiB ends the connection**: it is the limit of the server.
+
+=== Any other AMQP 1.0 client
+
+With Apache Qpid JMS, a Jakarta Messaging client, an application on another machine writes ordinary Jakarta Messaging code, with nothing of Tassis:
 
 [source,java]
 ----
@@ -489,14 +515,13 @@ try (JMSContext context = factory.createContext()) {
 
 What to know:
 
-* **Nothing is encrypted yet.** Messages and passwords travel in clear. That is why the server listens on the loopback address unless told otherwise: open it to a network you trust, or put it behind a tunnel. Encryption with TLS is milestone M11.3d.
+* **Nothing is encrypted yet.** Messages and passwords travel in clear. That is why the server listens on the loopback address unless told otherwise: open it to a network you trust, or put it behind a tunnel. Encryption with TLS is the second half of milestone M11.3d.
 * **The users are those of the broker.** A secured broker (see <<authentication>>) asks a client of the network for the name and the password of a declared user, and offers anonymous access only if it allows it. A refused client gets a `JMSSecurityException` from its own provider.
 * **A client of the network has the whole of Jakarta Messaging.** Queues and topics, the four kinds of subscription and `unsubscribe`, message selectors, temporary destinations, local transactions, queue browsers, delivery delay: what the application of the JVM has, a client such as Qpid JMS has too. What AMQP 1.0 does not carry is distributed transactions: there is no XA over the network.
 * **A client that vanishes loses nothing.** What it had received and not acknowledged goes back to its queue and is delivered again, marked as a redelivery. A transaction it had not committed is rolled back, its temporary destinations are deleted and its non-durable subscriptions end; its durable subscriptions stay.
 * **A client identifier is the container identifier of AMQP.** A client that sets one (`Connection.setClientID`, or `jms.clientID` with Qpid JMS) gets its durable and shared subscriptions scoped by it, as in the JVM; one that sets none shares them with every other such client.
 * **A client that prefetches may see a message more than once.** A client such as Qpid JMS asks for many messages ahead of the application. A message it gives back while it closes can be sent to it again before it is gone, so `JMSXDeliveryCount` may grow by more than one.
 * **Closing the server ends the connections, not the broker.** The messages stay, for the clients of the JVM and for a server started later.
-* **The Tassis client itself does not use the network yet**: `TassisConnectionFactory` reaches the broker of its own JVM. A Tassis client over AMQP is milestone M11.3d.
 
 [#injection]
 == Injecting `JMSContext` with CDI

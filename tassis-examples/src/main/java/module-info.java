@@ -19,8 +19,10 @@
  */
 /**
  * Runnable examples of Jakarta Messaging with Tassis. One {@code requires} is enough:
- * {@code io.vidocq.tassis.core} gives access to the Jakarta Messaging API as well.
+ * {@code io.vidocq.tassis.core} gives access to the Jakarta Messaging API as well. The second
+ * one is for the example that opens a broker to the network.
  */
 module io.vidocq.tassis.examples {
     requires io.vidocq.tassis.core;
+    requires io.vidocq.tassis.server;
 }

@@ -19,6 +19,8 @@
  */
 package io.vidocq.tassis.server.internal;
 
+import static io.vidocq.tassis.amqp.internal.jms.Conventions.*;
+
 import io.vidocq.tassis.amqp.internal.jms.JmsMessageCodec;
 import io.vidocq.tassis.amqp.internal.messaging.Accepted;
 import io.vidocq.tassis.amqp.internal.messaging.AmqpMessage;
@@ -51,6 +53,7 @@ import io.vidocq.tassis.amqp.internal.transport.Open;
 import io.vidocq.tassis.amqp.internal.transport.Performative;
 import io.vidocq.tassis.amqp.internal.transport.ProtocolHeader;
 import io.vidocq.tassis.amqp.internal.transport.Transfer;
+import io.vidocq.tassis.amqp.internal.transport.Transfers;
 import io.vidocq.tassis.amqp.internal.types.AmqpDecodeException;
 import io.vidocq.tassis.amqp.internal.types.AmqpEncoder;
 import io.vidocq.tassis.amqp.internal.types.Binary;
@@ -104,28 +107,6 @@ import java.util.function.Consumer;
 public final class AmqpConnection {
 
     private static final System.Logger LOG = System.getLogger(AmqpConnection.class.getName());
-
-    private static final Symbol PLAIN = Symbol.of("PLAIN");
-    private static final Symbol ANONYMOUS = Symbol.of("ANONYMOUS");
-    private static final Symbol ANONYMOUS_RELAY = Symbol.of("ANONYMOUS-RELAY");
-    private static final Symbol SOLE_CONNECTION = Symbol.of("sole-connection-for-container");
-    private static final Symbol CAPABILITY_TOPIC = Symbol.of("topic");
-    private static final Symbol CAPABILITY_TEMPORARY_QUEUE = Symbol.of("temporary-queue");
-    private static final Symbol CAPABILITY_TEMPORARY_TOPIC = Symbol.of("temporary-topic");
-    private static final Symbol DISTRIBUTION_COPY = Symbol.of("copy");
-    private static final Symbol CAPABILITY_SHARED = Symbol.of("shared");
-    private static final Symbol CAPABILITY_GLOBAL = Symbol.of("global");
-    private static final Symbol SHARED_SUBS = Symbol.of("SHARED-SUBS");
-    private static final Symbol DELAYED_DELIVERY = Symbol.of("DELAYED_DELIVERY");
-    private static final Symbol LOCAL_TRANSACTIONS = Symbol.of("amqp:local-transactions");
-    private static final Symbol FILTER_SELECTOR = Symbol.of("jms-selector");
-    private static final Symbol FILTER_NO_LOCAL = Symbol.of("no-local");
-    private static final Symbol EXPIRY_NEVER = Symbol.of("never");
-    /** What separates the name of a shared subscription from what tells its links apart, in a link name. */
-    private static final char SUBSCRIPTION_NAME_END = '|';
-    /** How the broker names the temporary destinations it creates. */
-    private static final String TEMPORARY_QUEUE_NAME = "temporary-queue:";
-    private static final String TEMPORARY_TOPIC_NAME = "temporary-topic:";
 
     /** The codes of a sasl-outcome (part 5, §5.3.3.6): authenticated, or refused for its credentials. */
     private static final int SASL_OK = 0;
@@ -399,7 +380,7 @@ public final class AmqpConnection {
             } catch (InvalidClientIDException taken) {
                 // What a JMS client reads as "this client identifier is in use".
                 properties = new LinkedHashMap<>();
-                properties.put(Symbol.of("amqp:connection-establishment-failed"), true);
+                properties.put(CONNECTION_ESTABLISHMENT_FAILED, true);
                 refused = new AmqpFailure(AmqpFailure.INVALID_FIELD, taken.getMessage());
             } catch (JMSException e) {
                 throw new AmqpFailure(AmqpFailure.INTERNAL_ERROR, e.getMessage());
@@ -819,7 +800,7 @@ public final class AmqpConnection {
         // Said by a capability, or by the name of the link as Qpid JMS writes it. Anything else
         // after the name of the subscription tells links apart, and says nothing of its scope.
         boolean global = has(attach.desiredCapabilities(), CAPABILITY_GLOBAL)
-                || attach.name().startsWith(name + SUBSCRIPTION_NAME_END + "global");
+                || attach.name().startsWith(name + SUBSCRIPTION_NAME_END + GLOBAL_SUFFIX);
         String topic = link.durableSubscriptionTopic(name, global);
         if (topic == null) {
             refuse(session, attach, AmqpFailure.NOT_FOUND, "there is no durable subscription named " + name);
@@ -839,7 +820,13 @@ public final class AmqpConnection {
 
     /** A queue browser: the messages of the queue as they are now, to be sent as credit comes. */
     private void browse(AmqpSession session, Attach attach, Source source, String queue, Selector selector) {
-        BrowserLink browser = new BrowserLink(attach.handle(), link.browse(queue, selector));
+        BrowserLink browser;
+        try {
+            browser = new BrowserLink(attach.handle(), link.browse(queue, selector));
+        } catch (JMSException e) {
+            refuse(session, attach, AmqpFailure.INTERNAL_ERROR, e.getMessage());
+            return;
+        }
         lock.lock();
         try {
             session.browsers.put(browser.handle, browser);
@@ -1112,24 +1099,7 @@ public final class AmqpConnection {
 
     /** The transfer frames of one message, none larger than the client accepts (§2.7.5). */
     private List<byte[]> split(int channel, Transfer first, byte[] message) {
-        long max = peerMaxFrameSize;
-        List<byte[]> frames = new ArrayList<>();
-        Transfer whole = first;
-        Transfer more = new Transfer(first.handle(), first.deliveryId(), first.deliveryTag(), first.messageFormat(),
-                first.settled(), true, null, null, null, null, null);
-        // The frame header and the performative, the longer of the two it may take.
-        int overhead = 8 + AmqpEncoder.encode(more).length;
-        int room = (int) Math.min(Integer.MAX_VALUE, max) - overhead;
-        if (message.length <= room) {
-            frames.add(FrameCodec.encode(Frame.amqp(channel, whole, new Binary(message)), max));
-            return frames;
-        }
-        for (int from = 0; from < message.length; from += room) {
-            int to = Math.min(message.length, from + room);
-            byte[] part = java.util.Arrays.copyOfRange(message, from, to);
-            frames.add(FrameCodec.encode(Frame.amqp(channel, to < message.length ? more : whole, new Binary(part)), max));
-        }
-        return frames;
+        return Transfers.split(channel, first, message, peerMaxFrameSize);
     }
 
     private void disposition(AmqpSession session, Disposition disposition) {

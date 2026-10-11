@@ -8,6 +8,7 @@
 #   ./run-official-tck-messaging-3.1.sh                      # the tests Tassis is expected to pass (tck.test in tassis-tck/pom.xml)
 #   ./run-official-tck-messaging-3.1.sh -Dtck.test='...'     # another selection, e.g. '**/core/selectorQueue/*IT'
 #   ./run-official-tck-messaging-3.1.sh signature            # the signature test of the jakarta.jms API
+#   ./run-official-tck-messaging-3.1.sh network [-Dtck.test='...']   # the same tests through the network: client, socket, TassisServer
 #
 # Behaviour:
 #   1. Installs tassis-api and tassis-core locally (./mvnw install -DskipTests)
@@ -43,8 +44,14 @@ if [ "${1:-}" = "signature" ]; then
         -Dtck.signature.file="${DISTRIBUTION_DIR}/jakarta.jms.sig"
 fi
 
+if [ "${1:-}" = "network" ]; then
+    shift
+    set -- -Dtassis.tck.transport=amqp "$@"
+    echo "==> The broker is reached through the network (tassis:amqp://localhost, a TassisServer in the test JVM)"
+fi
+
 echo "==> Step 1/2: local install of the Tassis artifacts (./mvnw install -DskipTests)"
-( cd "${ROOT_DIR}" && ./mvnw -ntp -pl tassis-api,tassis-core -am install -DskipTests )
+( cd "${ROOT_DIR}" && ./mvnw -ntp -pl tassis-api,tassis-core,tassis-amqp,tassis-server -am install -DskipTests )
 
 echo "==> Step 2/2: Maven run on the in-reactor tassis-tck (profile=tck)"
 mkdir -p "${TCK_DIR}/target"

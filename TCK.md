@@ -8,6 +8,7 @@
 | TCK | `jakarta.tck:jms-tck:11.0.3`, with `jakarta.tck:common:11.0.8` (see Deviations) |
 | JDK | Temurin 25 |
 | Functional tests | **903 passed, 0 failed** out of 903: all of `core` (642) and of `core20` (261) |
+| The same through the network | **903 passed, 0 failed**: Tassis client, socket, `TassisServer` (see below) |
 | Signature test | **passed**: `jakarta.jms` of `jakarta.jms-api:3.1.0` against `jakarta.jms.sig` |
 | Not passed | None |
 | Not applicable | `ee` and `ee20`, 255 annotations: they need EJB, MDB or a web container |
@@ -67,6 +68,18 @@ client: `tassis-tck` sets it to `standalone`.
 The porting class hands out `TassisConnectionFactory().withClientID("cts")` for
 `DURABLE_SUB_CONNECTION_FACTORY`, which is what the TCK uses for every topic test: the suite
 never calls `Connection.setClientID` itself in `core`.
+
+## Through the network — M11.3d-1
+
+`./run-official-tck-messaging-3.1.sh network` runs the same selection with the system property
+`tassis.tck.transport=amqp`: `TassisJmsObjects` then starts a `TassisServer` on a free port in
+front of the default broker, and its factories use `tassis:amqp://localhost:<port>`. Every
+connection of every test goes through the AMQP client of `tassis-amqp`, a socket and the
+server.
+
+**903 passed / 0 failed**, nothing excluded and nothing adapted, in about 14 minutes
+(2026-10-11). The direct run stays the reference. Replay this one when the client transport,
+the server or `BrokerConnection` changes.
 
 ## Signature test
 

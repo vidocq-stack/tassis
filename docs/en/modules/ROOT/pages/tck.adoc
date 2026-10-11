@@ -13,8 +13,9 @@ The source of this page is `TCK.md` at the root of the repository, which is upda
 | Specification | Jakarta Messaging 3.1
 | TCK | `jakarta.tck:jms-tck:11.0.3`, with `jakarta.tck:common:11.0.8` (see <<deviations>>)
 | JDK | Temurin 25
-| Last run | 2026-10-10
+| Last run | 2026-10-11
 | Functional tests | **903 passed, 0 failed** out of 903: all of `core` (642 tests) and of `core20` (261 tests)
+| The same through the network | **903 passed, 0 failed**: the Tassis client, a socket and a `TassisServer` in front of the same broker (see <<network>>)
 | Signature test | **Passed**: the package `jakarta.jms` of `jakarta.jms-api:3.1.0` against the TCK's `jakarta.jms.sig`
 | Not passed | None
 | Not applicable | The `ee` and `ee20` parts of the TCK, 255 test annotations: they need EJB, message-driven beans or a web container
@@ -42,9 +43,12 @@ From the root of the repository:
 
 # the signature test (downloads the JavaTest distribution of the TCK, 14 MB)
 ./run-official-tck-messaging-3.1.sh signature
+
+# the same tests through the network
+./run-official-tck-messaging-3.1.sh network
 ----
 
-The script installs `tassis-api` and `tassis-core` locally, runs `./mvnw -Ptck -pl tassis-tck test`, and writes the counts and the verdict to `tassis-tck/target/tck-report.txt`.
+The script installs `tassis-api`, `tassis-core`, `tassis-amqp` and `tassis-server` locally, runs `./mvnw -Ptck -pl tassis-tck test`, and writes the counts and the verdict to `tassis-tck/target/tck-report.txt`.
 
 The runner is the module `tassis-tck`. It joins the reactor only under the `tck` Maven profile, so a plain `./mvnw install` neither builds it nor downloads the TCK. It runs on the class path, in test scope only.
 
@@ -96,6 +100,15 @@ The older bricks of the Vidocq workspace keep their TCK runner out of their reac
 == Challenges
 
 None filed.
+
+[#network]
+== Through the network
+
+The TCK knows nothing of a transport: it asks the porting class for connection factories. With `network`, `TassisJmsObjects` starts a `TassisServer` on a free port in front of the default broker and returns factories whose URL is `tassis:amqp://localhost:<port>`. Every connection of every test then goes through the AMQP client of `tassis-amqp`, a socket, and the server of `tassis-server`, to the broker the direct run uses.
+
+Same selection, same settings, same result: 903 passed, 0 failed, in about 14 minutes. Nothing is excluded and nothing is adapted for that run. It is the proof asked of the client transport (milestone M11.3d), and it tests the server as much as the client.
+
+The direct run stays the reference: it is the one that says what the provider does. The run through the network is to be replayed when the client transport, the server or the interface between client and broker changes.
 
 == History
 

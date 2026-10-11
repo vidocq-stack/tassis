@@ -35,6 +35,9 @@ sdk env
 # Another TCK selection
 ./run-official-tck-messaging-3.1.sh -Dtck.test='**/core/selectorQueue/*IT'
 
+# The same TCK through the network: Tassis client, socket, TassisServer
+./run-official-tck-messaging-3.1.sh network
+
 # Interoperability tests (Proton-J, embedded Artemis, Qpid JMS against TassisServer)
 ./mvnw -ntp -Pinterop -pl tassis-interop -am verify
 ```
@@ -53,7 +56,8 @@ tassis-api         ← Aggregator: re-exposes jakarta.jms-api (already modular, 
 tassis-core        ← The provider: administered objects (TassisConnectionFactory, TassisQueue,
                      TassisTopic), broker administration (TassisBroker),
                      internal.message, internal.broker, internal.client, internal.selector
-tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec, and JMS messages as AMQP ones
+tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec, JMS messages as AMQP ones, and
+                     the client transport (tassis:amqp://host)
 tassis-server      ← TassisServer: the listener that opens a broker to AMQP 1.0 clients
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
@@ -75,7 +79,7 @@ a milestone.
    part of the default build.
 2. **`io.vidocq.tassis.core` is the only package exported to applications**, and holds only
    what an application must name (the administered objects, and `TassisBroker`). Everything
-   else lives under `io.vidocq.tassis.core.internal.*`; two of those packages are exported
+   else lives under `io.vidocq.tassis.core.internal.*`; some of those packages are exported
    to `tassis-amqp` and `tassis-server` by name, and to nobody else. Likewise `tassis-server`
    exports one package with one class, `TassisServer`.
 3. **Unimplemented API methods throw `UnsupportedOperationException` with a ROADMAP
@@ -114,9 +118,11 @@ The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the p
 `Broker.named(String)`.
 
 **The seam.** `internal.client` never names `Broker`: it knows the broker through the interface
-`BrokerConnection`, obtained from `Broker.connect(user, password)` and implemented for the
-broker of the JVM by `LocalConnection`. The network transport (M11.3) will be another
-implementation, so the contract is written for a broker that is far away:
+`BrokerConnection`, obtained from `Transports.connect(settings, user, password)`: implemented
+for the broker of the JVM by `LocalConnection`, and for a broker of the network by
+`AmqpBrokerConnection` in `tassis-amqp`, which `tassis-core` finds as a service (`Transport`)
+and never names. The contract is written for a broker that is far away, and **a change to it
+is a change to both implementations and to the server**:
 
 - **The broker reads nothing from the client**, and no client code runs under the broker lock.
   What delivery depends on is broker state, set by a request: `start()` / `stop()`, and
@@ -205,7 +211,7 @@ The codec of the network transport (ROADMAP M11.3): `internal.types` (values, `A
 `AmqpDecoder`), `internal.transport` (frames, performatives), `internal.messaging`,
 `internal.transactions`, `internal.security`; and `internal.jms`, the one package that knows
 JMS: `JmsMessageCodec`, a `TassisMessage` as an AMQP message and back, on the conventions of
-Apache Qpid JMS. Exported to `tassis-server` only. Rules:
+Apache Qpid JMS, whose names are in `Conventions`. Exported to `tassis-server` only. Rules:
 
 - **The specification is the source.** A format code, a descriptor, the order of the fields of
   a composite type are written from the OASIS text, and the test that covers them cites the
@@ -223,6 +229,31 @@ Apache Qpid JMS. Exported to `tassis-server` only. Rules:
   (`TassisObjectMessage.serialized()`). Deserializing what a client sent would hand the broker
   to whoever can connect.
 - A change to the codec is proven twice: `./mvnw install`, and the `interop` profile.
+
+## The AMQP client (`tassis-amqp`, `internal.client`)
+
+`AmqpBrokerConnection` is the seam over a socket: one AMQP connection, one session, a reader
+that never writes and a writer that alone writes. Rules:
+
+- **One lock, one condition.** Every wait is on that condition, so it releases the lock; frames
+  are queued under the lock. Never read or write the socket under it: `establish` talks to
+  the socket itself, before anything else uses the connection, and takes the lock at the end.
+- **One credit at a time**, granted when the application asks for a message: a message nobody
+  asked for stays with the broker. Whoever stops waiting (`receive` out of time, a listener
+  gone, `stop`, `close`) **drains**, then gives back with `released` what came and nobody saw.
+  Nothing may stay in `arrived` behind a caller's back.
+- **A drain ends** by the transfer that uses the credit or by a `flow` whose delivery count
+  accounts for all of it; any other answer is that of an earlier drain.
+- **A closed consumer whose session still answers for deliveries keeps its link**
+  (`ReceiverLink.close`, `forget`): a broker gives back the unsettled deliveries of a link
+  that goes. `detachDeferred` is for what needs the link gone now.
+- **`sync()`** is how the client knows the broker has done what it was told: use it after what
+  another connection must be able to see at once (`redeliver`, `returnUndelivered`).
+- **An AMQP connection says who it is when it opens**: `claimClientId` reconnects, and a
+  connection without a client identifier never asks for `sole-connection-for-container`.
+- The names both ends agree on are in `internal.jms.Conventions`, and nowhere else.
+- A change here is proven by `NetworkClientTest` (in `tassis-server`) **and by the TCK through
+  the network**: `./run-official-tck-messaging-3.1.sh network`.
 
 ## The AMQP server (`tassis-server`)
 
