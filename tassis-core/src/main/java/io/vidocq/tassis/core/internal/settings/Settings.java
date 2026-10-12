@@ -22,8 +22,11 @@ package io.vidocq.tassis.core.internal.settings;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -38,8 +41,70 @@ import java.util.Set;
  * @param clientId the client identifier of the connections, or {@code null} for none
  * @param maxListenerDeliveries how many times a message is delivered to a listener that keeps
  *        failing before it is dropped
+ * @param pool what configures a pool of the connections; a factory carries it and makes no use of it
  */
-public record Settings(String broker, String server, String clientId, int maxListenerDeliveries) {
+public record Settings(String broker, String server, String clientId, int maxListenerDeliveries, Pool pool) {
+
+    /**
+     * What configures a connection pool. A duration of zero means never, where never makes sense:
+     * for the two lifetimes and for the report of a connection that is not given back.
+     *
+     * @param enabled whether whoever builds the factories itself (the CDI integration) pools the
+     *        connections to a broker of the network
+     * @param maxSize how many connections to the broker are open at most
+     * @param acquireTimeout how long a borrower waits when all are lent
+     * @param idleTimeout how long a connection nobody uses is kept
+     * @param maxLifetime how long a connection is kept at all
+     * @param leakThreshold how long a connection may be lent before it is reported
+     */
+    public record Pool(boolean enabled, int maxSize, Duration acquireTimeout, Duration idleTimeout,
+            Duration maxLifetime, Duration leakThreshold) {
+
+        public static final Pool DEFAULTS = new Pool(true, 10, Duration.ofSeconds(5), Duration.ofMinutes(10),
+                Duration.ofMinutes(30), Duration.ZERO);
+
+        public Pool {
+            if (maxSize < 1) {
+                throw new IllegalArgumentException(POOL_MAX_SIZE + " must be at least 1, not " + maxSize);
+            }
+            if (acquireTimeout.isZero() || acquireTimeout.isNegative()) {
+                throw new IllegalArgumentException(POOL_ACQUIRE_TIMEOUT + " must be positive, not " + acquireTimeout);
+            }
+            notNegative(POOL_IDLE_TIMEOUT, idleTimeout);
+            notNegative(POOL_MAX_LIFETIME, maxLifetime);
+            notNegative(POOL_LEAK_THRESHOLD, leakThreshold);
+        }
+
+        private static void notNegative(String key, Duration duration) {
+            if (duration.isNegative()) {
+                throw new IllegalArgumentException(key + " must not be negative: " + duration);
+            }
+        }
+
+        public Pool withEnabled(boolean newEnabled) {
+            return new Pool(newEnabled, maxSize, acquireTimeout, idleTimeout, maxLifetime, leakThreshold);
+        }
+
+        public Pool withMaxSize(int newMaxSize) {
+            return new Pool(enabled, newMaxSize, acquireTimeout, idleTimeout, maxLifetime, leakThreshold);
+        }
+
+        public Pool withAcquireTimeout(Duration newTimeout) {
+            return new Pool(enabled, maxSize, newTimeout, idleTimeout, maxLifetime, leakThreshold);
+        }
+
+        public Pool withIdleTimeout(Duration newTimeout) {
+            return new Pool(enabled, maxSize, acquireTimeout, newTimeout, maxLifetime, leakThreshold);
+        }
+
+        public Pool withMaxLifetime(Duration newLifetime) {
+            return new Pool(enabled, maxSize, acquireTimeout, idleTimeout, newLifetime, leakThreshold);
+        }
+
+        public Pool withLeakThreshold(Duration newThreshold) {
+            return new Pool(enabled, maxSize, acquireTimeout, idleTimeout, maxLifetime, newThreshold);
+        }
+    }
 
     public static final String PREFIX = "tassis.";
     public static final String URL = PREFIX + "url";
@@ -47,6 +112,12 @@ public record Settings(String broker, String server, String clientId, int maxLis
     public static final String SERVER = PREFIX + "server";
     public static final String CLIENT_ID = PREFIX + "clientId";
     public static final String MAX_LISTENER_DELIVERIES = PREFIX + "listener.maxDeliveries";
+    public static final String POOL_ENABLED = PREFIX + "pool.enabled";
+    public static final String POOL_MAX_SIZE = PREFIX + "pool.maxSize";
+    public static final String POOL_ACQUIRE_TIMEOUT = PREFIX + "pool.acquireTimeout";
+    public static final String POOL_IDLE_TIMEOUT = PREFIX + "pool.idleTimeout";
+    public static final String POOL_MAX_LIFETIME = PREFIX + "pool.maxLifetime";
+    public static final String POOL_LEAK_THRESHOLD = PREFIX + "pool.leakThreshold";
 
     public static final String DEFAULT_BROKER = "default";
     public static final int DEFAULT_MAX_LISTENER_DELIVERIES = 10;
@@ -61,9 +132,12 @@ public record Settings(String broker, String server, String clientId, int maxLis
     /** The transports to a broker of the network, and the port each uses unless told otherwise. */
     private static final Map<String, Integer> SERVER_TRANSPORTS = Map.of("amqp", 5672, "amqps", 5671);
 
-    private static final Set<String> KEYS = Set.of(URL, BROKER, SERVER, CLIENT_ID, MAX_LISTENER_DELIVERIES);
+    private static final Set<String> KEYS = Set.of(URL, BROKER, SERVER, CLIENT_ID, MAX_LISTENER_DELIVERIES,
+            POOL_ENABLED, POOL_MAX_SIZE, POOL_ACQUIRE_TIMEOUT, POOL_IDLE_TIMEOUT, POOL_MAX_LIFETIME,
+            POOL_LEAK_THRESHOLD);
 
-    public static final Settings DEFAULTS = new Settings(DEFAULT_BROKER, null, null, DEFAULT_MAX_LISTENER_DELIVERIES);
+    public static final Settings DEFAULTS =
+            new Settings(DEFAULT_BROKER, null, null, DEFAULT_MAX_LISTENER_DELIVERIES, Pool.DEFAULTS);
 
     public Settings {
         if (broker == null || broker.isEmpty()) {
@@ -79,22 +153,27 @@ public record Settings(String broker, String server, String clientId, int maxLis
             throw new IllegalArgumentException(
                     MAX_LISTENER_DELIVERIES + " must be at least 1, not " + maxListenerDeliveries);
         }
+        Objects.requireNonNull(pool, "pool");
     }
 
     public Settings withBroker(String newBroker) {
-        return new Settings(newBroker, server, clientId, maxListenerDeliveries);
+        return new Settings(newBroker, server, clientId, maxListenerDeliveries, pool);
     }
 
     public Settings withServer(String newServer) {
-        return new Settings(broker, newServer, clientId, maxListenerDeliveries);
+        return new Settings(broker, newServer, clientId, maxListenerDeliveries, pool);
     }
 
     public Settings withClientId(String newClientId) {
-        return new Settings(broker, server, newClientId, maxListenerDeliveries);
+        return new Settings(broker, server, newClientId, maxListenerDeliveries, pool);
     }
 
     public Settings withMaxListenerDeliveries(int newMaximum) {
-        return new Settings(broker, server, clientId, newMaximum);
+        return new Settings(broker, server, clientId, newMaximum, pool);
+    }
+
+    public Settings withPool(Pool newPool) {
+        return new Settings(broker, server, clientId, maxListenerDeliveries, newPool);
     }
 
     /** The transport of the server, {@code amqp} for one; {@code null} for a broker of this JVM. */
@@ -210,7 +289,55 @@ public record Settings(String broker, String server, String clientId, int maxLis
             result = result.withMaxListenerDeliveries(
                     number(shown(MAX_LISTENER_DELIVERIES, shownPrefix), keys.get(MAX_LISTENER_DELIVERIES)));
         }
-        return result;
+        Pool pool = result.pool();
+        if (keys.containsKey(POOL_ENABLED)) {
+            pool = pool.withEnabled(flag(shown(POOL_ENABLED, shownPrefix), keys.get(POOL_ENABLED)));
+        }
+        if (keys.containsKey(POOL_MAX_SIZE)) {
+            pool = pool.withMaxSize(number(shown(POOL_MAX_SIZE, shownPrefix), keys.get(POOL_MAX_SIZE)));
+        }
+        if (keys.containsKey(POOL_ACQUIRE_TIMEOUT)) {
+            Duration timeout = duration(shown(POOL_ACQUIRE_TIMEOUT, shownPrefix), keys.get(POOL_ACQUIRE_TIMEOUT));
+            if (timeout.isZero()) {
+                throw new IllegalArgumentException(
+                        shown(POOL_ACQUIRE_TIMEOUT, shownPrefix) + " must be positive, not " + timeout);
+            }
+            pool = pool.withAcquireTimeout(timeout);
+        }
+        if (keys.containsKey(POOL_IDLE_TIMEOUT)) {
+            pool = pool.withIdleTimeout(duration(shown(POOL_IDLE_TIMEOUT, shownPrefix), keys.get(POOL_IDLE_TIMEOUT)));
+        }
+        if (keys.containsKey(POOL_MAX_LIFETIME)) {
+            pool = pool.withMaxLifetime(duration(shown(POOL_MAX_LIFETIME, shownPrefix), keys.get(POOL_MAX_LIFETIME)));
+        }
+        if (keys.containsKey(POOL_LEAK_THRESHOLD)) {
+            pool = pool.withLeakThreshold(
+                    duration(shown(POOL_LEAK_THRESHOLD, shownPrefix), keys.get(POOL_LEAK_THRESHOLD)));
+        }
+        return result.withPool(pool);
+    }
+
+    private static boolean flag(String key, String value) {
+        return switch (value.trim()) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new IllegalArgumentException(key + " must be true or false, not '" + value + "'");
+        };
+    }
+
+    /** A duration as ISO-8601 writes it ({@code PT30S}, {@code PT10M}), zero or more. */
+    private static Duration duration(String key, String value) {
+        Duration duration;
+        try {
+            duration = Duration.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    key + " must be a duration such as PT30S or PT10M (ISO-8601), not '" + value + "'");
+        }
+        if (duration.isNegative()) {
+            throw new IllegalArgumentException(key + " must not be negative: '" + value + "'");
+        }
+        return duration;
     }
 
     private static String shown(String key, String shownPrefix) {
@@ -232,7 +359,8 @@ public record Settings(String broker, String server, String clientId, int maxLis
     /**
      * Reads a connection URL: {@code tassis:vm:<broker>} for a broker of this JVM, or
      * {@code tassis:amqp://<host>[:<port>]} for one of the network ({@code amqps} for TLS), each followed by
-     * {@code [?clientId=...&listener.maxDeliveries=...]}.
+     * {@code [?clientId=...&listener.maxDeliveries=...&pool.maxSize=...]}: every setting but the
+     * broker and the server is a parameter, under its key without {@code tassis.}.
      */
     public static Settings fromUrl(String url) {
         return fromUrl(url, DEFAULTS);
@@ -288,6 +416,31 @@ public record Settings(String broker, String server, String clientId, int maxLis
         }
         if (maxListenerDeliveries != DEFAULT_MAX_LISTENER_DELIVERIES) {
             url.append(separator).append("listener.maxDeliveries=").append(maxListenerDeliveries);
+            separator = '&';
+        }
+        Map<String, Object> ofThePool = new LinkedHashMap<>();
+        if (pool.enabled() != Pool.DEFAULTS.enabled()) {
+            ofThePool.put(POOL_ENABLED, pool.enabled());
+        }
+        if (pool.maxSize() != Pool.DEFAULTS.maxSize()) {
+            ofThePool.put(POOL_MAX_SIZE, pool.maxSize());
+        }
+        if (!pool.acquireTimeout().equals(Pool.DEFAULTS.acquireTimeout())) {
+            ofThePool.put(POOL_ACQUIRE_TIMEOUT, pool.acquireTimeout());
+        }
+        if (!pool.idleTimeout().equals(Pool.DEFAULTS.idleTimeout())) {
+            ofThePool.put(POOL_IDLE_TIMEOUT, pool.idleTimeout());
+        }
+        if (!pool.maxLifetime().equals(Pool.DEFAULTS.maxLifetime())) {
+            ofThePool.put(POOL_MAX_LIFETIME, pool.maxLifetime());
+        }
+        if (!pool.leakThreshold().equals(Pool.DEFAULTS.leakThreshold())) {
+            ofThePool.put(POOL_LEAK_THRESHOLD, pool.leakThreshold());
+        }
+        for (Map.Entry<String, Object> setting : ofThePool.entrySet()) {
+            url.append(separator).append(setting.getKey().substring(PREFIX.length())).append('=')
+                    .append(setting.getValue());
+            separator = '&';
         }
         return url.toString();
     }

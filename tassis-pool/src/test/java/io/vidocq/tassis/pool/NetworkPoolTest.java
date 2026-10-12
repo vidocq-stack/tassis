@@ -78,6 +78,11 @@ class NetworkPoolTest {
             return accepted.get();
         }
 
+        /** How many clients are still connected. */
+        int open() {
+            return (int) sockets.stream().filter(socket -> !socket.isClosed()).count() / 2;
+        }
+
         private void accept() {
             while (true) {
                 try {
@@ -213,6 +218,24 @@ class NetworkPoolTest {
             assertEquals(null, next.getClientID());
             next.setClientID("billing");
             next.createSession().unsubscribe("all");
+        }
+    }
+
+    @Test
+    void aConnectionNobodyUsesForLongIsClosedAndItsSocketWithIt() throws Exception {
+        try (TassisConnectionPool brief = TassisConnectionPool
+                .over(TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + relay.port()))
+                .idleTimeout(Duration.ofMillis(200)).build()) {
+            brief.createConnection().close();
+            assertEquals(1, relay.accepted());
+
+            await("the idle connection is closed", () -> brief.size() == 0);
+            await("and its socket", () -> relay.open() == 0);
+
+            try (JMSContext context = brief.createContext()) {
+                context.createProducer().send(context.createQueue("orders"), "on a new connection");
+            }
+            assertEquals(2, relay.accepted());
         }
     }
 

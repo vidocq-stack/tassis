@@ -19,6 +19,11 @@
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-core</artifactId>
         </dependency>
+        <!-- The factories built from the settings pool their connections to a broker of the network. -->
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-pool</artifactId>
+        </dependency>
         <dependency>
             <groupId>jakarta.enterprise</groupId>
             <artifactId>jakarta.enterprise.cdi-api</artifactId>

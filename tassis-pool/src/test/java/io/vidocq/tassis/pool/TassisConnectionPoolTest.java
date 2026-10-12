@@ -499,6 +499,162 @@ class TassisConnectionPoolTest {
         assertEquals(0, pool.size());
     }
 
+    // ---- how long a connection is kept --------------------------------------
+
+    private static void await(String what, java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!condition.getAsBoolean()) {
+            assertTrue(System.nanoTime() < deadline, what);
+            Thread.sleep(10);
+        }
+    }
+
+    private TassisConnectionPool built(TassisConnectionPool.Builder builder) {
+        TassisConnectionPool pool = builder.build();
+        pools.add(pool);
+        return pool;
+    }
+
+    @Test
+    void aConnectionNobodyUsesForLongIsClosed() throws Exception {
+        TassisConnectionPool pool = built(TassisConnectionPool.over(factory).idleTimeout(Duration.ofMillis(150)));
+        pool.createConnection().close();
+        assertEquals(1, pool.idle());
+
+        await("the idle connection is closed", () -> pool.size() == 0);
+
+        // and the pool opens another when one is asked for
+        pool.createConnection().close();
+        assertEquals(1, pool.size());
+    }
+
+    @Test
+    void aConnectionInUseIsNotIdleHoweverLongItIsKept() throws Exception {
+        TassisConnectionPool pool = built(TassisConnectionPool.over(factory).idleTimeout(Duration.ofMillis(100))
+                .maxLifetime(Duration.ofMillis(100)));
+
+        try (Connection connection = pool.createConnection()) {
+            Thread.sleep(400);
+            assertEquals(1, pool.size(), "nothing is closed under a borrower");
+            connection.createSession().close();
+        }
+
+        assertEquals(0, pool.size(), "past its lifetime, it is closed when it comes back");
+    }
+
+    @Test
+    void aConnectionPastItsLifetimeIsClosedThoughItIsUsedOften() throws Exception {
+        TassisConnectionPool pool = built(TassisConnectionPool.over(factory).idleTimeout(Duration.ZERO)
+                .maxLifetime(Duration.ofMillis(300)));
+        pool.createConnection().close();
+        long start = System.nanoTime();
+
+        // borrowed again and again, so never idle for long
+        while (pool.size() == 1 && System.nanoTime() - start < TimeUnit.SECONDS.toNanos(10)) {
+            pool.createConnection().close();
+            Thread.sleep(10);
+        }
+
+        assertEquals(0, pool.size());
+        assertTrue(System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(250), "not before its time");
+    }
+
+    @Test
+    void zeroKeepsAConnectionForAsLongAsThePoolLasts() throws Exception {
+        TassisConnectionPool pool = built(
+                TassisConnectionPool.over(factory).idleTimeout(Duration.ZERO).maxLifetime(Duration.ZERO));
+        pool.createConnection().close();
+
+        Thread.sleep(300);
+
+        assertEquals(1, pool.idle());
+    }
+
+    @Test
+    void aConnectionThatIsNotGivenBackIsReportedWithWhoBorrowedIt() throws Exception {
+        List<java.util.logging.LogRecord> reports = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord report) {
+                reports.add(report);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(TassisConnectionPool.class.getName());
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        try {
+            TassisConnectionPool pool =
+                    built(TassisConnectionPool.over(factory).leakThreshold(Duration.ofMillis(100)));
+            pool.createConnection().close();
+            Connection forgotten = borrowedAndForgotten(pool);
+
+            await("the connection is reported", () -> !reports.isEmpty());
+            Thread.sleep(300);
+
+            assertEquals(1, reports.size(), "once, and not the one that was given back");
+            java.util.logging.LogRecord report = reports.get(0);
+            assertEquals(java.util.logging.Level.WARNING, report.getLevel());
+            assertTrue(java.util.Arrays.stream(report.getThrown().getStackTrace())
+                    .anyMatch(frame -> frame.getMethodName().equals("borrowedAndForgotten")), "the call that borrowed it");
+            // reported, not taken back
+            forgotten.createSession().close();
+            forgotten.close();
+            assertEquals(1, pool.idle());
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(true);
+        }
+    }
+
+    private static Connection borrowedAndForgotten(TassisConnectionPool pool) throws JMSException {
+        return pool.createConnection();
+    }
+
+    // ---- settings ------------------------------------------------------------
+
+    @Test
+    void aPoolStartsFromTheSettingsOfItsFactory() throws Exception {
+        TassisConnectionFactory configured = TassisConnectionFactory.fromUrl("tassis:vm:" + broker
+                + "?pool.maxSize=1&pool.acquireTimeout=PT0.2S&pool.idleTimeout=PT0.15S");
+        TassisConnectionPool pool = built(TassisConnectionPool.over(configured));
+
+        try (Connection only = pool.createConnection()) {
+            long start = System.nanoTime();
+            assertThrows(ResourceAllocationException.class, pool::createConnection);
+            assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(3), "after 200 ms, not the default");
+        }
+        await("the idle connection is closed", () -> pool.size() == 0);
+    }
+
+    @Test
+    void theBuilderHasTheLastWordOverTheSettings() throws JMSException {
+        TassisConnectionFactory configured =
+                TassisConnectionFactory.from(java.util.Map.of("tassis.broker", broker, "tassis.pool.maxSize", "1"));
+        TassisConnectionPool pool = built(TassisConnectionPool.over(configured).maxSize(2));
+
+        try (Connection first = pool.createConnection(); Connection second = pool.createConnection()) {
+            assertEquals(2, pool.size());
+        }
+    }
+
+    @Test
+    void aDurationThatMakesNoSenseIsRefused() {
+        TassisConnectionPool.Builder builder = TassisConnectionPool.over(factory);
+
+        assertThrows(IllegalArgumentException.class, () -> builder.idleTimeout(Duration.ofSeconds(-1)));
+        assertThrows(IllegalArgumentException.class, () -> builder.maxLifetime(Duration.ofSeconds(-1)));
+        assertThrows(IllegalArgumentException.class, () -> builder.leakThreshold(Duration.ofSeconds(-1)));
+        assertThrows(NullPointerException.class, () -> builder.idleTimeout(null));
+    }
+
     // ---- closing the pool --------------------------------------------------
 
     @Test

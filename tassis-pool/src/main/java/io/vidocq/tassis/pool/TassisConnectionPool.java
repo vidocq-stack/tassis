@@ -38,10 +38,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -74,6 +76,14 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p><b>Credentials.</b> A borrower only gets a connection opened with the user name and the
  * password it gives. The pool keeps both in memory, for as long as it has such a connection.
  *
+ * <p><b>How long a connection is kept.</b> One that nobody has used for {@code idleTimeout} is
+ * closed, and so is one older than {@code maxLifetime}, once nobody is using it. A connection
+ * that is lent for longer than {@code leakThreshold} is reported in the log, with the call that
+ * borrowed it: it was probably never closed. The pool does not take it back.
+ *
+ * <p><b>Settings.</b> A pool starts from the settings its factory carries, the keys
+ * {@code tassis.pool.*} or the URL parameters {@code pool.*}, and the builder changes them.
+ *
  * <p>A pool is safe for use by several threads. Close it to close the connections it keeps.
  */
 public final class TassisConnectionPool
@@ -85,12 +95,42 @@ public final class TassisConnectionPool
     /** How long a borrower waits for a connection of a pool that has none left, unless told otherwise. */
     public static final Duration DEFAULT_ACQUIRE_TIMEOUT = Duration.ofSeconds(5);
 
+    /** How long a connection nobody uses is kept, unless told otherwise. */
+    public static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofMinutes(10);
+
+    /** How long a connection is kept at all, unless told otherwise. */
+    public static final Duration DEFAULT_MAX_LIFETIME = Duration.ofMinutes(30);
+
+    private static final System.Logger LOG = System.getLogger(TassisConnectionPool.class.getName());
+
     /** Whom a connection to the broker was opened as. */
     private record Identity(String userName, String password) {
     }
 
-    /** A connection to the broker, lent or waiting to be. */
-    private record Entry(PhysicalConnection physical, Identity identity) {
+    /** A connection to the broker, lent or waiting to be. Its times are guarded by the lock of the pool. */
+    private static final class Entry {
+
+        private final PhysicalConnection physical;
+        private final Identity identity;
+        private final long openedAt = System.nanoTime();
+        private long idleSince;
+        private long lentAt;
+        // The call that borrowed it, kept only when the pool reports connections not given back.
+        private Throwable borrower;
+        private boolean reported;
+
+        Entry(PhysicalConnection physical, Identity identity) {
+            this.physical = physical;
+            this.identity = identity;
+        }
+
+        PhysicalConnection physical() {
+            return physical;
+        }
+
+        Identity identity() {
+            return identity;
+        }
     }
 
     /** What a borrower makes of the connection it is lent. */
@@ -103,6 +143,10 @@ public final class TassisConnectionPool
     private final ConnectionSource source;
     private final int maxSize;
     private final long acquireTimeoutNanos;
+    // Zero for never, all three.
+    private final long idleTimeoutNanos;
+    private final long maxLifetimeNanos;
+    private final long leakThresholdNanos;
 
     // Guards everything below. Never held while a connection is opened or closed.
     private final ReentrantLock lock = new ReentrantLock();
@@ -115,11 +159,20 @@ public final class TassisConnectionPool
     // Out of the pool, yet to be closed by whoever leaves the lock next.
     private final List<Entry> doomed = new ArrayList<>();
     private boolean closed;
+    // The connections that are lent.
+    private final Set<Entry> lent = new HashSet<>();
+    // Something the housekeeper watches has changed: a connection came back, went out, or the pool closed.
+    private final Condition tick = lock.newCondition();
+    // The thread that closes the connections kept too long; null while there is none to watch.
+    private Thread housekeeper;
 
-    private TassisConnectionPool(ConnectionSource source, int maxSize, Duration acquireTimeout) {
-        this.source = source;
-        this.maxSize = maxSize;
-        this.acquireTimeoutNanos = acquireTimeout.toNanos();
+    private TassisConnectionPool(Builder builder) {
+        this.source = builder.source;
+        this.maxSize = builder.maxSize;
+        this.acquireTimeoutNanos = builder.acquireTimeout.toNanos();
+        this.idleTimeoutNanos = builder.idleTimeout.toNanos();
+        this.maxLifetimeNanos = builder.maxLifetime.toNanos();
+        this.leakThresholdNanos = builder.leakThreshold.toNanos();
     }
 
     /**
@@ -139,15 +192,35 @@ public final class TassisConnectionPool
         return new Builder(source);
     }
 
+    /**
+     * Whether the connections of that factory are worth a pool and can have one, for whoever
+     * builds factories from settings and must decide by itself, as the CDI integration does: the
+     * broker is one of the network, where a connection is a socket; the factory assigns no client
+     * identifier; and its settings do not say {@code tassis.pool.enabled=false}.
+     */
+    public static boolean suits(TassisConnectionFactory factory) {
+        ConnectionSource source = ConnectionSource.of(factory);
+        return source.isRemote() && source.poolEnabled() && !source.assignsClientId();
+    }
+
     /** The description of a pool, before it is built. */
     public static final class Builder {
 
         private final ConnectionSource source;
-        private int maxSize = DEFAULT_MAX_SIZE;
-        private Duration acquireTimeout = DEFAULT_ACQUIRE_TIMEOUT;
+        private int maxSize;
+        private Duration acquireTimeout;
+        private Duration idleTimeout;
+        private Duration maxLifetime;
+        private Duration leakThreshold;
 
+        /** Starts from what the factory carries: its settings {@code tassis.pool.*}, or the defaults. */
         private Builder(ConnectionSource source) {
             this.source = source;
+            this.maxSize = source.poolMaxSize();
+            this.acquireTimeout = source.poolAcquireTimeout();
+            this.idleTimeout = source.poolIdleTimeout();
+            this.maxLifetime = source.poolMaxLifetime();
+            this.leakThreshold = source.poolLeakThreshold();
         }
 
         /**
@@ -178,9 +251,51 @@ public final class TassisConnectionPool
             return this;
         }
 
+        /**
+         * How long a connection that nobody uses is kept before it is closed; zero for as long as
+         * the pool lasts. The default is ten minutes.
+         *
+         * @throws IllegalArgumentException if it is negative
+         */
+        public Builder idleTimeout(Duration timeout) {
+            idleTimeout = notNegative(timeout, "the time an idle connection is kept");
+            return this;
+        }
+
+        /**
+         * How long a connection is kept at all: past that age it is closed as soon as nobody is
+         * using it, never under a borrower. Zero for as long as the pool lasts. The default is
+         * thirty minutes.
+         *
+         * @throws IllegalArgumentException if it is negative
+         */
+        public Builder maxLifetime(Duration lifetime) {
+            maxLifetime = notNegative(lifetime, "the lifetime of a connection");
+            return this;
+        }
+
+        /**
+         * How long a connection may be lent before the pool reports it in the log, as a warning
+         * with the call that borrowed it; zero, the default, for never. The connection stays with
+         * its borrower.
+         *
+         * @throws IllegalArgumentException if it is negative
+         */
+        public Builder leakThreshold(Duration threshold) {
+            leakThreshold = notNegative(threshold, "the time after which a lent connection is reported");
+            return this;
+        }
+
+        private static Duration notNegative(Duration duration, String what) {
+            if (Objects.requireNonNull(duration, "duration").isNegative()) {
+                throw new IllegalArgumentException(what + " must not be negative: " + duration);
+            }
+            return duration;
+        }
+
         /** Builds the pool. It opens its first connection when a first one is asked for. */
         public TassisConnectionPool build() {
-            return new TassisConnectionPool(source, maxSize, acquireTimeout);
+            return new TassisConnectionPool(this);
         }
     }
 
@@ -217,6 +332,16 @@ public final class TassisConnectionPool
 
     private <T> T borrow(String userName, String password, Lending<T> lending) throws JMSException {
         Entry entry = acquire(new Identity(userName, password));
+        lock.lock();
+        try {
+            entry.lentAt = System.nanoTime();
+            entry.reported = false;
+            entry.borrower = leakThresholdNanos > 0 ? new Throwable("borrowed here") : null;
+            lent.add(entry);
+            tick.signalAll();
+        } finally {
+            lock.unlock();
+        }
         try {
             return lending.lend(entry.physical(), reusable -> release(entry, reusable));
         } catch (JMSException | RuntimeException e) {
@@ -229,51 +354,57 @@ public final class TassisConnectionPool
     /** A connection opened as that identity: one that waits, or a new one if there is room. */
     private Entry acquire(Identity identity) throws JMSException {
         long remaining = acquireTimeoutNanos;
-        List<Entry> toClose;
-        lock.lock();
+        // Whatever the way out, what was taken out of the pool on the way is closed.
+        List<Entry> toClose = List.of();
         try {
-            while (true) {
-                if (closed) {
-                    throw new IllegalStateException("the pool is closed");
-                }
-                Deque<Entry> waiting = idle.get(identity);
-                if (waiting != null && !waiting.isEmpty()) {
-                    Entry kept = waiting.pollLast();
-                    if (!kept.physical().isLost()) {
-                        return kept;
+            lock.lock();
+            try {
+                while (true) {
+                    if (closed) {
+                        throw new IllegalStateException("the pool is closed");
                     }
-                    // Lost, and the pool not told yet: its place is free.
-                    size--;
-                    doomed.add(kept);
-                    continue;
+                    Deque<Entry> waiting = idle.get(identity);
+                    if (waiting != null && !waiting.isEmpty()) {
+                        Entry kept = waiting.pollLast();
+                        if (!kept.physical().isLost() && !tooOld(kept, System.nanoTime())) {
+                            return kept;
+                        }
+                        // Lost and the pool not told yet, or past its lifetime: its place is free.
+                        size--;
+                        doomed.add(kept);
+                        continue;
+                    }
+                    if (size < maxSize) {
+                        // The housekeeper first: if it cannot start, no place is taken.
+                        keepHouse();
+                        // The place is taken now; the connection is opened once the lock is released.
+                        size++;
+                        break;
+                    }
+                    Entry other = anyIdle();
+                    if (other != null) {
+                        // Its place serves this identity: the size does not change.
+                        doomed.add(other);
+                        break;
+                    }
+                    if (remaining <= 0) {
+                        throw new ResourceAllocationException("no connection came back to the pool within "
+                                + Duration.ofNanos(acquireTimeoutNanos) + ": its " + maxSize + " are all in use");
+                    }
+                    try {
+                        remaining = changed.awaitNanos(remaining);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new JMSException("interrupted while waiting for a connection of the pool");
+                    }
                 }
-                if (size < maxSize) {
-                    // The place is taken now; the connection is opened once the lock is released.
-                    size++;
-                    break;
-                }
-                Entry other = anyIdle();
-                if (other != null) {
-                    // Its place serves this identity: the size does not change.
-                    doomed.add(other);
-                    break;
-                }
-                if (remaining <= 0) {
-                    throw new ResourceAllocationException("no connection came back to the pool within "
-                            + Duration.ofNanos(acquireTimeoutNanos) + ": its " + maxSize + " are all in use");
-                }
-                try {
-                    remaining = changed.awaitNanos(remaining);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new JMSException("interrupted while waiting for a connection of the pool");
-                }
+            } finally {
+                toClose = takeDoomed();
+                lock.unlock();
             }
-            toClose = takeDoomed();
         } finally {
-            lock.unlock();
+            close(toClose);
         }
-        close(toClose);
         try {
             return new Entry(source.open(identity.userName(), identity.password()), identity);
         } catch (JMSException | RuntimeException e) {
@@ -281,6 +412,7 @@ public final class TassisConnectionPool
             try {
                 size--;
                 changed.signalAll();
+                tick.signalAll();
             } finally {
                 lock.unlock();
             }
@@ -308,13 +440,16 @@ public final class TassisConnectionPool
         List<Entry> toClose;
         lock.lock();
         try {
+            lent.remove(entry);
+            entry.borrower = null;
             if (!reusable) {
                 // Closed already, by the connection that had it.
                 size--;
-            } else if (closed) {
+            } else if (closed || tooOld(entry, System.nanoTime())) {
                 size--;
                 doomed.add(entry);
             } else {
+                entry.idleSince = System.nanoTime();
                 idle.computeIfAbsent(entry.identity(), identity -> new ArrayDeque<>()).addLast(entry);
                 // Under the lock, so that no borrower has taken the connection yet: it will ask
                 // to be told itself, and whoever asks last is told. A connection lost already
@@ -322,11 +457,126 @@ public final class TassisConnectionPool
                 entry.physical().onLost(() -> lostWhileIdle(entry));
             }
             changed.signalAll();
+            tick.signalAll();
             toClose = takeDoomed();
         } finally {
             lock.unlock();
         }
         close(toClose);
+    }
+
+    // ---- housekeeping ------------------------------------------------------
+
+    /** Whether the connection has lived as long as one may. Under the lock. */
+    private boolean tooOld(Entry entry, long now) {
+        return maxLifetimeNanos > 0 && now - entry.openedAt >= maxLifetimeNanos;
+    }
+
+    /** Starts the housekeeper if there is something for it to watch and it is not running. Under the lock. */
+    private void keepHouse() {
+        if (housekeeper == null && (idleTimeoutNanos > 0 || maxLifetimeNanos > 0 || leakThresholdNanos > 0)) {
+            // Kept only once started: a thread that cannot start must not pass for a housekeeper.
+            Thread thread = Thread.ofVirtual().name("tassis-pool-housekeeper").unstarted(this::housekeeping);
+            thread.start();
+            housekeeper = thread;
+        }
+    }
+
+    /**
+     * Closes the idle connections kept too long and reports the lent ones kept too long, then
+     * sleeps until the next of them is due. Ends when the pool is closed or has no connection
+     * left; the next connection opened starts another.
+     */
+    private void housekeeping() {
+        try {
+            watch();
+        } finally {
+            // However it ends, the next connection opened must be able to start another.
+            lock.lock();
+            try {
+                if (housekeeper == Thread.currentThread()) {
+                    housekeeper = null;
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void watch() {
+        while (true) {
+            List<Entry> toClose;
+            List<Throwable> toReport = new ArrayList<>();
+            lock.lock();
+            try {
+                if (closed || size == 0) {
+                    return;
+                }
+                long now = System.nanoTime();
+                // How long until something is due; Long.MAX_VALUE for nothing.
+                long wait = Long.MAX_VALUE;
+                for (Deque<Entry> entries : idle.values()) {
+                    for (Iterator<Entry> all = entries.iterator(); all.hasNext();) {
+                        Entry entry = all.next();
+                        long due = Long.MAX_VALUE;
+                        if (idleTimeoutNanos > 0) {
+                            due = idleTimeoutNanos - (now - entry.idleSince);
+                        }
+                        if (maxLifetimeNanos > 0) {
+                            due = Math.min(due, maxLifetimeNanos - (now - entry.openedAt));
+                        }
+                        if (due <= 0) {
+                            all.remove();
+                            size--;
+                            doomed.add(entry);
+                        } else {
+                            wait = Math.min(wait, due);
+                        }
+                    }
+                }
+                if (leakThresholdNanos > 0) {
+                    for (Entry entry : lent) {
+                        if (entry.reported) {
+                            continue;
+                        }
+                        long due = leakThresholdNanos - (now - entry.lentAt);
+                        if (due <= 0) {
+                            entry.reported = true;
+                            toReport.add(entry.borrower);
+                        } else {
+                            wait = Math.min(wait, due);
+                        }
+                    }
+                }
+                toClose = takeDoomed();
+                if (toClose.isEmpty() && toReport.isEmpty()) {
+                    try {
+                        if (wait == Long.MAX_VALUE) {
+                            tick.await();
+                        } else {
+                            tick.awaitNanos(wait);
+                        }
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    continue;
+                }
+                // Places are free.
+                changed.signalAll();
+            } finally {
+                lock.unlock();
+            }
+            close(toClose);
+            for (Throwable borrower : toReport) {
+                try {
+                    LOG.log(System.Logger.Level.WARNING, "a connection of the " + this
+                            + " has been lent for more than " + Duration.ofNanos(leakThresholdNanos)
+                            + " and is not given back: was it closed?", borrower);
+                } catch (RuntimeException unreported) {
+                    // A log that fails must not stop the housekeeping.
+                }
+            }
+        }
     }
 
     /** A connection is lost. If a borrower has it, the borrower was told too and will not give it back. */
@@ -339,6 +589,7 @@ public final class TassisConnectionPool
                 size--;
                 doomed.add(entry);
                 changed.signalAll();
+                tick.signalAll();
             }
             if (lock.getHoldCount() == 1) {
                 toClose = takeDoomed();
@@ -386,6 +637,7 @@ public final class TassisConnectionPool
             }
             idle.clear();
             changed.signalAll();
+            tick.signalAll();
             toClose = takeDoomed();
         } finally {
             lock.unlock();

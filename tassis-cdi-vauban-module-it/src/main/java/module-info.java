@@ -25,6 +25,9 @@
 module io.vidocq.tassis.cdi.moduleit {
     requires io.vidocq.tassis.cdi.vauban;
     requires io.vidocq.vauban.core;
+    // For the test on a broker of the network; an application that only connects would require
+    // io.vidocq.tassis.amqp instead.
+    requires io.vidocq.tassis.server;
 
     requires jakarta.cdi;
     requires jakarta.inject;

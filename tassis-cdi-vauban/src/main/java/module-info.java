@@ -23,6 +23,8 @@
  */
 module io.vidocq.tassis.cdi.vauban {
     requires transitive io.vidocq.tassis.core;
+    // The factories built from the settings pool their connections to a broker of the network.
+    requires io.vidocq.tassis.pool;
 
     requires static jakarta.cdi;
     requires static jakarta.inject;

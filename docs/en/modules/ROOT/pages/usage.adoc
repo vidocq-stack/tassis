@@ -626,7 +626,32 @@ Durable subscriptions that are not shared need a client identifier: use them thr
 
 A connection lost while nobody uses it is dropped, and the next borrower gets another. One lost while it is lent tells its borrower through the `ExceptionListener`, as any connection does, and is not lent again once closed. Until the loss is noticed, which takes at most the idle time-out of the connection, a borrower may be handed a connection that is gone: its first call fails, and the next borrower gets a new one.
 
-What a pool does not do yet (milestone M11b-2): close the connections that have been idle for long, renew them after a time, be configured by keys or by URL, serve the contexts injected with CDI.
+=== How long a connection is kept
+
+* A connection that nobody has used for `idleTimeout` (10 minutes by default) is closed: a pool that served a burst shrinks back.
+* A connection older than `maxLifetime` (30 minutes by default) is closed as soon as nobody is using it, and replaced when one is needed. It is never closed under a borrower.
+
+Zero means never, for either. A connection is opened when one is needed and none waits: the pool opens none ahead, and keeps no minimum.
+
+=== A connection that is never given back
+
+A connection that is not closed is not given back, and a pool whose connections all leak that way ends up refusing everybody. With `leakThreshold`, a connection lent for longer is reported once in the log (`System.Logger`, level `WARNING`, logger `io.vidocq.tassis.pool.TassisConnectionPool`), with the stack of the call that borrowed it. The pool does not take it back: a long piece of work is no fault. It is off by default, as it costs a stack trace per borrowing.
+
+=== Settings
+
+What the builder sets in code can come from the settings of the factory, by key or in its URL:
+
+[source,java]
+----
+TassisConnectionFactory factory = TassisConnectionFactory.fromUrl(
+        "tassis:amqp://broker-host?pool.maxSize=8&pool.idleTimeout=PT2M");
+
+TassisConnectionPool pool = TassisConnectionPool.over(factory).build();   // 8 connections, 2 minutes
+----
+
+The keys are `tassis.pool.maxSize`, `tassis.pool.acquireTimeout`, `tassis.pool.idleTimeout`, `tassis.pool.maxLifetime` and `tassis.pool.leakThreshold`, with durations as ISO-8601 writes them: see xref:reference.adoc#configuration[Configuration]. What the builder is told in code wins.
+
+What a pool does not do is listed with the xref:reference.adoc#limits[limits].
 
 [#injection]
 == Injecting `JMSContext` with CDI
@@ -731,6 +756,30 @@ public class Factories {
 ----
 
 Without such a bean, the factory is the one the xref:reference.adoc#configuration[settings] describe, read from the **system properties**: `-Dtassis.broker=orders` for the default factory, `-Dtassis.factory.audit.broker=audit` for the factory `audit`. With no bean and no property, an injected context connects to the broker `default`. Two beans for one name throw `JMSRuntimeException` at the first use.
+
+A factory built from the settings is built once, the first time a context of it is injected, and kept as long as the application: the system properties are read then, and a change made to them afterwards is not seen.
+
+=== Injected contexts and the pool
+
+A request gets its contexts and closes them when it ends, so an application that injects creates and closes connections all day. When the factory of the settings reaches a **broker of the network** (`tassis.server`), it is therefore a xref:usage.adoc#pool[pool]: the requests share connections that stay open, and the pool is closed with the application.
+
+* Its size and its durations are the settings `tassis.pool.*`, for the default factory or for a named one (`tassis.factory.audit.pool.maxSize`).
+* `tassis.pool.enabled=false` asks for no pool: each context then opens a connection of its own.
+* A factory that assigns a client identifier (`tassis.clientId`) is not pooled: it can only have one connection open.
+* For the broker of the JVM there is no pool: a connection opens no socket there.
+
+A factory the application supplies as a bean is used as it is. To pool it, supply the pool:
+
+[source,java]
+----
+@Produces
+@ApplicationScoped
+public ConnectionFactory orders() {
+    return TassisConnectionPool.over(TassisConnectionFactory.fromUrl("tassis:amqp://broker-host")).build();
+}
+----
+
+The application then closes that pool itself, in a disposer method for instance.
 
 === What an injected context refuses
 

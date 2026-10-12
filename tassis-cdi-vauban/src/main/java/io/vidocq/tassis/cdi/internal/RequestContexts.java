@@ -19,7 +19,6 @@
  */
 package io.vidocq.tassis.cdi.internal;
 
-import io.vidocq.tassis.core.TassisConnectionFactory;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.enterprise.inject.Any;
@@ -52,6 +51,9 @@ public class RequestContexts {
     @Inject
     Instance<ConnectionFactory> factories;
 
+    @Inject
+    SettingsFactories settings;
+
     private static final System.Logger LOG = System.getLogger(RequestContexts.class.getName());
 
     /** Guards {@link #contexts}. Held while a context is created, so that only one is per key. */
@@ -83,8 +85,8 @@ public class RequestContexts {
 
     /**
      * The connection factory of that name, or the default one for {@code null}: a bean the
-     * application supplies, and otherwise the factory the settings describe, read from the
-     * system properties.
+     * application supplies, and otherwise the factory the settings describe
+     * ({@link SettingsFactories}).
      *
      * <p>A named factory is the {@code ConnectionFactory} bean with {@code @Named(name)}. The
      * default factory is the {@code ConnectionFactory} bean without {@code @Named}: a bean that
@@ -111,9 +113,7 @@ public class RequestContexts {
         if (supplied.size() == 1) {
             return supplied.get(0).get();
         }
-        return name == null
-                ? TassisConnectionFactory.from(System.getProperties())
-                : TassisConnectionFactory.named(name, System.getProperties());
+        return settings.named(name);
     }
 
     /**

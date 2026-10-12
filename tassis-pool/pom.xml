@@ -41,6 +41,25 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <!-- A test reads what the pool logs with the JDK's own logging, which
+                                 the module of the pool has no reason to require. -->
+                            <compilerArgs>
+                                <arg>--add-modules</arg>
+                                <arg>java.logging</arg>
+                                <arg>--add-reads</arg>
+                                <arg>io.vidocq.tassis.pool=java.logging</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <!-- The module of the pool requires neither the transport nor the server, so on

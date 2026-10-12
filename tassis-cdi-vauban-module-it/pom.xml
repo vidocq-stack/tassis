@@ -33,6 +33,11 @@
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-cdi-vauban</artifactId>
         </dependency>
+        <!-- For the test that injects contexts on a broker of the network: this vehicle hosts one. -->
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-server</artifactId>
+        </dependency>
         <dependency>
             <groupId>jakarta.enterprise</groupId>
             <artifactId>jakarta.enterprise.cdi-api</artifactId>

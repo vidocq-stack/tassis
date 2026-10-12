@@ -74,7 +74,25 @@ import javax.net.ssl.SSLContext;
  * <tr><td>{@code tassis.listener.maxDeliveries}</td><td>{@code listener.maxDeliveries}</td>
  * <td>10</td><td>deliveries of a message to a listener that keeps failing before the message
  * is dropped (§8.7)</td></tr>
+ * <tr><td>{@code tassis.pool.enabled}</td><td>{@code pool.enabled}</td><td>{@code true}</td>
+ * <td>whether the CDI integration pools the connections of this factory to a broker of the
+ * network</td></tr>
+ * <tr><td>{@code tassis.pool.maxSize}</td><td>{@code pool.maxSize}</td><td>10</td>
+ * <td>connections a pool opens at most</td></tr>
+ * <tr><td>{@code tassis.pool.acquireTimeout}</td><td>{@code pool.acquireTimeout}</td>
+ * <td>{@code PT5S}</td><td>how long a borrower waits when all are lent</td></tr>
+ * <tr><td>{@code tassis.pool.idleTimeout}</td><td>{@code pool.idleTimeout}</td>
+ * <td>{@code PT10M}</td><td>how long a connection nobody uses is kept; {@code PT0S} for ever</td></tr>
+ * <tr><td>{@code tassis.pool.maxLifetime}</td><td>{@code pool.maxLifetime}</td>
+ * <td>{@code PT30M}</td><td>how long a connection is kept at all; {@code PT0S} for ever</td></tr>
+ * <tr><td>{@code tassis.pool.leakThreshold}</td><td>{@code pool.leakThreshold}</td>
+ * <td>{@code PT0S}</td><td>how long a connection may be lent before it is reported in the log;
+ * {@code PT0S} for never</td></tr>
  * </table>
+ *
+ * <p>The settings {@code tassis.pool.*} are those a pool built over the factory starts from
+ * ({@code TassisConnectionPool} in the module {@code io.vidocq.tassis.pool}); a factory alone
+ * makes no use of them. Their durations are written as ISO-8601.
  *
  * <p>The user name and the password a connection is created with are checked by the broker
  * once users are declared on it, with {@link TassisBroker}; until then any are accepted
@@ -149,7 +167,7 @@ public final class TassisConnectionFactory
     /**
      * Returns a factory configured by a connection URL: {@code tassis:vm:<broker>} for a broker of
      * this JVM or {@code tassis:amqp://<host>[:<port>]} for one of the network, followed by
-     * {@code [?clientId=...&listener.maxDeliveries=...]}, values percent-encoded.
+     * {@code [?clientId=...&listener.maxDeliveries=...&pool.maxSize=...]}, values percent-encoded.
      *
      * @throws IllegalArgumentException if the URL is not one, or names an unknown parameter
      */

@@ -19,6 +19,16 @@
  */
 package io.vidocq.tassis.cdi.moduleit;
 
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.List;
+import java.net.Socket;
+import java.net.ServerSocket;
+import java.net.InetAddress;
+import java.io.OutputStream;
+import java.io.InputStream;
+import java.io.IOException;
+import io.vidocq.tassis.server.TassisServer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -80,6 +90,92 @@ class JmsContextInjectionModulePathTest {
             assertEquals("placed 42",
                     outside.createConsumer(outside.createQueue("trail")).receiveBody(String.class, 5_000),
                     "@JMSConnectionFactory(\"audit\") was read: the trail is on the audit broker");
+        }
+    }
+
+    /** Passes octets between the clients and a server, and counts the clients. */
+    private static final class Relay implements AutoCloseable {
+
+        private final ServerSocket listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        private final int serverPort;
+        private final AtomicInteger accepted = new AtomicInteger();
+        private final List<Socket> sockets = new CopyOnWriteArrayList<>();
+
+        Relay(int serverPort) throws IOException {
+            this.serverPort = serverPort;
+            Thread.ofVirtual().start(this::accept);
+        }
+
+        private void accept() {
+            while (true) {
+                try {
+                    Socket client = listener.accept();
+                    Socket server = new Socket(InetAddress.getLoopbackAddress(), serverPort);
+                    sockets.add(client);
+                    sockets.add(server);
+                    accepted.incrementAndGet();
+                    Thread.ofVirtual().start(() -> pass(client, server));
+                    Thread.ofVirtual().start(() -> pass(server, client));
+                } catch (IOException closed) {
+                    return;
+                }
+            }
+        }
+
+        private static void pass(Socket from, Socket to) {
+            try (from; to) {
+                InputStream in = from.getInputStream();
+                OutputStream out = to.getOutputStream();
+                byte[] octets = new byte[8_192];
+                for (int read = in.read(octets); read >= 0; read = in.read(octets)) {
+                    out.write(octets, 0, read);
+                    out.flush();
+                }
+            } catch (IOException over) {
+                // one side is gone: the try closes the other
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            listener.close();
+            for (Socket socket : sockets) {
+                socket.close();
+            }
+        }
+    }
+
+    @Test
+    void contextsInjectedOnABrokerOfTheNetworkShareTheConnectionsOfAPool() throws Exception {
+        try (TassisServer server = TassisServer.forBroker(broker).port(0).start();
+                Relay relay = new Relay(server.port())) {
+            System.clearProperty("tassis.broker");
+            System.setProperty("tassis.server", "amqp://localhost:" + relay.listener.getLocalPort());
+            System.setProperty("tassis.factory.audit.server", "amqp://localhost:" + relay.listener.getLocalPort());
+            try {
+                var builder = VaubanContainer.builder();
+                TassisCdi.BEANS.forEach(builder::addBeanClass);
+                try (VaubanContainer container = builder.addBeanClass(OrderDesk.class).build()) {
+                    OrderDesk desk = container.select(OrderDesk.class);
+                    List<String> orders = new CopyOnWriteArrayList<>();
+
+                    // §12.4.4: each request has its own contexts, closed when it ends
+                    for (int request = 1; request <= 5; request++) {
+                        String number = String.valueOf(request);
+                        container.requestContext().runInScope(() -> {
+                            desk.place(number);
+                            orders.add(desk.nextOrder());
+                        });
+                    }
+
+                    assertEquals(List.of("1", "2", "3", "4", "5"), orders);
+                    assertEquals(2, relay.accepted.get(),
+                            "five requests, two factories: one connection each, kept by its pool");
+                }
+            } finally {
+                System.clearProperty("tassis.server");
+                System.clearProperty("tassis.factory.audit.server");
+            }
         }
     }
 }

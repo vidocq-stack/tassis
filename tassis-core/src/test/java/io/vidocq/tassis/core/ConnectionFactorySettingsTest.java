@@ -156,6 +156,43 @@ class ConnectionFactorySettingsTest {
         assertThrows(IllegalArgumentException.class, () -> factory.withMaxListenerDeliveries(0));
     }
 
+    // ---- the settings of a pool ------------------------------------------------
+
+    @Test
+    void theSettingsOfAPoolAreKeysAndUrlParameters() {
+        TassisConnectionFactory byKeys = TassisConnectionFactory.from(Map.of("tassis.broker", broker,
+                "tassis.pool.enabled", "false", "tassis.pool.maxSize", "4", "tassis.pool.acquireTimeout", "PT2S",
+                "tassis.pool.idleTimeout", "PT1M", "tassis.pool.maxLifetime", "PT0S",
+                "tassis.pool.leakThreshold", "PT30S"));
+
+        String url = "tassis:vm:" + broker + "?pool.enabled=false&pool.maxSize=4&pool.acquireTimeout=PT2S"
+                + "&pool.idleTimeout=PT1M&pool.maxLifetime=PT0S&pool.leakThreshold=PT30S";
+        assertEquals(url, byKeys.toUrl());
+        assertEquals(url, TassisConnectionFactory.fromUrl(url).toUrl(), "toUrl gives a URL that fromUrl reads back");
+    }
+
+    @Test
+    void theDefaultsOfAPoolAreLeftOutOfTheUrl() {
+        TassisConnectionFactory defaults = TassisConnectionFactory.from(Map.of("tassis.broker", broker,
+                "tassis.pool.enabled", "true", "tassis.pool.maxSize", "10", "tassis.pool.acquireTimeout", "PT5S",
+                "tassis.pool.idleTimeout", "PT10M", "tassis.pool.maxLifetime", "PT30M",
+                "tassis.pool.leakThreshold", "PT0S"));
+
+        assertEquals("tassis:vm:" + broker, defaults.toUrl());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tassis.pool.maxSize=0", "tassis.pool.maxSize=many", "tassis.pool.enabled=yes",
+            "tassis.pool.acquireTimeout=PT0S", "tassis.pool.acquireTimeout=5", "tassis.pool.idleTimeout=-PT1S",
+            "tassis.pool.maxLifetime=soon", "tassis.pool.leakThreshold="})
+    void invalidSettingOfAPoolIsRejectedByName(String setting) {
+        String key = setting.substring(0, setting.indexOf('='));
+        IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                () -> TassisConnectionFactory.from(Map.of(key, setting.substring(key.length() + 1))));
+
+        assertTrue(rejected.getMessage().contains(key), rejected.getMessage());
+    }
+
     // ---- connection URL ----------------------------------------------------
 
     @Test

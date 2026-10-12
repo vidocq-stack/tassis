@@ -26,6 +26,7 @@ import io.vidocq.tassis.core.internal.client.Unchecked;
 import io.vidocq.tassis.core.internal.settings.Settings;
 import jakarta.jms.JMSException;
 import jakarta.jms.JMSRuntimeException;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Function;
 import javax.net.ssl.SSLContext;
@@ -70,6 +71,40 @@ public final class ConnectionSource {
     /** Whether the factory gives its connections a client identifier, so can only have one open. */
     public boolean assignsClientId() {
         return settings.clientId() != null;
+    }
+
+    /** Whether the broker is one of the network, where a connection is a socket. */
+    public boolean isRemote() {
+        return settings.server() != null;
+    }
+
+    /** Whether the settings let whoever builds the factories itself pool this one. */
+    public boolean poolEnabled() {
+        return settings.pool().enabled();
+    }
+
+    /** The settings of a pool, as the factory carries them: what a pool starts from. */
+    public int poolMaxSize() {
+        return settings.pool().maxSize();
+    }
+
+    public Duration poolAcquireTimeout() {
+        return settings.pool().acquireTimeout();
+    }
+
+    /** Zero for never. */
+    public Duration poolIdleTimeout() {
+        return settings.pool().idleTimeout();
+    }
+
+    /** Zero for never. */
+    public Duration poolMaxLifetime() {
+        return settings.pool().maxLifetime();
+    }
+
+    /** Zero for never. */
+    public Duration poolLeakThreshold() {
+        return settings.pool().leakThreshold();
     }
 
     /**

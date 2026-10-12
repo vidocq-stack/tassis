@@ -30,6 +30,8 @@ import io.vidocq.tassis.cdi.app.Factories;
 import io.vidocq.tassis.cdi.app.Orders;
 import io.vidocq.tassis.cdi.app.TwoDefaultFactories;
 import io.vidocq.tassis.core.TassisBroker;
+import io.vidocq.tassis.cdi.app.PooledFactory;
+import io.vidocq.tassis.pool.TassisConnectionPool;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.vauban.core.container.VaubanContainer;
 import jakarta.enterprise.context.ContextNotActiveException;
@@ -225,6 +227,25 @@ class JmsContextInjectionTest {
             assertEquals("default", received(broker + "-bean", "log"));
             assertEquals("audit", received(auditBroker + "-bean", "log"));
             assertNull(received(broker, "log"), "the settings were not used");
+        }
+    }
+
+    @Test
+    void aFactorySuppliedAsABeanMayBeAPool() {
+        try (TassisConnectionPool pool = TassisConnectionPool.over(new TassisConnectionFactory(broker)).build()) {
+            PooledFactory.pool = pool;
+            try (VaubanContainer container = container(Orders.class, PooledFactory.class)) {
+                Orders orders = container.select(Orders.class);
+
+                // §12.4.4: one context per request, closed with it; the connection under it stays
+                for (int request = 0; request < 3; request++) {
+                    container.requestContext().runInScope(
+                            () -> orders.context.createProducer().send(orders.context.createQueue("log"), "pooled"));
+                    assertEquals(1, pool.size());
+                    assertEquals(1, pool.idle(), "the request gave its connection back");
+                }
+            }
+            assertEquals("pooled", received(broker, "log"));
         }
     }
 

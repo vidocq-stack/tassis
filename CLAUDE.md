@@ -60,7 +60,7 @@ tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec, JMS messages as
                      the client transport (tassis:amqp://host)
 tassis-server      ← TassisServer: the listener that opens a broker to AMQP 1.0 clients
 tassis-pool        ← TassisConnectionPool: a connection factory that lends its connections (M11b)
-tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
+tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: three beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
 tassis-bench       ← Placeholder — JMH (M12)
 tassis-examples    ← The examples of the documentation, compiled and run by the build
@@ -202,8 +202,12 @@ equal keys share a context within a request. Rules:
 - **A request may run on several threads** (structured subtasks inherit its scope):
   `RequestContexts` guards its map with a lock, and its `@PreDestroy` logs instead of throwing.
 - **Factory resolution is in `RequestContexts.factory`**: a `ConnectionFactory` bean of the
-  application, else the settings read from the system properties. This is the only place where
-  Tassis reads system properties by itself.
+  application, else `SettingsFactories`, an application-scoped bean that builds each factory
+  once from the system properties. This is the only place where Tassis reads system
+  properties by itself.
+- **A factory of the settings that reaches a broker of the network is a pool**
+  (`TassisConnectionPool.suits`), closed with the application. Whether to pool is decided
+  there and nowhere else; a bean the application supplies is used as it is.
 - A change here is proven twice: `JmsContextInjectionTest`, and the module-path vehicle
   `tassis-cdi-vauban-module-it`, which must keep passing with nothing opened.
 
@@ -295,9 +299,17 @@ Rules:
   context, comes through the reader `TassisConnectionFactory` registers when it loads
   (`ConnectionSource.register`): no public method for it, no reflection. **A setting that is
   not in the URL of a factory is lost to its pool**: put new settings in `Settings`.
-- **One lock, one condition** in the pool. A link is opened and closed outside the lock, its
+- **One lock** in the pool, with a condition for the borrowers that wait (`changed`) and one
+  for the housekeeper (`tick`). A link is opened and closed outside the lock, its
   place counted first. The pool asks to be told of a loss (`onLost`) under the lock, when a
   link becomes idle: a borrower asks after it, and whoever asks last is told.
+- **One housekeeper thread per pool**, virtual, for everything that depends on time: idle
+  and lifetime eviction, the report of a connection not given back. It only ever removes
+  links that are idle, under the lock, and closes or logs outside it. Whatever changes a
+  deadline signals `tick`. The pool takes nothing back from a borrower.
+- **The settings of a pool are in `Settings.Pool`**, keys and URL parameters like the others;
+  the builder starts from them. No probe before lending, by decision: AMQP has no exchange
+  every broker answers.
 - The tests of `tassis-pool` run on the class path (they need the server, which the module
   does not require); the pool on the module path is proven by `tassis-examples`.
 

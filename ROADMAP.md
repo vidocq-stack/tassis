@@ -1075,14 +1075,39 @@ Choices and limits:
   Tassis.
 - **The TCK is not run through the pool.**
 
-#### M11b-2 — Lifetime, settings, injection
+#### M11b-2 — Lifetime, settings, injection ✅
 
-- [ ] **Lifetime**: idle eviction, a maximum lifetime, a minimum kept open, and a probe of a
-      connection before it is lent (today one that is gone and not yet known to be is lent once).
-- [ ] **Detection of a connection that is never given back.**
-- [ ] **Settings by key and by URL** (`tassis.pool.*`), in `Settings` like the others.
-- [ ] **CDI**: the contexts injected by `tassis-cdi-vauban` served from a pool.
-- [ ] Whether sessions are pooled too. To be decided by measurement (M12), not by default.
+- [x] **Lifetime**: `idleTimeout` (10 minutes) closes a connection nobody uses, `maxLifetime`
+      (30 minutes) one that is old, as soon as nobody uses it and never under a borrower. One
+      virtual thread per pool does it, and ends with the pool or with its last connection.
+- [x] **A connection that is never given back** is reported in the log after `leakThreshold`,
+      with the stack of the call that borrowed it. Off by default.
+- [x] **Settings by key and by URL**: `tassis.pool.maxSize`, `acquireTimeout`, `idleTimeout`,
+      `maxLifetime`, `leakThreshold`, in `Settings` like the others, durations as ISO-8601. A
+      pool starts from those of its factory, and its builder has the last word.
+- [x] **CDI**: a factory built from the settings is built once and kept by an
+      application-scoped bean; when it reaches a broker of the network it is a pool, closed with
+      the application. `tassis.pool.enabled=false` asks for none.
+
+**Deliverable:** `TassisConnectionPoolTest` (33 tests) and `NetworkPoolTest` (6),
+`ConnectionFactorySettingsTest` for the settings, `SettingsFactoriesTest` (6) and a test of a
+pool supplied as a bean in `tassis-cdi-vauban`, and on the module path
+`tassis-cdi-vauban-module-it`: five requests on a broker of the network, one connection per
+factory.
+
+Choices and limits:
+
+- **No probe before lending**, decided by the maintainer on 2026-10-12: AMQP 1.0 has no
+  exchange that every broker answers (Artemis ignores the echo of a `flow`). A closed socket
+  is seen at once, a silent peer by the heartbeats, and the lifetimes bound the rest. A
+  connection that is gone and not yet known to be is lent once.
+- **No minimum of connections kept open**: the pool cannot open one ahead without knowing as
+  whom.
+- **A leaked connection is reported, not taken back.**
+- **`tassis-cdi-vauban` now depends on `tassis-pool`.** The broker of the JVM is not pooled.
+- **The system properties of a factory are read once**, at its first use, where each request
+  read them before.
+- **Whether sessions are pooled too** stays open, to be decided by measurement (M12).
 
 ### M12 — Benchmarks
 

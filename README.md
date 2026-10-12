@@ -204,6 +204,15 @@ ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?cl
 | `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default) or, over TLS, `amqps://<host>[:<port>]` (port 5671), instead of the in-VM one; needs `tassis-amqp` |
 | `tassis.clientId` | `clientId` | none | The client identifier of the connections |
 | `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
+| `tassis.pool.enabled` | `pool.enabled` | `true` | Whether the CDI integration pools the connections of this factory to a broker of the network |
+| `tassis.pool.maxSize` | `pool.maxSize` | `10` | Connections a pool opens at most |
+| `tassis.pool.acquireTimeout` | `pool.acquireTimeout` | `PT5S` | How long a borrower waits when all are lent |
+| `tassis.pool.idleTimeout` | `pool.idleTimeout` | `PT10M` | How long a connection nobody uses is kept; `PT0S` for ever |
+| `tassis.pool.maxLifetime` | `pool.maxLifetime` | `PT30M` | How long a connection is kept at all; `PT0S` for ever |
+| `tassis.pool.leakThreshold` | `pool.leakThreshold` | `PT0S` | How long a connection may be lent before it is reported in the log; `PT0S` for never |
+
+The `tassis.pool.*` settings are those a `TassisConnectionPool` built over the factory starts
+from; a factory alone makes no use of them. Durations are written as ISO-8601 (`PT30S`, `PT10M`).
 
 Several factories can be defined by name, `tassis.factory.<name>.<key>`, and obtained with
 `TassisConnectionFactory.named(name, settings)`; a named factory inherits the settings that carry
@@ -282,6 +291,13 @@ try (TassisConnectionPool pool = TassisConnectionPool.over(factory).maxSize(8).b
 |---|---|---|
 | `maxSize(int)` | 10 | connections to the broker open at most, lent or not |
 | `acquireTimeout(Duration)` | 5 s | how long a borrower waits when all are lent, before a `ResourceAllocationException` |
+| `idleTimeout(Duration)` | 10 min | how long a connection nobody uses is kept |
+| `maxLifetime(Duration)` | 30 min | how long a connection is kept at all; never closed under a borrower |
+| `leakThreshold(Duration)` | never | how long a connection may be lent before it is reported in the log |
+
+The same settings are keys (`tassis.pool.maxSize`) and URL parameters (`pool.maxSize`) of the
+factory the pool is built over. Contexts injected with CDI come from a pool when their factory
+reaches a broker of the network.
 
 A borrower finds a connection as a factory gives it: stopped, with nothing of the one before.
 A connection given a client identifier (`setClientID`) is not kept: closing it really closes

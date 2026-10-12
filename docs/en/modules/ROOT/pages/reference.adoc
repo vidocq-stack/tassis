@@ -225,8 +225,20 @@ In the module `tassis-pool`, package `io.vidocq.tassis.pool`. A `ConnectionFacto
 | `acquireTimeout(Duration)` (on the builder)
 | How long a borrower waits when every connection is lent: `TassisConnectionPool.DEFAULT_ACQUIRE_TIMEOUT` (5 s) by default. Throws `IllegalArgumentException` if zero or negative.
 
+| `idleTimeout(Duration)` (on the builder)
+| How long a connection nobody uses is kept: `TassisConnectionPool.DEFAULT_IDLE_TIMEOUT` (10 min) by default, zero for as long as the pool lasts. Throws `IllegalArgumentException` if negative.
+
+| `maxLifetime(Duration)` (on the builder)
+| How long a connection is kept at all: `TassisConnectionPool.DEFAULT_MAX_LIFETIME` (30 min) by default, zero for as long as the pool lasts. Past that age a connection is closed as soon as nobody uses it. Throws `IllegalArgumentException` if negative.
+
+| `leakThreshold(Duration)` (on the builder)
+| How long a connection may be lent before it is reported in the log: never by default. Throws `IllegalArgumentException` if negative.
+
 | `build()` (on the builder)
 | Returns the pool. No connection is opened yet.
+
+| `TassisConnectionPool.suits(TassisConnectionFactory)`
+| Whether the connections of that factory are worth a pool and can have one: it reaches a broker of the network, assigns no client identifier, and its settings do not say `tassis.pool.enabled=false`. What the CDI integration asks.
 
 | `createConnection(...)`, `createQueueConnection(...)`, `createTopicConnection(...)`
 | Lend a connection; `close()` on it gives it back. Throw `ResourceAllocationException` when none comes back in time, `IllegalStateException` once the pool is closed, and what a factory throws when the broker refuses or cannot be reached.
@@ -244,7 +256,7 @@ In the module `tassis-pool`, package `io.vidocq.tassis.pool`. A `ConnectionFacto
 | Closes the connections nobody is using, makes the borrowers that wait fail and lends nothing any more. A connection that is lent stays usable and is closed when it is given back.
 |===
 
-The settings of a pool are given in code only: keys and URL parameters come with milestone M11b-2.
+The builder starts from the settings `tassis.pool.*` of the factory (see <<configuration>>), and has the last word.
 
 [#tassis-broker]
 == `TassisBroker`
@@ -331,7 +343,39 @@ A connection factory is configured in code, by settings, or by a connection URL.
 | `listener.maxDeliveries`
 | `10`
 | How many times a message is delivered to a listener that keeps failing, in an automatically acknowledged session, before the message is dropped. At least 1.
+
+| `tassis.pool.enabled`
+| `pool.enabled`
+| `true`
+| Whether the CDI integration pools the connections of this factory when it reaches a broker of the network. `true` or `false`.
+
+| `tassis.pool.maxSize`
+| `pool.maxSize`
+| `10`
+| How many connections to the broker a pool opens at most. At least 1.
+
+| `tassis.pool.acquireTimeout`
+| `pool.acquireTimeout`
+| `PT5S`
+| How long a borrower waits when every connection is lent. More than zero.
+
+| `tassis.pool.idleTimeout`
+| `pool.idleTimeout`
+| `PT10M`
+| How long a connection nobody uses is kept. `PT0S` for as long as the pool lasts.
+
+| `tassis.pool.maxLifetime`
+| `pool.maxLifetime`
+| `PT30M`
+| How long a connection is kept at all. `PT0S` for as long as the pool lasts.
+
+| `tassis.pool.leakThreshold`
+| `pool.leakThreshold`
+| `PT0S`
+| How long a connection may be lent before it is reported in the log. `PT0S` for never.
 |===
+
+The settings `tassis.pool.*` are what a <<tassis-pool,`TassisConnectionPool`>> built over the factory starts from: a factory carries them and makes no use of them itself. Their durations are written as ISO-8601 says: `PT30S`, `PT10M`, `PT1H30M`.
 
 === Settings by key
 
@@ -343,7 +387,7 @@ A connection factory is configured in code, by settings, or by a connection URL.
 
 === Connection URL
 
-`tassis:vm:<broker>[?clientId=...&listener.maxDeliveries=...]` or `tassis:amqp://<host>[:<port>][?clientId=...&listener.maxDeliveries=...]` (`amqps` for TLS)
+`tassis:vm:<broker>[?<parameter>=<value>&...]` or `tassis:amqp://<host>[:<port>][?<parameter>=<value>&...]` (`amqps` for TLS), where a parameter is any key of the table but the first three, without `tassis.`: `clientId`, `listener.maxDeliveries`, `pool.maxSize`
 
 * What follows `tassis:` is the transport: `vm`, the broker of this JVM, or `amqp`, a broker of the network, `amqps` when the connection is encrypted. Another transport is rejected.
 * Values are percent-encoded.
@@ -428,17 +472,14 @@ Distributed transactions will not go through the network: AMQP 1.0 leaves them u
 
 A message a network client rejects, or declares undeliverable to itself, is dropped: there is no dead-letter queue.
 
-=== The connection pool is plain
+=== What the connection pool does not do
 
-`TassisConnectionPool` lends connections and bounds their number: see xref:usage.adoc#pool[Pooling the connections]. What it does not do:
+`TassisConnectionPool` lends connections, bounds their number and their age: see xref:usage.adoc#pool[Pooling the connections]. What it does not do:
 
-* **It never closes a connection because it is old or idle.** A connection stays open until it is lost, the pool is closed, or its place is needed for another user.
-* **It does not probe a connection before lending it.** A connection that is gone and not yet known to be is lent once.
-* **It does not detect a connection that is never given back.**
-* **It is configured in code only**, and the contexts injected with CDI do not come from it.
-* **Sessions are not pooled.**
-
-The first four are milestone M11b-2; the last waits for the measurements of M12.
+* **It does not probe a connection before lending it.** A connection that is gone and not yet known to be is lent once: AMQP has no exchange every broker answers that would tell.
+* **It keeps no minimum of connections open**, and opens none ahead of need: it cannot know as whom.
+* **It does not take back a connection that is never given back**: it reports it, if asked to.
+* **Sessions are not pooled.** Whether they should be waits for the measurements of M12.
 
 === A message is dropped after 10 failed deliveries to a listener
 

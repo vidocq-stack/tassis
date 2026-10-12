@@ -178,11 +178,12 @@ A context creates its session on first need, not in its constructor, so that `se
 [#injection]
 == Injection of `JMSContext`
 
-`tassis-cdi-vauban` holds four classes in a package that is not exported, and `TassisCdi`, which names the two beans for a container built by hand.
+`tassis-cdi-vauban` holds five classes in a package that is not exported, and `TassisCdi`, which names the three beans for a container built by hand.
 
 * `JmsContextProducer` produces what `@Inject JMSContext` receives. The three Messaging annotations are not CDI qualifiers, so one producer serves every injection point and reads them from its `InjectionPoint` into a `ContextKey`.
 * What it produces is an `InjectedJMSContext`: a facade with no state of its own, which refuses the methods of §12.4.5 and delegates the others to the context that `RequestContexts` gives for its key **at each call**.
 * `RequestContexts` is request scoped. The facade holds its client proxy, so the same injected object reaches the contexts of whichever request is in progress. It creates a context on first use, under a lock, as the subtasks of a request share its scope; it closes them all in its `@PreDestroy`, logging a close that fails so that the others are still closed.
+* `SettingsFactories` is application scoped: the factories the settings describe, each built once from the system properties and kept. One that reaches a broker of the network is a `TassisConnectionPool` (`TassisConnectionPool.suits` decides), closed in its `@PreDestroy`. It is asked only when the application supplies no `ConnectionFactory` bean for the name.
 
 Nothing is reflective. Vauban's annotation processor generates, in the package of the beans, a `VaubanComponentProvider` that instantiates and injects them from inside the module, and the module descriptor declares it. That is why the package is neither exported nor opened. CDI and Vauban are `requires static`: the application that injects has them on its module path through Vauban, and the module asks nothing of an application that does not.
 
@@ -318,7 +319,9 @@ The closing of such a connection is `TassisConnection.recycle()`. It does what `
 
 The pool module sees `tassis-core` through one internal package, `internal.pool`, exported to it alone: `ConnectionSource` (what a factory connects with), `PhysicalConnection` (a kept link, and the connections and contexts made over it) and `Recycler`. Their signatures name types of Jakarta Messaging and of the JDK only. The pool reads a factory by its connection URL, which says all of its settings but one: the TLS context, which is no string. A `TassisConnectionFactory` registers a reader of it with `ConnectionSource` when the class loads, which gives the pool what it needs with no public method and no reflection.
 
-`TassisConnectionPool` itself is one lock and one condition over a count of open links and the idle ones, kept by credentials. A borrower takes an idle link opened with its credentials, or takes a place and opens one once out of the lock, or has an idle link of another user closed to take its place, or waits. A link that becomes idle has the pool ask to be told of its loss, under the lock: the next borrower asks in its turn, after, and a link tells whoever asked last.
+`TassisConnectionPool` itself is one lock over a count of open links and the idle ones, kept by credentials. A borrower takes an idle link opened with its credentials, or takes a place and opens one once out of the lock, or has an idle link of another user closed to take its place, or waits. A link that becomes idle has the pool ask to be told of its loss, under the lock: the next borrower asks in its turn, after, and a link tells whoever asked last.
+
+One virtual thread per pool, the housekeeper, closes the idle links kept longer than `idleTimeout` or older than `maxLifetime`, and reports the links lent for longer than `leakThreshold`. It sleeps on a second condition of the same lock until the next of them is due, is woken when a link changes hands, and ends when the pool is closed or has no link left; the next link opened starts another. A link past its lifetime that is lent is left alone, and closed when it comes back. The settings are those of `Settings.Pool`, which the builder of the pool starts from.
 
 `TassisConnectionPoolTest` runs the pool on the broker of the JVM; `NetworkPoolTest` through a socket and a relay that counts the connections and cuts them. Both run on the class path, since the module of the pool requires neither the transport nor the server; `tassis-examples` runs the pool on the module path.
 

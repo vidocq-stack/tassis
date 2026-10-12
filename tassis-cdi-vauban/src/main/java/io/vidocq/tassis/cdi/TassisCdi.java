@@ -21,6 +21,7 @@ package io.vidocq.tassis.cdi;
 
 import io.vidocq.tassis.cdi.internal.JmsContextProducer;
 import io.vidocq.tassis.cdi.internal.RequestContexts;
+import io.vidocq.tassis.cdi.internal.SettingsFactories;
 import java.util.List;
 
 /** The CDI integration of Tassis: the injection of {@code JMSContext} (Jakarta Messaging 3.1 §12.4). */
@@ -30,7 +31,7 @@ public final class TassisCdi {
      * The beans of this integration, for a container that is given its bean classes one by one
      * instead of discovering them.
      */
-    public static final List<Class<?>> BEANS = List.of(JmsContextProducer.class, RequestContexts.class);
+    public static final List<Class<?>> BEANS = List.of(JmsContextProducer.class, RequestContexts.class, SettingsFactories.class);
 
     private TassisCdi() {
     }
