@@ -154,11 +154,11 @@ A session records which thread is currently inside one of its message listeners 
 
 The only order in which they are taken is: **`listeners`, then `work`, then the broker lock**. Nothing that runs under the broker lock may take a session lock or call application code.
 
-Whatever delivery depends on is state of the broker, changed by a `BrokerConnection` request that signals the condition every waiting receive listens to. The client keeps no such state of its own: a consumer's `listener` and `dispatcher` fields only say what the client does with a message once it has it.
+Whatever delivery depends on is state of the broker, changed by a `BrokerConnection` request. A receive that waits does so on a condition of its queue or of its subscription, and a request signals the condition of what it changes and no other: a message that arrives or comes back wakes the receives of its queue; a consumer that closes or whose listener changes, those of that consumer's queue; a connection that starts, those of its consumers. What happens to another queue wakes nobody. The client keeps no such state of its own: a consumer's `listener` and `dispatcher` fields only say what the client does with a message once it has it.
 
 Two other locks exist beside these three: `TassisContext.lifecycle`, which guards the lazily created session of a context and is never held while waiting for a callback to return, and `TassisConnection.identity`, which serialises the calls to `setClientID`.
 
-One broker lock is the simplest design that honours `stop()` and `close()`. Its known costs: every state change wakes every waiting receive of the broker, and a receive without a view scans past the messages that are delayed. Whether the lock must be split is left to the benchmarks of milestone M12.
+One broker lock is the simplest design that honours `stop()` and `close()`. The benchmarks of milestone M12 settled that it is not split: see xref:performance.adoc[Performance]. Its known costs: more threads do not get more out of a broker, a message wakes every receive that waits on its queue where one could take it, and a receive without a view scans past the messages that are delayed (milestone M12-4).
 
 == `close()` versus `shut()`
 

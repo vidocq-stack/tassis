@@ -57,8 +57,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * is in a {@link LocalConnection}.
  *
  * <p>All broker state, that of its connections included (started, consumers, unsettled
- * deliveries), is guarded by one lock. Whatever changes that state signals {@link #changed},
- * which is the only thing a waiting receive listens to.
+ * deliveries), is guarded by one lock. A receive that waits does so on the condition of its
+ * queue or subscription ({@link Storage#changed}), and whatever changes what it waits for
+ * signals that condition and no other: a message that arrives or comes back
+ * ({@link Storage#add}), its consumer closing or its listener changing, its connection
+ * starting. What happens to another queue wakes nobody here (ROADMAP M12-2).
  */
 public final class Broker {
 
@@ -144,6 +147,9 @@ public final class Broker {
     /** The messages waiting for the consumers of one queue or of one subscription. */
     private static final class Storage {
 
+        // What the receives of its consumers wait on, and whoever waits for one of them to end.
+        // A condition of the broker lock.
+        final Condition changed;
         final TreeSet<Stored> messages = new TreeSet<>(Stored.DELIVERY_ORDER);
         // One view per selector in use by the queue's consumers: see View.
         final Map<Selector, View> views = new HashMap<>();
@@ -152,6 +158,10 @@ public final class Broker {
         boolean deleted;
         // The earliest expiration among the messages, or Long.MAX_VALUE: when to sweep next.
         long nextExpiration = Long.MAX_VALUE;
+
+        Storage(Condition changed) {
+            this.changed = changed;
+        }
 
         /**
          * Removes the messages that have expired (§3.4.9). Done on the whole storage, since a
@@ -186,6 +196,10 @@ public final class Broker {
                     view.messages.add(stored);
                 }
             });
+            // All of them, not one: the first to wake may not be able to take it (its selector,
+            // its connection stopped, its listener gone), or be no receive at all but whoever
+            // waits for one to end (detach).
+            changed.signalAll();
         }
 
         void remove(Stored stored) {
@@ -246,9 +260,10 @@ public final class Broker {
         final String clientId;
         // Who subscribed, to be compared with who publishes (§8.3.1).
         final Object subscriber;
-        final Storage storage = new Storage();
+        final Storage storage;
 
-        Subscription(Subscribing request, LocalConnection connection) {
+        Subscription(Subscribing request, LocalConnection connection, Condition changed) {
+            this.storage = new Storage(changed);
             this.request = request;
             this.clientId = request.global() ? null : connection.clientId;
             this.subscriber = connection.identity();
@@ -261,7 +276,6 @@ public final class Broker {
 
     private final String name;
     private final ReentrantLock lock = new ReentrantLock();
-    private final Condition changed = lock.newCondition();
     private final Map<String, Storage> queues = new HashMap<>();
     private final Set<String> temporaryQueues = new HashSet<>();
     private final Set<String> temporaryTopics = new HashSet<>();
@@ -273,6 +287,10 @@ public final class Broker {
     private final AtomicLong messageIds = new AtomicLong();
     private final AtomicLong temporaryIds = new AtomicLong();
     private long sequence;
+    // How many times a receive came back from waiting, for a message or for nothing.
+    private long awakenings;
+    // How many receives are waiting right now.
+    private int waiting;
     private final Users users;
 
     private Broker(String name) {
@@ -305,6 +323,13 @@ public final class Broker {
         // Before anything is kept for the client: a rejected one leaves no trace.
         users.check(userName, password);
         return new LocalConnection(this);
+    }
+
+    /** Wakes the receives of the connection's consumers, for what changed for all of them. Under the lock. */
+    private static void wake(LocalConnection connection) {
+        for (Consumer consumer : connection.consumers) {
+            consumer.storage.changed.signalAll();
+        }
     }
 
     String nextMessageId() {
@@ -343,7 +368,7 @@ public final class Broker {
                 return false;
             }
             connection.started = true;
-            changed.signalAll();
+            wake(connection);
             return true;
         } finally {
             lock.unlock();
@@ -373,7 +398,7 @@ public final class Broker {
             }
             connection.closed = true;
             connection.started = false;
-            changed.signalAll();
+            // Each detach wakes the receives of its consumer; what is given back, those of its queue.
             for (Consumer consumer : List.copyOf(connection.consumers)) {
                 detach(consumer);
             }
@@ -390,7 +415,6 @@ public final class Broker {
             if (connection.clientId != null) {
                 clientIds.remove(connection.clientId);
             }
-            changed.signalAll();
         } finally {
             lock.unlock();
         }
@@ -488,7 +512,6 @@ public final class Broker {
         for (Subscription subscription : List.copyOf(subscriptionsByTopic.getOrDefault(topic, List.of()))) {
             remove(subscription);
         }
-        changed.signalAll();
     }
 
     // ---- sending ---------------------------------------------------------
@@ -528,7 +551,6 @@ public final class Broker {
             for (BrokerConnection.Delivery delivery : consumed) {
                 connection.unsettled.remove(delivery);
             }
-            changed.signalAll();
         } finally {
             lock.unlock();
         }
@@ -573,7 +595,6 @@ public final class Broker {
                 Delivery delivery = (Delivery) returned;
                 delivery.stored.deliveryCount--;
                 giveBack(delivery);
-                changed.signalAll();
             }
         } finally {
             lock.unlock();
@@ -592,13 +613,15 @@ public final class Broker {
                     giveBack((Delivery) delivery);
                 }
             }
-            changed.signalAll();
         } finally {
             lock.unlock();
         }
     }
 
-    /** Returns a message to the place its sequence number gives it. Under the lock. */
+    /**
+     * Returns a message to the place its sequence number gives it, which wakes whoever waits for
+     * one there. Under the lock.
+     */
     private static void giveBack(Delivery delivery) {
         Storage storage = delivery.stored.storage;
         if (!storage.deleted) {
@@ -687,7 +710,7 @@ public final class Broker {
     }
 
     private Subscription add(LocalConnection connection, Subscribing request) {
-        Subscription subscription = new Subscription(request, connection);
+        Subscription subscription = new Subscription(request, connection, lock.newCondition());
         subscriptionsByTopic.computeIfAbsent(request.topic(), topic -> new ArrayList<>()).add(subscription);
         if (request.name() != null) {
             namedSubscriptions.put(nameOf(subscription.clientId, request), subscription);
@@ -752,9 +775,9 @@ public final class Broker {
         lock.lock();
         try {
             consumer.closed = true;
-            changed.signalAll();
+            consumer.storage.changed.signalAll();
             while (consumer.receiving > 0) {
-                changed.awaitUninterruptibly();
+                consumer.storage.changed.awaitUninterruptibly();
             }
             if (!consumer.detached) {
                 consumer.detached = true;
@@ -781,9 +804,10 @@ public final class Broker {
         try {
             if (consumer.listening && !listening) {
                 consumer.period++;
+                // The one change of it a take waits for: it only ever waits while listening.
+                consumer.storage.changed.signalAll();
             }
             consumer.listening = listening;
-            changed.signalAll();
             return consumer.period;
         } finally {
             lock.unlock();
@@ -856,11 +880,17 @@ public final class Broker {
                 if (nextDeliveryTime != Long.MAX_VALUE) {
                     wait = Math.min(wait, TimeUnit.MILLISECONDS.toNanos(nextDeliveryTime - now));
                 }
-                if (wait == FOREVER) {
-                    changed.await();
-                } else {
-                    changed.awaitNanos(wait);
+                waiting++;
+                try {
+                    if (wait == FOREVER) {
+                        consumer.storage.changed.await();
+                    } else {
+                        consumer.storage.changed.awaitNanos(wait);
+                    }
+                } finally {
+                    waiting--;
                 }
+                awakenings++;
             }
             return null;
         } catch (InterruptedException e) {
@@ -868,7 +898,10 @@ public final class Broker {
             throw new JMSException("interrupted while waiting for a message");
         } finally {
             consumer.receiving--;
-            changed.signalAll();
+            if (consumer.closed) {
+                // Whoever closes the consumer waits for this (detach), and nobody else does.
+                consumer.storage.changed.signalAll();
+            }
             lock.unlock();
         }
     }
@@ -897,6 +930,29 @@ public final class Broker {
                 }
             }
             return messages;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Returns how many times a receive stopped waiting, to take a message or to find that it
+     * had been woken for nothing: what tells a wake-up nobody needed.
+     */
+    long awakenings() {
+        lock.lock();
+        try {
+            return awakenings;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Returns how many receives are waiting for a message at this moment. */
+    int waiting() {
+        lock.lock();
+        try {
+            return waiting;
         } finally {
             lock.unlock();
         }
@@ -956,7 +1012,7 @@ public final class Broker {
     }
 
     private Storage storageOf(String queue) {
-        return queues.computeIfAbsent(queue, created -> new Storage());
+        return queues.computeIfAbsent(queue, created -> new Storage(lock.newCondition()));
     }
 
     private static boolean isExpired(TassisMessage message, long now) {

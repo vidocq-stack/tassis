@@ -23,6 +23,126 @@ which question it answers, and `Rig` who is behind the name of a provider.
 
 ---
 
+## BENCH-20261012-04 — A receive that waits is woken for its own queue only (M12-2)
+
+- **Date**: 2026-10-12
+- **Commit**: the commit of M12-2 (branch `feat/m12-2-waiting-receive`)
+- **JVM**: Temurin 25+36-LTS, default flags
+- **Hardware**: AMD Ryzen 7 5800X (8 cores, 16 threads), 16 GB given to WSL2
+- **OS**: Ubuntu 20.04.6 LTS under WSL2, Linux 5.15.167.4
+- **Exact command** (52 min):
+  ```bash
+  ./mvnw -ntp -Pbench -pl tassis-bench -am verify        # Maven 3.9.16
+  java -jar tassis-bench/target/benchmarks.jar 'IdleWaitersBench|ContentionBench|RoundTripBench|BacklogBench|ListenerBench|SessionBench' \
+      -p provider=tassis-vm,tassis-amqp,qpid-tassis -prof gc -rf json
+  ```
+  The broker is what changed, so what runs on a Tassis broker is run again, in the JVM and
+  behind the server. `-p provider` gives the three providers to every benchmark, including
+  three that declare only those of the JVM (`IdleWaitersBench`, `ContentionBench`,
+  `BacklogBench`): their lines for the network are new, not a comparison. Four cases are
+  missing because they cannot run: Qpid JMS on the shared queue of `ContentionBench` with two
+  threads or more, where a consumer that fetches ahead holds the messages another waits for
+  (the reason Artemis fetches nothing ahead in that benchmark).
+- **Results**:
+  ```
+  Benchmark                    (provider)  (waiters)   Mode  Cnt        Score         Error  Units  Alloc
+  IdleWaitersBench.roundTrip    tassis-vm          0  thrpt   10  3275181.056   ± 61734.462  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip    tassis-vm        100  thrpt   10  3185254.641  ± 111555.960  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip    tassis-vm       1000  thrpt   10  3187795.533   ± 76151.743  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip  tassis-amqp          0  thrpt   10     2784.106     ± 151.198  ops/s  37761  B/op
+  IdleWaitersBench.roundTrip  tassis-amqp        100  thrpt   10     2752.541     ± 125.777  ops/s  37758  B/op
+  IdleWaitersBench.roundTrip  tassis-amqp       1000  thrpt   10     2695.678      ± 89.272  ops/s  41006  B/op
+  IdleWaitersBench.roundTrip  qpid-tassis          0  thrpt   10     4835.625     ± 117.666  ops/s  22656  B/op
+  IdleWaitersBench.roundTrip  qpid-tassis        100  thrpt   10     4831.611     ± 115.509  ops/s  22552  B/op
+  IdleWaitersBench.roundTrip  qpid-tassis       1000  thrpt   10     4730.168      ± 95.469  ops/s  22684  B/op
+
+  Benchmark                   (provider)  (queues)   Mode  Cnt        Score        Error  Units  Alloc
+  ContentionBench.threads01    tassis-vm       own  thrpt   10  3184206.250  ± 90227.285  ops/s   2096  B/op
+  ContentionBench.threads01    tassis-vm    shared  thrpt   10  3289585.646  ± 65765.980  ops/s   2096  B/op
+  ContentionBench.threads01  tassis-amqp       own  thrpt   10     2705.397    ± 131.830  ops/s  38111  B/op
+  ContentionBench.threads01  tassis-amqp    shared  thrpt   10     2706.762    ± 120.463  ops/s  38080  B/op
+  ContentionBench.threads01  qpid-tassis       own  thrpt   10     4531.213    ± 178.221  ops/s  22843  B/op
+  ContentionBench.threads01  qpid-tassis    shared  thrpt   10     4493.612    ± 258.528  ops/s  22824  B/op
+  ContentionBench.threads02    tassis-vm       own  thrpt   10  1962335.750  ± 36430.101  ops/s   2111  B/op
+  ContentionBench.threads02    tassis-vm    shared  thrpt   10  1960900.126  ± 77981.198  ops/s   2109  B/op
+  ContentionBench.threads02  tassis-amqp       own  thrpt   10     5509.786    ± 189.783  ops/s  38075  B/op
+  ContentionBench.threads02  tassis-amqp    shared  thrpt   10     5538.143    ± 254.422  ops/s  38080  B/op
+  ContentionBench.threads02  qpid-tassis       own  thrpt   10     9362.783    ± 204.359  ops/s  22902  B/op
+  ContentionBench.threads04    tassis-vm       own  thrpt   10  1535364.681  ± 79456.130  ops/s   2097  B/op
+  ContentionBench.threads04    tassis-vm    shared  thrpt   10  1364411.656  ± 55432.545  ops/s   2105  B/op
+  ContentionBench.threads04  tassis-amqp       own  thrpt   10    11952.139    ± 308.497  ops/s  38122  B/op
+  ContentionBench.threads04  tassis-amqp    shared  thrpt   10    11800.498    ± 432.416  ops/s  38138  B/op
+  ContentionBench.threads04  qpid-tassis       own  thrpt   10    18085.264    ± 226.948  ops/s  23061  B/op
+  ContentionBench.threads08    tassis-vm       own  thrpt   10  1465232.408  ± 38118.459  ops/s   2097  B/op
+  ContentionBench.threads08    tassis-vm    shared  thrpt   10  1322928.878  ± 39312.279  ops/s   2097  B/op
+  ContentionBench.threads08  tassis-amqp       own  thrpt   10    24166.050    ± 825.973  ops/s  38060  B/op
+  ContentionBench.threads08  tassis-amqp    shared  thrpt   10    23903.031    ± 860.236  ops/s  38132  B/op
+  ContentionBench.threads08  qpid-tassis       own  thrpt   10    32696.825   ± 2246.295  ops/s  22938  B/op
+  ContentionBench.threads16    tassis-vm       own  thrpt   10  1499493.841  ± 32631.820  ops/s   2097  B/op
+  ContentionBench.threads16    tassis-vm    shared  thrpt   10  1239066.842  ± 30827.983  ops/s   2098  B/op
+  ContentionBench.threads16  tassis-amqp       own  thrpt   10    42787.603   ± 1609.237  ops/s  37984  B/op
+  ContentionBench.threads16  tassis-amqp    shared  thrpt   10    41904.525   ± 2209.159  ops/s  38007  B/op
+  ContentionBench.threads16  qpid-tassis       own  thrpt   10    54269.071   ± 1907.959  ops/s  22939  B/op
+
+  Benchmark                  (provider)  (size)   Mode  Cnt        Score        Error  Units   Alloc
+  RoundTripBench.roundTrip    tassis-vm     100  thrpt   10  3332394.169  ± 62264.908  ops/s    2112  B/op
+  RoundTripBench.roundTrip    tassis-vm   10000  thrpt   10   170170.165   ± 1158.038  ops/s   61488  B/op
+  RoundTripBench.roundTrip  tassis-amqp     100  thrpt   10     2783.996    ± 146.170  ops/s   38081  B/op
+  RoundTripBench.roundTrip  tassis-amqp   10000  thrpt   10     2399.270    ± 100.746  ops/s  552831  B/op
+  RoundTripBench.roundTrip  qpid-tassis     100  thrpt   10     4726.682    ± 153.655  ops/s   22845  B/op
+  RoundTripBench.roundTrip  qpid-tassis   10000  thrpt   10     4336.141     ± 96.806  ops/s  322918  B/op
+
+  Benchmark               (delayed)   (provider)   Mode  Cnt        Score        Error  Units  Alloc
+  BacklogBench.roundTrip          0    tassis-vm  thrpt   10  3166652.867  ± 97027.208  ops/s   2112  B/op
+  BacklogBench.roundTrip          0  tassis-amqp  thrpt   10     2604.978    ± 134.471  ops/s  37893  B/op
+  BacklogBench.roundTrip          0  qpid-tassis  thrpt   10     4437.045    ± 169.735  ops/s  22727  B/op
+  BacklogBench.roundTrip       1000    tassis-vm  thrpt   10   188087.508   ± 4555.549  ops/s   2224  B/op
+  BacklogBench.roundTrip       1000  tassis-amqp  thrpt   10     2419.389    ± 138.154  ops/s  38781  B/op
+  BacklogBench.roundTrip       1000  qpid-tassis  thrpt   10     4083.736    ± 222.315  ops/s  23400  B/op
+  BacklogBench.roundTrip      10000    tassis-vm  thrpt   10    10808.972    ± 220.862  ops/s   2259  B/op
+  BacklogBench.roundTrip      10000  tassis-amqp  thrpt   10     1976.274    ± 153.178  ops/s  38795  B/op
+  BacklogBench.roundTrip      10000  qpid-tassis  thrpt   10     2807.610    ± 108.130  ops/s  23424  B/op
+
+  Benchmark                  (mode)   (provider)   Mode  Cnt       Score        Error  Units  Alloc
+  ListenerBench.deliver        auto    tassis-vm  thrpt   10  506339.246  ± 52763.530  ops/s   2160  B/op
+  ListenerBench.deliver        auto  tassis-amqp  thrpt   10    5956.432     ± 69.499  ops/s  37766  B/op
+  ListenerBench.deliver        auto  qpid-tassis  thrpt   10   36469.995   ± 1641.211  ops/s  22513  B/op
+  ListenerBench.deliver     dups-ok    tassis-vm  thrpt   10  494759.597  ± 65504.412  ops/s   2161  B/op
+  ListenerBench.deliver     dups-ok  tassis-amqp  thrpt   10    5929.206    ± 156.336  ops/s  37717  B/op
+  ListenerBench.deliver     dups-ok  qpid-tassis  thrpt   10   37403.247   ± 1385.745  ops/s  22709  B/op
+  ListenerBench.deliver  transacted    tassis-vm  thrpt   10  441015.599  ± 42571.757  ops/s   2356  B/op
+  ListenerBench.deliver  transacted  tassis-amqp  thrpt   10    5956.092    ± 127.245  ops/s  37749  B/op
+  ListenerBench.deliver  transacted  qpid-tassis  thrpt   10    4818.702    ± 103.582  ops/s  30951  B/op
+
+  Benchmark                          (provider)   Mode  Cnt        Score        Error  Units  Alloc
+  SessionBench.sessionPerRoundTrip    tassis-vm  thrpt   10  1949834.948  ± 63802.247  ops/s   2704  B/op
+  SessionBench.sessionPerRoundTrip  tassis-amqp  thrpt   10     1323.058     ± 54.706  ops/s  51779  B/op
+  SessionBench.sessionPerRoundTrip  qpid-tassis  thrpt   10      706.336     ± 56.612  ops/s  71619  B/op
+  ```
+- **Comparison with the previous run** (BENCH-20261012-03), in round trips a second:
+
+  | Benchmark | before | after | |
+  |---|---|---|---|
+  | `IdleWaitersBench`, in the JVM, nobody waiting | 3 282 000 | 3 275 000 | within the error |
+  | `IdleWaitersBench`, in the JVM, 100 waiting | 218 000 | 3 185 000 | **14.6× faster** |
+  | `IdleWaitersBench`, in the JVM, 1 000 waiting | 18 200 | 3 188 000 | **175× faster** |
+  | `RoundTripBench`, in the JVM, 100 bytes | 3 294 000 | 3 332 000 | within the error |
+  | `ContentionBench`, in the JVM, 16 threads, own queues | 1 463 000 | 1 499 000 | within the error |
+  | `ContentionBench`, in the JVM, 16 threads, shared queue | 1 242 000 | 1 239 000 | within the error |
+  | `RoundTripBench`, Qpid JMS → Tassis server | 4 748 | 4 727 | within the error |
+  | `ListenerBench`, Qpid JMS → Tassis server, automatic | 37 887 | 36 470 | within the error |
+
+  Consumers that wait on other queues no longer cost anything: the throughput is the same
+  with a thousand of them as with none. Nothing else moved, in the JVM or behind the server,
+  `ContentionBench` included: several threads on one lock were not held back by the wake-ups,
+  but by the lock.
+
+  One line reads lower than before and is not: `ListenerBench`, in the JVM, transacted, 441 000
+  messages a second for 518 000. Run again alone, one version after the other, twice
+  (`ListenerBench -p provider=tassis-vm -p mode=transacted`): 477 000 ± 120 000 and
+  511 000 ± 63 000 before, 482 000 ± 17 000 and 520 000 ± 69 000 after. That benchmark is
+  noisy on this machine, and the two versions do the same.
+
 ## BENCH-20261012-03 — The first campaign: every benchmark, every provider
 
 - **Date**: 2026-10-12

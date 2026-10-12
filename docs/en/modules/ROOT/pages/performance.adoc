@@ -4,7 +4,7 @@
 [.lead]
 Tassis is measured with JMH, alone and beside Apache ActiveMQ Artemis and Apache Qpid JMS. In the JVM a client sends and receives 3.3 million messages a second. Through the network the server holds its place beside Artemis, and the client is slower than it should be: it asks for one message at a time.
 
-The source of this page is `BENCH.md` at the root of the repository, which holds the machine, the exact command and the raw results of each run. Every figure here comes from its entry BENCH-20261012-03. If the two differ, `BENCH.md` is right.
+The source of this page is `BENCH.md` at the root of the repository, which holds the machine, the exact command and the raw results of each run. Every figure here comes from its entry BENCH-20261012-03, unless another is named. If the two differ, `BENCH.md` is right.
 
 [IMPORTANT]
 ====
@@ -70,23 +70,7 @@ A Tassis broker has one lock, and it shows: more clients do not get more out of 
 
 == Where Tassis is slow today
 
-Three things the benchmarks were written to look at, and found. Each has its milestone in the roadmap.
-
-[#waiting]
-=== Consumers that wait slow the broker down
-
-A consumer that waits in `receive` is woken by every change of its broker, whatever the queue, and looks at its own queue again.
-
-[cols="1,1,1"]
-|===
-| Consumers waiting on other queues | Tassis, in the JVM | Artemis, in the JVM
-
-| 0 | 3 282 000 | 10 800
-| 100 | 218 000 | 10 700
-| 1 000 | 18 200 | 10 400
-|===
-
-An application with many consumers that wait at once, on a broker of the JVM, pays for it today. Planned: milestone M12-2.
+Two things the benchmarks were written to look at, and found. Each has its milestone in the roadmap.
 
 [#one-at-a-time]
 === The client asks the network for one message at a time
@@ -118,6 +102,22 @@ A message sent with a delivery delay stays in its queue, and a receive passes it
 |===
 
 Planned: milestone M12-4.
+
+[#waiting]
+== Consumers that wait
+
+A consumer that waits in `receive`, or whose listener waits for its next message, costs the others nothing: it is woken by what concerns its queue or its subscription, and by nothing else.
+
+[cols="1,1,1"]
+|===
+| Consumers waiting on other queues | Round trips a second, in the JVM | Before milestone M12-2
+
+| 0 | 3 275 000 | 3 282 000
+| 100 | 3 185 000 | 218 000
+| 1 000 | 3 188 000 | 18 200
+|===
+
+The first column of figures is the entry BENCH-20261012-04. Until M12-2 every change of a broker woke every receive that waited on it, whatever the queue.
 
 == Sessions and connections
 

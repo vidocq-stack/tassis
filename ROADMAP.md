@@ -1175,11 +1175,37 @@ with the fix, 903 of 903.
 - **The fix of T-002 has a test of the method, not of the socket of a live server**: nothing
   but the time tells Nagle from the outside. The benchmark is that proof.
 
-#### M12-2 — A receive that waits wakes for its own queue only
+#### M12-2 — A receive that waits wakes for its own queue only ✅
 
-To open. Replaces the one condition of the broker by one a consumer waits on for what
-concerns it. Measured by `IdleWaitersBench`, and by `ContentionBench` for what it changes
-there.
+- [x] One condition per queue and per subscription (`Storage.changed`), on the same broker
+      lock, in place of the one condition of the broker
+- [x] Each change signals what it concerns and nothing else: a message that arrives or comes
+      back, the receives of its queue; a consumer that closes or stops listening, those of
+      its queue; a connection that starts, those of its consumers
+- [x] The signals that served nobody are gone: at each commit, at the end of each receive
+      (kept for a consumer that is closing, which `detach` waits for), and when a consumer
+      starts listening, which the server did before each message it delivered
+
+**Proven by:** `WaitingReceiveTest`, a scenario per reason to wake and two for what must not;
+the TCK in the JVM and through the network, 903 of 903 each; the `interop` profile.
+
+**Measured** (BENCH-20261012-04): with a hundred consumers waiting on other queues, 3 185 000
+round trips a second where there were 218 000; with a thousand, 3 188 000 for 18 200. The
+same as with nobody waiting. Nothing else moved.
+
+**Choices and limits:**
+
+- **The lock is still one**, as M12-1 decided, and `ContentionBench` did not move: what holds
+  several threads back is the lock, not the wake-ups.
+- **A message wakes every receive that waits on its queue**, where one could take it: the
+  first to wake may be unable to (its selector, its connection stopped), and the condition is
+  also what a closing consumer waits on. A queue with many consumers waiting still pays for
+  that; nothing measures it yet.
+- **The broker counts for its tests**: how many receives wait, and how many times one woke
+  (`Broker.waiting`, `Broker.awakenings`, visible to its package only). The state of a thread
+  does not tell a wait in the broker from another.
+- **A test that loses a wake-up hangs rather than fails** when what is lost is the end of a
+  receive a closing consumer waits for: that wait cannot be interrupted.
 
 #### M12-3 — Fetching ahead over the network
 

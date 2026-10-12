@@ -122,6 +122,12 @@ message in the state a consumer sees it in (properties and body read-only, body 
 each subscription's storage, after which a subscription behaves exactly like a queue. A send
 hands the broker a snapshot (`Messages.snapshot`), never the client's own message.
 `Destinations.resolve(...)` is the one place that decides which `Destination` objects are ours.
+One lock guards the broker; a receive waits on the condition of its `Storage`
+(`Storage.changed`), never on one of the whole broker. **Whatever changes what a receive's loop
+reads must signal the condition of the storages concerned**: `Storage.add` does it for a
+message that arrives or comes back, `detach` and `listen` for their consumer, `wake` for a
+connection. A change that signals nothing is a receive that never returns; one that signals
+everything is what M12-2 removed. `WaitingReceiveTest` has a scenario per reason to wake.
 The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the private
 `Broker.named(LocalConnection, Subscribing)`, not to be confused with the registry lookup
 `Broker.named(String)`.
