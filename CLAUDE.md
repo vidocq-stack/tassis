@@ -40,10 +40,15 @@ sdk env
 
 # Interoperability tests (Proton-J, Qpid JMS against TassisServer, the Tassis client against Artemis)
 ./mvnw -ntp -Pinterop -pl tassis-interop -am verify
+
+# Benchmarks (JMH): build and smoke-test them, then run them; every figure goes to BENCH.md
+./mvnw -ntp -Pbench -pl tassis-bench -am verify
+java -jar tassis-bench/target/benchmarks.jar -prof gc
 ```
 
-> `tassis-tck` is **in-reactor behind the `tck` Maven profile**, and `tassis-interop` behind
-> `interop`. A plain `./mvnw install` builds neither and downloads nothing for them.
+> `tassis-tck` is **in-reactor behind the `tck` Maven profile**, `tassis-interop` behind
+> `interop` and `tassis-bench` behind `bench`. A plain `./mvnw install` builds none of them and
+> downloads nothing for them.
 
 ## Architecture
 
@@ -62,7 +67,7 @@ tassis-server      ← TassisServer: the listener that opens a broker to AMQP 1.
 tassis-pool        ← TassisConnectionPool: a connection factory that lends its connections (M11b)
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: three beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
-tassis-bench       ← Placeholder — JMH (M12)
+tassis-bench       ← JMH benchmarks, beside Artemis and Qpid JMS, behind `bench`; never published
 tassis-examples    ← The examples of the documentation, compiled and run by the build
 tassis-tck         ← Official TCK runner, in-reactor behind `tck`, class path, test scope only
 tassis-interop     ← Tests against third-party AMQP peers, behind `interop`; never published
@@ -76,8 +81,10 @@ a milestone.
 
 1. **`tassis-core` depends on nothing beyond `jakarta.jms-api`** — no CDI, no JNDI, no
    third-party library. `tassis-amqp`, `tassis-server` and `tassis-pool` depend on Tassis modules only. Third-party code is allowed
-   in one place, `tassis-interop`, in test scope: that module is never published and is not
-   part of the default build.
+   in two places: `tassis-interop`, in test scope behind `interop`, and `tassis-bench` behind
+   `bench` (JMH, and the brokers and the client Tassis is measured beside). Neither is ever
+   published nor part of the default build, and `tassis-bench` has no module descriptor: its
+   benchmarks run from one shaded jar, on the class path.
 2. **`io.vidocq.tassis.core` is the only package exported to applications**, and holds only
    what an application must name (the administered objects, and `TassisBroker`). Everything
    else lives under `io.vidocq.tassis.core.internal.*`; some of those packages are exported

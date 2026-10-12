@@ -86,7 +86,6 @@
         <module>tassis-pool</module>
         <module>tassis-cdi-vauban</module>
         <module>tassis-cdi-vauban-module-it</module>
-        <module>tassis-bench</module>
         <module>tassis-examples</module>
     </modules>
 
@@ -188,6 +187,20 @@
             <id>interop</id>
             <modules>
                 <module>tassis-interop</module>
+            </modules>
+        </profile>
+        <!--
+            The benchmarks depend on third-party code too (JMH, and the brokers and the client
+            Tassis is compared with), are never published, and join the reactor only when this
+            profile is active:
+
+                ./mvnw -Pbench -pl tassis-bench -am verify
+                java -jar tassis-bench/target/benchmarks.jar
+        -->
+        <profile>
+            <id>bench</id>
+            <modules>
+                <module>tassis-bench</module>
             </modules>
         </profile>
     </profiles>

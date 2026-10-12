@@ -333,7 +333,8 @@ tassis/
 ├── tassis-cdi-vauban     JMSContext injection (§12.4) for applications on Vauban
 ├── tassis-cdi-vauban-module-it   Its proof on the module path; never published
 ├── tassis-examples       The examples of the documentation, compiled and run by the build
-├── tassis-bench          Placeholder: JMH benchmarks (M12)
+├── tassis-bench          JMH benchmarks, beside Artemis and Qpid JMS, behind the `bench`
+│                         profile; never published
 ├── tassis-tck            Official TCK runner, in-reactor behind the `tck` Maven profile
 └── tassis-interop        Tests against third-party AMQP implementations, behind the
                           `interop` profile; never published
