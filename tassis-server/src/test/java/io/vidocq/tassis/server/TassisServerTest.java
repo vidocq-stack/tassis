@@ -1151,4 +1151,20 @@ class TassisServerTest {
             assertEquals(Symbol.of("amqp:resource-limit-exceeded"), rejected.error().condition());
         }
     }
+
+    // ---- the sockets ---------------------------------------------------------------
+
+    // A server answers a client with small frames, one after the other. Left to the algorithm of
+    // Nagle, the second waits for the client to acknowledge the first, which a client is in no
+    // hurry to do: tens of milliseconds for each exchange (BUG.md T-002).
+    @Test
+    void theSocketOfAClientSendsItsFramesWithoutWaiting() throws Exception {
+        try (java.net.ServerSocket listener = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
+                java.net.Socket client = new java.net.Socket(listener.getInetAddress(), listener.getLocalPort());
+                java.net.Socket accepted = listener.accept()) {
+            assertFalse(accepted.getTcpNoDelay(), "what a socket does unless told otherwise");
+
+            assertTrue(TassisServer.prepared(accepted).getTcpNoDelay());
+        }
+    }
 }

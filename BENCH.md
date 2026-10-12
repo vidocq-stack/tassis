@@ -23,6 +23,38 @@ which question it answers, and `Rig` who is behind the name of a provider.
 
 ---
 
+## BENCH-20261012-02 — The server sends its frames without waiting (BUG T-002)
+
+- **Date**: 2026-10-12
+- **Commit**: the commit of the fix (branch `feat/m12-benchmarks`)
+- **JVM**: Temurin 25+36-LTS, default flags
+- **Hardware**: AMD Ryzen 7 5800X (8 cores, 16 threads), 16 GB given to WSL2
+- **OS**: Ubuntu 20.04.6 LTS under WSL2, Linux 5.15.167.4
+- **Exact command**: the same as BENCH-20261012-01
+- **Results**:
+  ```
+  Benchmark                  (provider)  (size)   Mode  Cnt     Score     Error  Units
+  RoundTripBench.roundTrip  tassis-amqp     100  thrpt   10  2746.241 ± 107.912  ops/s
+  RoundTripBench.roundTrip  qpid-tassis     100  thrpt   10  4586.959 ± 161.706  ops/s
+  Benchmark               (broker)  (source)  Mode  Cnt     Score    Error  Units
+  PoolBench.openAndClose   network    direct    ss   20  1071.138 ± 37.377  us/op
+  Benchmark              (mode)   (provider)   Mode  Cnt      Score      Error  Units
+  ListenerBench.deliver    auto  tassis-amqp  thrpt   10   5729.100 ±  347.949  ops/s
+  ListenerBench.deliver    auto  qpid-tassis  thrpt   10  37740.835 ± 1946.785  ops/s
+  ```
+- **Comparison with the previous run** (BENCH-20261012-01):
+
+  | Benchmark | before | after | |
+  |---|---|---|---|
+  | `RoundTripBench`, Qpid JMS → Tassis server | 20.6 ops/s | 4 587 ops/s | **222× faster** |
+  | `PoolBench`, a connection opened by the Tassis client | 50.8 ms | 1.07 ms | **47× faster** |
+  | `ListenerBench`, Qpid JMS → Tassis server | 7 520 ops/s | 37 741 ops/s | **5.0× faster** |
+  | `ListenerBench`, Tassis client → Tassis server | 2 451 ops/s | 5 729 ops/s | **2.3× faster** |
+  | `RoundTripBench`, Tassis client → Tassis server | 2 545 ops/s | 2 746 ops/s | within the error |
+
+  The round trip of the Tassis client did not move: its own socket already sent without
+  waiting, and it acknowledges at once what the server sends, having something to say back.
+
 ## BENCH-20261012-01 — The network before the fix of BUG T-002
 
 The first run of the benchmarks showed a third-party client some 48 ms an exchange against a

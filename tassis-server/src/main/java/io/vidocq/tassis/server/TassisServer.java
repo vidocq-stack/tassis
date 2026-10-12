@@ -190,11 +190,31 @@ public final class TassisServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Sets the socket of a client for what is exchanged on it: frames, small and answered one
+     * after the other. They are sent as they are written, not held back until the client has
+     * acknowledged the previous one (the algorithm of Nagle), which costs each exchange the tens
+     * of milliseconds a client takes to acknowledge. The writer of a connection already sends
+     * what it has in one piece.
+     *
+     * <p>A socket that refuses is served all the same: it is slower, or already lost, which the
+     * thread that reads it finds out.
+     */
+    static Socket prepared(Socket accepted) {
+        try {
+            accepted.setTcpNoDelay(true);
+        } catch (IOException | RuntimeException e) {
+            LOG.log(System.Logger.Level.DEBUG, "a socket would not send without delay", e);
+        }
+        return accepted;
+    }
+
     private void accept() {
         Broker broker = Broker.named(brokerName);
         while (!closed) {
             try {
                 Socket accepted = listener.accept();
+                prepared(accepted);
                 AmqpConnection connection =
                         new AmqpConnection(encrypted(accepted), accepted, broker, connections::remove);
                 connections.add(connection);
