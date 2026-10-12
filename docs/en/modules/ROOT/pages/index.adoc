@@ -42,7 +42,7 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 |===
 | Implemented spec | https://jakarta.ee/specifications/messaging/3.1/jakarta-messaging-spec-3.1.html[Jakarta Messaging 3.1]
 | Java | 25
-| Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.cdi.vauban` for the injection of `JMSContext`, and `io.vidocq.tassis.server` to open a broker to the network.
+| Java modules | `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.cdi.vauban` for the injection of `JMSContext`, `io.vidocq.tassis.server` to open a broker to the network, and `io.vidocq.tassis.pool` to pool the connections.
 | Runtime dependencies | None beyond the `jakarta.messaging` API module
 | Broker | In the JVM of the application, entirely in memory: nothing is written to the file system, by design. It can be opened to the network with AMQP 1.0.
 | Status | In development, not released

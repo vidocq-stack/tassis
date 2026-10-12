@@ -51,6 +51,13 @@ class ExamplesTest {
     }
 
     @Test
+    void pooledExampleReceivesWhatItSentOverOneConnection() {
+        try (TassisServer server = TassisServer.forBroker(broker).port(0).start()) {
+            assertEquals("hello 1, over 1 connection", PooledHello.sendAndReceive(server.port()));
+        }
+    }
+
+    @Test
     void exampleRunsOnAFactoryConfiguredBySettings() {
         TassisConnectionFactory configured =
                 TassisConnectionFactory.from(Map.of("tassis.broker", broker, "tassis.clientId", "reader"));

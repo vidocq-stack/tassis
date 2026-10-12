@@ -33,6 +33,11 @@
             <groupId>io.vidocq.tassis</groupId>
             <artifactId>tassis-server</artifactId>
         </dependency>
+        <!-- For the example that borrows its connections from a pool. -->
+        <dependency>
+            <groupId>io.vidocq.tassis</groupId>
+            <artifactId>tassis-pool</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

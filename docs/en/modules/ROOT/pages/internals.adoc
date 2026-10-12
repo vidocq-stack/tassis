@@ -14,6 +14,7 @@ For contributors: where the code lives and the rules it obeys. Users do not need
 | `tassis-core` | The provider: the administered objects, the client objects, the in-VM broker, the message model and the selectors.
 | `tassis-amqp` | AMQP 1.0, written from scratch: the codec, how a Jakarta Messaging message travels as an AMQP one, and the transport of a client to a broker of the network. See <<amqp>> and <<client>>.
 | `tassis-server` | `TassisServer`: the listener that opens a broker to AMQP 1.0 clients. See <<server>>.
+| `tassis-pool` | `TassisConnectionPool`: a connection factory that keeps the connections to the broker and lends them. See <<pool>>.
 | `tassis-cdi-vauban` | The injection of `JMSContext`: a producer, a request-scoped holder of the contexts of a request, and the facade that is injected. See <<injection>>.
 | `tassis-cdi-vauban-module-it` | The proof of the above on the module path: an application module whose beans are processed at build time. Never published.
 | `tassis-bench` | Placeholder without sources. JMH benchmarks are milestone M12.
@@ -46,6 +47,9 @@ Group id `io.vidocq.tassis`, parent `io.vidocq:vidocq-parent`.
 
 | `internal.settings`
 | `Settings`, one record: what configures a connection factory, read from keys or from a connection URL, with the defaults and the validation. A new setting is added there once, as a key and as a URL parameter.
+
+| `internal.pool`
+| What the module of the pool sees of this one, and all it sees: `ConnectionSource`, `PhysicalConnection`, `Recycler`. See <<pool>>.
 |===
 
 There is no storage interface: messages live in the memory of the broker, in `Broker.Storage`, and the broker is in memory by decision.
@@ -304,6 +308,19 @@ Two exchanges have no answer of their own in AMQP, and the client needs one. To 
 TLS is that of the JDK, from the first octet, and changes the socket only. On both ends the TLS socket is layered on a plain one that stays within reach: closing a TLS socket first says goodbye, which waits its turn behind whoever is writing, so a connection is cut by closing the plain socket under it. The server makes the handshake at the first read, by the reader of the connection and within the time a client has to open one, so that the thread that accepts is never held up. The client asks for the name of its URL to be checked against the certificate.
 
 `NetworkClientTest`, in `tassis-server`, runs the Jakarta Messaging API through a real socket, and `TlsNetworkClientTest` runs the same scenarios again over TLS, with a certificate the JDK's `keytool` makes for the test; the TCK run with `network` does the same with the whole suite.
+
+[#pool]
+== The connection pool
+
+What `tassis-pool` keeps is not a `Connection` but what is under it: the `BrokerConnection`, which for a broker of the network is the socket. Each borrower gets a new `TassisConnection` over a kept one, so the state of the client object (closed or not, used or not, its listener, its sessions) is new by construction, and no wrapper stands between the application and the classes the TCK runs against.
+
+The closing of such a connection is `TassisConnection.recycle()`. It does what `close()` does, stopping delivery and shutting every session, then deletes the temporary destinations the connection created, and hands the link back through a `Recycler` instead of closing it. A link that cannot be made new is closed there and reported as such: one that was given a client identifier or refused one, one that is lost, one whose cleaning failed. Whatever fails on the way, the pool is told once, so that it never loses a place. A lock makes the handing back happen once: a connection closed a second time must not stop a link that now serves somebody else.
+
+The pool module sees `tassis-core` through one internal package, `internal.pool`, exported to it alone: `ConnectionSource` (what a factory connects with), `PhysicalConnection` (a kept link, and the connections and contexts made over it) and `Recycler`. Their signatures name types of Jakarta Messaging and of the JDK only. The pool reads a factory by its connection URL, which says all of its settings but one: the TLS context, which is no string. A `TassisConnectionFactory` registers a reader of it with `ConnectionSource` when the class loads, which gives the pool what it needs with no public method and no reflection.
+
+`TassisConnectionPool` itself is one lock and one condition over a count of open links and the idle ones, kept by credentials. A borrower takes an idle link opened with its credentials, or takes a place and opens one once out of the lock, or has an idle link of another user closed to take its place, or waits. A link that becomes idle has the pool ask to be told of its loss, under the lock: the next borrower asks in its turn, after, and a link tells whoever asked last.
+
+`TassisConnectionPoolTest` runs the pool on the broker of the JVM; `NetworkPoolTest` through a socket and a relay that counts the connections and cuts them. Both run on the class path, since the module of the pool requires neither the transport nor the server; `tassis-examples` runs the pool on the module path.
 
 == House rules
 

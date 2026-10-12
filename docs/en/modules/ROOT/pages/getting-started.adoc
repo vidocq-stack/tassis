@@ -145,6 +145,28 @@ try (TassisServer server = TassisServer.forBroker("orders").port(0).start()) {
 
 The host needs the artifact `tassis-server` and `requires io.vidocq.tassis.server;`. A process that only connects needs `tassis-amqp` and `requires io.vidocq.tassis.amqp;`. Nothing is encrypted unless the server is given a TLS context: see xref:usage.adoc#network[Opening a broker to the network].
 
+== Step 8: keep the connections open
+
+Over the network, a connection is a socket and a handshake. A pool keeps them and lends them; it is a connection factory, so the code of step 4 does not change:
+
+[source,java]
+----
+TassisConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + port);
+
+// Closing the pool closes the connections it keeps.
+try (TassisConnectionPool pool = TassisConnectionPool.over(factory).maxSize(4).build()) {
+    for (int i = 1; i <= 3; i++) {
+        // Closing a context gives its connection back to the pool: one socket for the three.
+        try (JMSContext context = pool.createContext()) {
+            Queue queue = context.createQueue("greetings");
+            context.createProducer().send(queue, "hello " + i);
+        }
+    }
+}
+----
+
+It needs the artifact `tassis-pool` and `requires io.vidocq.tassis.pool;`. See xref:usage.adoc#pool[Pooling the connections].
+
 == Next steps
 
 * xref:usage.adoc[Usage]: topics and subscriptions, acknowledgement and transactions, selectors, listeners.

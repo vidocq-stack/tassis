@@ -572,6 +572,62 @@ What to know:
 * **A client that prefetches may see a message more than once.** A client such as Qpid JMS asks for many messages ahead of the application. A message it gives back while it closes can be sent to it again before it is gone, so `JMSXDeliveryCount` may grow by more than one.
 * **Closing the server ends the connections, not the broker.** The messages stay, for the clients of the JVM and for a server started later.
 
+[#pool]
+== Pooling the connections
+
+A connection to a broker of the network is a socket, a handshake (TLS, authentication, AMQP) and as much again when it closes. An application that creates a context for each piece of work pays that every time. `TassisConnectionPool`, in the artifact `tassis-pool`, keeps the connections open and lends them. Jakarta Messaging does not define pooling: it leaves it to whoever hosts the application.
+
+[source,java]
+----
+TassisConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://broker-host");
+
+try (TassisConnectionPool pool = TassisConnectionPool.over(factory).maxSize(8).build()) {
+    try (JMSContext context = pool.createContext()) {     // borrowed
+        context.createProducer().send(context.createQueue("orders"), "hello");
+    }                                                     // given back, not closed
+}
+----
+
+A pool is a `ConnectionFactory`: the code that sends and receives does not change, and closes what it creates as it always must. It opens its first connection when a first one is asked for, and closing the pool closes those it keeps. The module is `io.vidocq.tassis.pool`.
+
+With the broker of the JVM a connection opens no socket, and a pool saves little.
+
+=== What a borrower finds
+
+A connection as a factory gives it: stopped, with no session, no temporary destination, no exception listener and no client identifier. Closing a borrowed connection does what closing a connection does (§6.1.8), short of ending the connection to the broker:
+
+* its sessions, producers, consumers and browsers are closed;
+* its transactions in progress are rolled back, and what it had received and not acknowledged is delivered again;
+* its temporary destinations are deleted;
+* its non-durable subscriptions end.
+
+The object the application closed stays closed: keeping it and calling it afterwards fails, and does nothing to whoever borrowed the connection next.
+
+=== Size
+
+`maxSize` bounds the connections to the broker that are open, lent or not: 10 unless told otherwise. When all are lent, a borrower waits for one to come back, for `acquireTimeout` at most (5 seconds by default), then fails: `ResourceAllocationException` from `createConnection`, `ResourceAllocationRuntimeException` from `createContext`. A connection that is never closed is never given back.
+
+Contexts created from one another (`context.createContext(mode)`) share one borrowed connection, given back when the last of them closes.
+
+=== Client identifiers
+
+A client identifier belongs to one connection at a time (§6.1.2), and a broker of the network knows a connection by it for as long as it lasts. So:
+
+* a borrowed connection accepts `setClientID`, and is then **no longer lent**: closing it closes the connection to the broker, which frees the identifier. It counts in the size of the pool while it is open;
+* a factory that assigns a client identifier itself (`withClientID`, `tassis.clientId`) can only have one connection open: `TassisConnectionPool.over` refuses it with an `IllegalArgumentException`.
+
+Durable subscriptions that are not shared need a client identifier: use them through such a dedicated connection, or through a factory of their own outside the pool.
+
+=== Credentials
+
+`createConnection(userName, password)` only gets a connection opened with that name and that password: nobody is handed what another user opened, and a wrong password is refused by the broker as without a pool. The connections of every user count in the same `maxSize`; when the pool is full, a connection nobody is using is closed to make room for another user. The pool keeps the names and passwords in memory for as long as it keeps such a connection.
+
+=== A connection that is lost
+
+A connection lost while nobody uses it is dropped, and the next borrower gets another. One lost while it is lent tells its borrower through the `ExceptionListener`, as any connection does, and is not lent again once closed. Until the loss is noticed, which takes at most the idle time-out of the connection, a borrower may be handed a connection that is gone: its first call fails, and the next borrower gets a new one.
+
+What a pool does not do yet (milestone M11b-2): close the connections that have been idle for long, renew them after a time, be configured by keys or by URL, serve the contexts injected with CDI.
+
 [#injection]
 == Injecting `JMSContext` with CDI
 

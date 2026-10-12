@@ -20,6 +20,7 @@
 package io.vidocq.tassis.core.internal.client;
 
 import io.vidocq.tassis.core.internal.broker.BrokerConnection;
+import io.vidocq.tassis.core.internal.pool.Recycler;
 import jakarta.jms.ConnectionConsumer;
 import jakarta.jms.ConnectionMetaData;
 import jakarta.jms.Destination;
@@ -58,6 +59,17 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     // Serialises the calls to setClientID: the identifier is set once. The broker gives it back
     // when the connection closes, and refuses to give one to a closed connection.
     private final ReentrantLock identity = new ReentrantLock();
+    // Whom to give the connection to the broker back to, when a pool lent it; null otherwise.
+    private final Recycler recycler;
+    // One close at a time gives a lent connection back, and only the first.
+    private final ReentrantLock recycling = new ReentrantLock();
+    private boolean recycled;
+    // The temporary destinations this connection created: a lent connection deletes them itself.
+    private final List<TassisTemporaryQueue> temporaryQueues = new CopyOnWriteArrayList<>();
+    private final List<TassisTemporaryTopic> temporaryTopics = new CopyOnWriteArrayList<>();
+    private volatile boolean lost;
+    // A client identifier was asked for and refused: what state that left the link in is unknown.
+    private volatile boolean spoiled;
 
     /**
      * @param configuredClientId the client identifier assigned by the connection factory, or
@@ -65,9 +77,19 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
      */
     public TassisConnection(BrokerConnection link, Domain domain, String configuredClientId,
             int maxListenerDeliveries) throws JMSException {
+        this(link, domain, configuredClientId, maxListenerDeliveries, null);
+    }
+
+    /**
+     * @param recycler whom {@link #close()} gives the connection to the broker back to instead of
+     *        closing it, or {@code null} for a connection that owns it
+     */
+    public TassisConnection(BrokerConnection link, Domain domain, String configuredClientId,
+            int maxListenerDeliveries, Recycler recycler) throws JMSException {
         this.link = link;
         this.domain = domain;
         this.maxListenerDeliveries = maxListenerDeliveries;
+        this.recycler = recycler;
         link.onLost(this::lost);
         if (configuredClientId != null) {
             link.claimClientId(configuredClientId);
@@ -81,6 +103,7 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
      * Called by the transport, on a thread of its own.
      */
     private void lost(JMSException problem) {
+        lost = true;
         ExceptionListener listener = exceptionListener;
         if (listener != null && !closed) {
             listener.onException(problem);
@@ -112,11 +135,38 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
 
     /** A temporary destination lasts as long as its connection: the broker deletes it with it (§6.2.2). */
     TassisTemporaryQueue createTemporaryQueue() throws JMSException {
-        return new TassisTemporaryQueue(this, link.createTemporaryQueue());
+        TassisTemporaryQueue queue = new TassisTemporaryQueue(this, link.createTemporaryQueue());
+        if (recycler != null) {
+            temporaryQueues.add(queue);
+            if (closed) {
+                // Created while the connection was given back: it must not stay on a link that
+                // serves somebody else by now.
+                discard(queue::delete);
+                throw new IllegalStateException("the connection is closed");
+            }
+        }
+        return queue;
     }
 
     TassisTemporaryTopic createTemporaryTopic() throws JMSException {
-        return new TassisTemporaryTopic(this, link.createTemporaryTopic());
+        TassisTemporaryTopic topic = new TassisTemporaryTopic(this, link.createTemporaryTopic());
+        if (recycler != null) {
+            temporaryTopics.add(topic);
+            if (closed) {
+                discard(topic::delete);
+                throw new IllegalStateException("the connection is closed");
+            }
+        }
+        return topic;
+    }
+
+    /** Deletes what may be deleted already. */
+    private static void discard(Unchecked.Action deletion) {
+        try {
+            deletion.run();
+        } catch (JMSException | RuntimeException gone) {
+            // deleted by the close that was under way
+        }
     }
 
     private void checkOpen() throws IllegalStateException {
@@ -205,7 +255,12 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
             if (clientID == null || clientID.isEmpty()) {
                 throw new InvalidClientIDException("a client identifier must not be null or empty");
             }
-            link.claimClientId(clientID);
+            try {
+                link.claimClientId(clientID);
+            } catch (JMSException | RuntimeException refused) {
+                spoiled = true;
+                throw refused;
+            }
             clientId = clientID;
             used = true;
         } finally {
@@ -277,6 +332,10 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
     @Override
     public void close() throws JMSException {
         notFromACallback("close", true);
+        if (recycler != null) {
+            recycle();
+            return;
+        }
         closed = true;
         link.stop();
         for (TassisSession session : sessions) {
@@ -285,6 +344,71 @@ public final class TassisConnection implements QueueConnection, TopicConnection 
         // The sessions have given back what they held; the broker takes back the rest: the
         // temporary destinations and the client identifier.
         link.close();
+    }
+
+    /**
+     * The close of a connection a pool lent: the connection to the broker is left as a new one
+     * finds it, and given back. It is closed instead when it cannot be made so: it has a client
+     * identifier, which a broker of the network knows it by for good, or it is lost.
+     *
+     * <p>Once given back it serves somebody else, so a later close must not touch it: hence the
+     * lock, held by one caller while the others wait for the same result.
+     */
+    private void recycle() {
+        recycling.lock();
+        try {
+            if (recycled) {
+                return;
+            }
+            boolean reusable = false;
+            try {
+                // A setClientID in progress ends first: its identifier decides what follows.
+                identity.lock();
+                try {
+                    closed = true;
+                } finally {
+                    identity.unlock();
+                }
+                link.stop();
+                for (TassisSession session : sessions) {
+                    session.shut();
+                }
+                reusable = clientId == null && !spoiled && !lost && !link.isLost()
+                        && deleteTemporaryDestinations();
+            } finally {
+                // Whatever went wrong, the pool gets its place back, and once.
+                recycled = true;
+                if (!reusable) {
+                    try {
+                        link.close();
+                    } catch (RuntimeException alreadyBroken) {
+                        // nothing more can be done for it
+                    }
+                }
+                recycler.done(reusable);
+            }
+        } finally {
+            recycling.unlock();
+        }
+    }
+
+    /** Whether every temporary destination of this connection is gone. */
+    private boolean deleteTemporaryDestinations() {
+        try {
+            for (TassisTemporaryQueue queue : temporaryQueues) {
+                if (!queue.isDeleted()) {
+                    queue.delete();
+                }
+            }
+            for (TassisTemporaryTopic topic : temporaryTopics) {
+                if (!topic.isDeleted()) {
+                    topic.delete();
+                }
+            }
+            return true;
+        } catch (JMSException | RuntimeException e) {
+            return false;
+        }
     }
 
     // ---- connection consumers: optional (§11), and not for a QueueConnection (§9.2) ----

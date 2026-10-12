@@ -59,6 +59,7 @@ tassis-core        ← The provider: administered objects (TassisConnectionFacto
 tassis-amqp        ← AMQP 1.0 from scratch (M11.3): the codec, JMS messages as AMQP ones, and
                      the client transport (tassis:amqp://host)
 tassis-server      ← TassisServer: the listener that opens a broker to AMQP 1.0 clients
+tassis-pool        ← TassisConnectionPool: a connection factory that lends its connections (M11b)
 tassis-cdi-vauban  ← JMSContext injection (§12.4) on Vauban: two beans and a facade
 tassis-cdi-vauban-module-it ← Proof of the above on the module path; never published
 tassis-bench       ← Placeholder — JMH (M12)
@@ -74,14 +75,15 @@ a milestone.
 ## Architecture Constraints Not to Violate
 
 1. **`tassis-core` depends on nothing beyond `jakarta.jms-api`** — no CDI, no JNDI, no
-   third-party library. `tassis-amqp` and `tassis-server` depend on Tassis modules only. Third-party code is allowed
+   third-party library. `tassis-amqp`, `tassis-server` and `tassis-pool` depend on Tassis modules only. Third-party code is allowed
    in one place, `tassis-interop`, in test scope: that module is never published and is not
    part of the default build.
 2. **`io.vidocq.tassis.core` is the only package exported to applications**, and holds only
    what an application must name (the administered objects, and `TassisBroker`). Everything
    else lives under `io.vidocq.tassis.core.internal.*`; some of those packages are exported
-   to `tassis-amqp` and `tassis-server` by name, and to nobody else. Likewise `tassis-server`
-   exports one package with one class, `TassisServer`.
+   to `tassis-amqp`, `tassis-server` and `tassis-pool` by name, and to nobody else. Likewise
+   `tassis-server` exports one package with one class, `TassisServer`, and `tassis-pool` one
+   with `TassisConnectionPool`.
 3. **Unimplemented API methods throw `UnsupportedOperationException` with a ROADMAP
    pointer** (`"...: see ROADMAP M2"`), never a stub that silently returns wrong data.
    Replace the exception only when implementing the milestone.
@@ -269,6 +271,36 @@ that never writes and a writer that alone writes. Rules:
 - A change here is proven by `NetworkClientTest` (in `tassis-server`) **and by the TCK through
   the network**: `./run-official-tck-messaging-3.1.sh network`.
 
+## The connection pool (`tassis-pool`)
+
+`TassisConnectionPool` is a `ConnectionFactory` over a `TassisConnectionFactory` (ROADMAP M11b).
+Rules:
+
+- **What is pooled is the `BrokerConnection`, not the `Connection`.** Each borrower gets a new
+  `TassisConnection` over a kept link, so whatever state lives in the client object is new by
+  construction. Do not pool or reset a `TassisConnection`.
+- **The logical close is `TassisConnection.recycle()`**, and it is the one place that says what
+  a link must be rid of before it serves again: sessions shut, temporary destinations deleted,
+  delivery stopped. Anything a connection comes to own on its link later (ROADMAP M13) is
+  undone there, with a scenario in `TassisConnectionPoolTest` **and** in `NetworkPoolTest`.
+- **A link that cannot be made new is closed, not lent**: a client identifier was set or
+  refused, it is lost (`BrokerConnection.isLost`, asked at the moment, since listeners are
+  told later), or the cleaning failed. `Recycler.done(false)` means closed already, and
+  `done` is called once whatever fails: a place of the pool must never be lost.
+- **A recycled connection never touches its link again**: a second `close()` returns under
+  the `recycling` lock without doing anything. Keep every new path of `close()` behind it.
+- **The pool reaches `tassis-core` through `internal.pool` only** (`ConnectionSource`,
+  `PhysicalConnection`, `Recycler`), whose signatures name Jakarta Messaging and JDK types
+  alone. The pool reads a factory by its URL; the one thing a URL does not say, the TLS
+  context, comes through the reader `TassisConnectionFactory` registers when it loads
+  (`ConnectionSource.register`): no public method for it, no reflection. **A setting that is
+  not in the URL of a factory is lost to its pool**: put new settings in `Settings`.
+- **One lock, one condition** in the pool. A link is opened and closed outside the lock, its
+  place counted first. The pool asks to be told of a loss (`onLost`) under the lock, when a
+  link becomes idle: a borrower asks after it, and whoever asks last is told.
+- The tests of `tassis-pool` run on the class path (they need the server, which the module
+  does not require); the pool on the module path is proven by `tassis-examples`.
+
 ## The AMQP server (`tassis-server`)
 
 `TassisServer` listens; each client is an `AmqpConnection`, which is a client of
@@ -324,7 +356,7 @@ its evaluation, where `null` is SQL's NULL / unknown. A subscription filters at 
 - **Maven groupId**: `io.vidocq.tassis`. Version `0.4.0-SNAPSHOT`, parent
   `io.vidocq:vidocq-parent:0.4.0-SNAPSHOT`.
 - **Java modules**: `io.vidocq.tassis.api`, `io.vidocq.tassis.core`, `io.vidocq.tassis.amqp`,
-  `io.vidocq.tassis.server`, `io.vidocq.tassis.cdi.vauban`.
+  `io.vidocq.tassis.server`, `io.vidocq.tassis.pool`, `io.vidocq.tassis.cdi.vauban`.
 - **Licence header** on every Java file (`etc/license-header.txt`, checked by the build).
 
 ## TDD — Test-Driven Development (mandatory)

@@ -225,6 +225,14 @@ public interface BrokerConnection {
     List<TassisMessage> browse(String queue, Selector selector) throws JMSException;
 
     /**
+     * Whether the connection to the broker is lost, known now and not when a listener is told:
+     * what a pool asks before it keeps or lends a connection. The broker of the JVM is never lost.
+     */
+    default boolean isLost() {
+        return false;
+    }
+
+    /**
      * Says who to tell if the connection is lost: the broker went away, or stopped answering.
      * Every request then fails, and the waits for a message end. The listener is called once,
      * from a thread of the transport that holds no lock. A broker of this JVM is never lost.

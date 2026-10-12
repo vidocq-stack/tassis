@@ -24,6 +24,7 @@ import io.vidocq.tassis.core.internal.broker.Transports;
 import io.vidocq.tassis.core.internal.client.Domain;
 import io.vidocq.tassis.core.internal.client.TassisConnection;
 import io.vidocq.tassis.core.internal.client.TassisContext;
+import io.vidocq.tassis.core.internal.pool.ConnectionSource;
 import io.vidocq.tassis.core.internal.settings.Settings;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
@@ -84,6 +85,12 @@ public final class TassisConnectionFactory
 
     /** Name of the broker the no-argument constructor connects to. */
     public static final String DEFAULT_BROKER = Settings.DEFAULT_BROKER;
+
+    static {
+        // A pool opens the connections itself, with what this factory would open them with: its
+        // URL says all of it but the TLS context.
+        ConnectionSource.register(factory -> factory.tls);
+    }
 
     private final Settings settings;
     // Whom to trust on an encrypted connection; null for what the JVM trusts by default.

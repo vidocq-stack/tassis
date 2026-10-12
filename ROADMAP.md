@@ -1028,33 +1028,61 @@ place of this milestone, right after M11, and its number, which leaves M12 its o
 The spec does not define pooling: in Jakarta EE it is the application server's job. Vidocq has
 no such layer for messaging, so Tassis provides it.
 
-To deliver:
+Cut in two on 2026-10-11: M11b-1 is the pool itself, M11b-2 what makes it comfortable.
 
-- [ ] A pooling `ConnectionFactory` that wraps a `TassisConnectionFactory`, probably in a module
-      of its own (`tassis-pool`) so that `tassis-core` keeps doing one thing. `close()` on what it
-      hands out returns the physical connection to the pool instead of closing it.
-- [ ] **What a logical close must undo**, so that the next borrower gets a clean connection: its
-      sessions, producers, consumers and browsers closed, its transactions rolled back, its
-      temporary destinations deleted, the connection stopped, its `ExceptionListener` removed.
-- [ ] **Client identifiers.** A client identifier belongs to one open connection at a time
-      (§6.1.2), and durable unshared subscriptions depend on it. Decide what a pooled connection
-      does with `setClientID` (refuse it, or dedicate the connection) and how a factory made
-      with `withClientID` pools, since it can only ever have one connection.
-- [ ] **Sizing and lifetime**: maximum size, what a borrower does when the pool is exhausted
-      (wait with a timeout, fail), idle eviction, and validation of a connection before it is
-      handed out, with the `ExceptionListener` as the signal that one was lost.
-- [ ] **The simplified API**: `createContext` served from the pool, with the connection shared
-      by the contexts created from one another counted as one borrowed connection.
-- [ ] **Virtual threads**: no `synchronized` around a wait, no `ThreadLocal`; a borrower blocked
-      on an exhausted pool must not pin its carrier.
+#### M11b-1 — The pool ✅
+
+- [x] **`TassisConnectionPool`**, in a module of its own (`tassis-pool`, Java module
+      `io.vidocq.tassis.pool`): a `ConnectionFactory` built over a `TassisConnectionFactory`.
+      `close()` on what it lends gives the connection to the broker back instead of closing it.
+- [x] **What is kept is the `BrokerConnection`**, not the `Connection`: each borrower gets a new
+      `TassisConnection` over a kept link, so the state of the client object is new by
+      construction and no wrapper is needed. `mansart-pool` was read for its settings and their
+      defaults (10 connections, 5 seconds); nothing of it is depended on.
+- [x] **What a logical close undoes**: sessions, producers, consumers and browsers closed,
+      transactions rolled back, unacknowledged messages given back, temporary destinations
+      deleted, the connection stopped; the exception listener goes with the client object.
+- [x] **Client identifiers**: a connection given one with `setClientID` is dedicated, and really
+      closed when the application closes it; a factory made with `withClientID` is refused.
+- [x] **Size**: `maxSize`, and a borrower of an exhausted pool waits for `acquireTimeout`, then
+      gets a `ResourceAllocationException`.
+- [x] **Credentials**: a borrower only gets a connection opened with its own; a full pool closes
+      an idle connection of another user to make room.
+- [x] **A lost connection** is dropped when idle, and not kept when given back.
+- [x] **The simplified API**: `createContext` served from the pool, the contexts created from
+      one another counted as one borrowed connection.
+- [x] **Virtual threads**: one `ReentrantLock` and one condition, connections opened and closed
+      outside the lock.
+
+**Deliverable:** `TassisConnectionPoolTest` (25 tests, on the broker of the JVM),
+`NetworkPoolTest` (5 tests, through a socket and a relay that counts and cuts the connections),
+the example `PooledHello` run on the module path by `tassis-examples`; the TCK unchanged at
+903/903, in the JVM and through the network.
+
+Choices and limits:
+
+- **The seam grows by one question**, `BrokerConnection.isLost()`: a pool must know at once,
+  and a listener is told later. It defaults to false, which is the answer of the broker of the
+  JVM.
+- **`tassis-core` exports one more internal package**, `internal.pool`, to the pool alone. A
+  factory hands over what its URL does not say (its TLS context) through a reader it registers
+  when its class loads: no public method for it, no reflection.
+- **A connection whose `setClientID` was refused is not kept either**: over the network that
+  request reopens the AMQP connection, and what a refusal leaves is not worth guessing.
+- **The tests of the pool run on the class path**: they need the server, which the module
+  does not require.
+- **Not tried over TLS**, which changes the socket only, and not against another broker than
+  Tassis.
+- **The TCK is not run through the pool.**
+
+#### M11b-2 — Lifetime, settings, injection
+
+- [ ] **Lifetime**: idle eviction, a maximum lifetime, a minimum kept open, and a probe of a
+      connection before it is lent (today one that is gone and not yet known to be is lent once).
+- [ ] **Detection of a connection that is never given back.**
+- [ ] **Settings by key and by URL** (`tassis.pool.*`), in `Settings` like the others.
+- [ ] **CDI**: the contexts injected by `tassis-cdi-vauban` served from a pool.
 - [ ] Whether sessions are pooled too. To be decided by measurement (M12), not by default.
-
-To look at before designing: `mansart-pool`, the workspace's JDBC connection pool, for its
-sizing and eviction model. A dependency on it would have to be justified: the rule is that a
-brick depends on specs only.
-
-Relation to M9: the CDI injection of `JMSContext` works without a pool on the in-VM broker.
-Once this milestone lands, injected contexts should be served from it.
 
 ### M12 — Benchmarks
 

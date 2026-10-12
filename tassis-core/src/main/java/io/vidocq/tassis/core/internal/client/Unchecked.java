@@ -46,7 +46,7 @@ import jakarta.jms.TransactionRolledBackRuntimeException;
  * The simplified API reports failures with unchecked exceptions, each the
  * counterpart of a checked one of the classic API (Jakarta Messaging 3.1 §10.2).
  */
-final class Unchecked {
+public final class Unchecked {
 
     /** An action of the classic API. */
     @FunctionalInterface
@@ -82,7 +82,7 @@ final class Unchecked {
     }
 
     /** Returns the unchecked counterpart of a checked exception, which becomes its cause. */
-    static JMSRuntimeException of(JMSException e) {
+    public static JMSRuntimeException of(JMSException e) {
         String reason = e.getMessage();
         String code = e.getErrorCode();
         return switch (e) {

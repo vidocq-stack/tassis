@@ -2,7 +2,7 @@
 :description: Maven coordinates, Java modules, the administered objects of Tassis, its configuration keys, the supported API surface and the limits a user must know.
 
 [.lead]
-This page lists what Tassis publishes, the three classes an application names, the settings of a connection factory, what of the Jakarta Messaging API is supported, and the limits of the current development line.
+This page lists what Tassis publishes, the classes an application names, the settings of a connection factory, what of the Jakarta Messaging API is supported, and the limits of the current development line.
 
 == Maven coordinates
 
@@ -24,6 +24,9 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `io.vidocq.tassis:tassis-amqp:{project-version}`
 | AMQP 1.0, written for Tassis, and the transport by which a `TassisConnectionFactory` reaches a broker of the network (`tassis:amqp://host`). A dependency of `tassis-server`; declared in addition to `tassis-core` by an application that only connects to a broker elsewhere. An application names no class of it.
 
+| `io.vidocq.tassis:tassis-pool:{project-version}`
+| `TassisConnectionPool`, a connection factory that keeps its connections and lends them. Declared in addition to `tassis-core` by an application that pools. See xref:usage.adoc#pool[Usage].
+
 | `io.vidocq.tassis:tassis-cdi-vauban:{project-version}`
 | The injection of `JMSContext` with CDI, for an application on Vauban. Declared in addition to `tassis-core` by the applications that inject. See xref:usage.adoc#injection[Usage].
 |===
@@ -38,7 +41,7 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `requires transitive jakarta.messaging`. No package of its own.
 
 | `io.vidocq.tassis.core`
-| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported to applications, and no package is opened. Internal packages are exported to the two modules of the network transport only, and it `uses` the transport service one of them provides.
+| `requires transitive io.vidocq.tassis.api` and `exports io.vidocq.tassis.core`. No other package is exported to applications, and no package is opened. Internal packages are exported by name to the two modules of the network transport and to the module of the pool, and it `uses` the transport service one of them provides.
 
 | `io.vidocq.tassis.server`
 | `requires io.vidocq.tassis.core` and `io.vidocq.tassis.amqp`, `exports io.vidocq.tassis.server`. No package is opened.
@@ -46,11 +49,14 @@ Not released: build from source (see xref:getting-started.adoc[Getting started])
 | `io.vidocq.tassis.amqp`
 | `requires io.vidocq.tassis.core`, and provides the transport `amqp` to it. Its packages are exported to `io.vidocq.tassis.server` only.
 
+| `io.vidocq.tassis.pool`
+| `requires transitive io.vidocq.tassis.core`, `exports io.vidocq.tassis.pool`. No package is opened.
+
 | `io.vidocq.tassis.cdi.vauban`
 | `requires transitive io.vidocq.tassis.core`, `requires static` the CDI, injection and annotation APIs and `io.vidocq.vauban.api`, `exports io.vidocq.tassis.cdi`, and provides a `VaubanComponentProvider`. No package is opened.
 |===
 
-An application module declares `requires io.vidocq.tassis.core;`, `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`, and `requires io.vidocq.tassis.server;` when it opens a broker to the network. One that only connects to a broker of the network declares `requires io.vidocq.tassis.amqp;`: nothing else would bring the module that provides the transport into the module graph.
+An application module declares `requires io.vidocq.tassis.core;`, `requires io.vidocq.tassis.cdi.vauban;` as well when it injects `JMSContext`, and `requires io.vidocq.tassis.server;` when it opens a broker to the network, and `requires io.vidocq.tassis.pool;` when it pools its connections. One that only connects to a broker of the network declares `requires io.vidocq.tassis.amqp;`: nothing else would bring the module that provides the transport into the module graph.
 
 == Administered objects
 
@@ -200,6 +206,45 @@ What the server announces to a client, and accepts from it, is not configurable 
 | Time to authenticate and open a connection | 10 s
 | Authentication mechanisms | `PLAIN`; `ANONYMOUS` if the broker accepts connections without credentials
 |===
+
+[#tassis-pool]
+== `TassisConnectionPool`
+
+In the module `tassis-pool`, package `io.vidocq.tassis.pool`. A `ConnectionFactory`, `QueueConnectionFactory` and `TopicConnectionFactory` that is also `AutoCloseable`. See xref:usage.adoc#pool[Pooling the connections].
+
+[cols="2,3",options="header"]
+|===
+| Member | Description
+
+| `TassisConnectionPool.over(TassisConnectionFactory)`
+| Starts describing a pool whose connections are those of that factory. Throws `IllegalArgumentException` if the factory assigns a client identifier.
+
+| `maxSize(int)` (on the builder)
+| The connections to the broker open at most, lent or not, whatever the credentials: `TassisConnectionPool.DEFAULT_MAX_SIZE` (10) by default. Throws `IllegalArgumentException` below 1.
+
+| `acquireTimeout(Duration)` (on the builder)
+| How long a borrower waits when every connection is lent: `TassisConnectionPool.DEFAULT_ACQUIRE_TIMEOUT` (5 s) by default. Throws `IllegalArgumentException` if zero or negative.
+
+| `build()` (on the builder)
+| Returns the pool. No connection is opened yet.
+
+| `createConnection(...)`, `createQueueConnection(...)`, `createTopicConnection(...)`
+| Lend a connection; `close()` on it gives it back. Throw `ResourceAllocationException` when none comes back in time, `IllegalStateException` once the pool is closed, and what a factory throws when the broker refuses or cannot be reached.
+
+| `createContext(...)`
+| The same for the simplified API, with the unchecked counterparts of those exceptions.
+
+| `size()`
+| The connections to the broker that are open, lent or not.
+
+| `idle()`
+| Those that are lent to nobody.
+
+| `close()`
+| Closes the connections nobody is using, makes the borrowers that wait fail and lends nothing any more. A connection that is lent stays usable and is closed when it is given back.
+|===
+
+The settings of a pool are given in code only: keys and URL parameters come with milestone M11b-2.
 
 [#tassis-broker]
 == `TassisBroker`
@@ -383,11 +428,17 @@ Distributed transactions will not go through the network: AMQP 1.0 leaves them u
 
 A message a network client rejects, or declares undeliverable to itself, is dropped: there is no dead-letter queue.
 
-=== No connection pool
+=== The connection pool is plain
 
-Every `createConnection()` and every `createContext()` builds a new connection, and nothing reuses one. With the in-VM broker a connection is a small object and opens no socket.
+`TassisConnectionPool` lends connections and bounds their number: see xref:usage.adoc#pool[Pooling the connections]. What it does not do:
 
-Addressed by milestone M11b.
+* **It never closes a connection because it is old or idle.** A connection stays open until it is lost, the pool is closed, or its place is needed for another user.
+* **It does not probe a connection before lending it.** A connection that is gone and not yet known to be is lent once.
+* **It does not detect a connection that is never given back.**
+* **It is configured in code only**, and the contexts injected with CDI do not come from it.
+* **Sessions are not pooled.**
+
+The first four are milestone M11b-2; the last waits for the measurements of M12.
 
 === A message is dropped after 10 failed deliveries to a listener
 

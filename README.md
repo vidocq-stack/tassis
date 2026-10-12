@@ -264,6 +264,29 @@ ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://brok
 
 See [Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
 
+### Pooling the connections
+
+A connection to a broker of the network is a socket, a handshake and an authentication.
+`TassisConnectionPool`, in `tassis-pool`, keeps them open: it is a `ConnectionFactory` whose
+connections and contexts go back to the pool when the application closes them.
+
+```java
+try (TassisConnectionPool pool = TassisConnectionPool.over(factory).maxSize(8).build()) {
+    try (JMSContext context = pool.createContext()) {     // borrowed
+        context.createProducer().send(context.createQueue("orders"), "hello");
+    }                                                     // given back, not closed
+}
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `maxSize(int)` | 10 | connections to the broker open at most, lent or not |
+| `acquireTimeout(Duration)` | 5 s | how long a borrower waits when all are lent, before a `ResourceAllocationException` |
+
+A borrower finds a connection as a factory gives it: stopped, with nothing of the one before.
+A connection given a client identifier (`setClientID`) is not kept: closing it really closes
+it. See [Pooling the connections](docs/en/modules/ROOT/pages/usage.adoc).
+
 ## Architecture
 
 ```mermaid
@@ -290,6 +313,7 @@ tassis/
 │                         message model, selectors
 ├── tassis-amqp           AMQP 1.0, written from scratch: the codec and the mapping of messages
 ├── tassis-server         TassisServer: opens a broker to AMQP 1.0 clients
+├── tassis-pool           TassisConnectionPool: a connection factory that lends its connections
 ├── tassis-cdi-vauban     JMSContext injection (§12.4) for applications on Vauban
 ├── tassis-cdi-vauban-module-it   Its proof on the module path; never published
 ├── tassis-examples       The examples of the documentation, compiled and run by the build

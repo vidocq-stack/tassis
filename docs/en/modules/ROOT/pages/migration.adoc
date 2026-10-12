@@ -73,8 +73,8 @@ Destinations need no declaration on the broker: a queue or a topic exists from i
 | M11.3
 
 | A connection pool
-| None: each call creates a connection, which is cheap with the in-VM broker
-| M11b
+| `TassisConnectionPool`, in `tassis-pool`: see xref:usage.adoc#pool[Pooling the connections]. No idle eviction, no settings by key yet
+| M11b-2
 
 | Configuration by environment variables or MicroProfile Config
 | Not read. Settings come from a `Map` or `Properties` the application provides, or from a connection URL

@@ -83,6 +83,7 @@
         <module>tassis-core</module>
         <module>tassis-amqp</module>
         <module>tassis-server</module>
+        <module>tassis-pool</module>
         <module>tassis-cdi-vauban</module>
         <module>tassis-cdi-vauban-module-it</module>
         <module>tassis-bench</module>
@@ -149,6 +150,11 @@
             <dependency>
                 <groupId>io.vidocq.tassis</groupId>
                 <artifactId>tassis-server</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vidocq.tassis</groupId>
+                <artifactId>tassis-pool</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

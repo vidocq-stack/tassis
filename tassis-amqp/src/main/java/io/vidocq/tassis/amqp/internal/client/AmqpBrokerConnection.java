@@ -1572,6 +1572,16 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     // ---- the end ------------------------------------------------------------------------
 
     @Override
+    public boolean isLost() {
+        lock.lock();
+        try {
+            return lost != null;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public void onLost(java.util.function.Consumer<JMSException> listener) {
         JMSException already;
         lock.lock();
