@@ -92,7 +92,7 @@ tassis-api         ← Aggregator re-exposing jakarta.jms-api: a module descript
 tassis-core        ← The provider: administered objects, client API, in-VM broker, messages, selectors
 tassis-cdi-vauban  ← JMSContext injection (§12.4) for applications on Vauban
 tassis-cdi-vauban-module-it ← Its proof on the module path; never published
-tassis-bench       ← Placeholder, no sources: JMH (M12)
+tassis-bench       ← JMH benchmarks, beside Artemis and Qpid JMS; behind the `bench` profile (M12)
 tassis-examples    ← The examples of the documentation, compiled and run by the build
 tassis-tck         ← The official TCK runner: in-reactor behind the `tck` profile, class path,
                      test scope only (porting class `TassisJmsObjects`, `PortingSmokeTest`)
@@ -1114,6 +1114,85 @@ Choices and limits:
 JMH in `tassis-bench`, every figure recorded in `BENCH.md`, and the `performance` page of the
 Antora component created in M8b. The benchmarks also settle the question left open since M2:
 whether the single broker lock must be split.
+
+Cut on 2026-10-12: M12-1 measures and concludes, and changes nothing that is delivered. Each
+thing the figures ask for is a slice of its own, so that a figure, a change and a TCK run go
+together.
+
+#### M12-1 — Measure ✅
+
+- [x] `tassis-bench`: eight JMH benchmarks, each written once against Jakarta Messaging and
+      for one question, run on a rig that says who is behind it: Tassis in the JVM, Artemis in
+      the JVM, and over AMQP 1.0 the Tassis client and Qpid JMS against a `TassisServer` and
+      against Artemis
+- [x] The module behind a `bench` profile, as `tassis-interop` behind `interop`; one shaded
+      `benchmarks.jar`; a smoke test that runs every benchmark with every value of its
+      parameters
+- [x] A first campaign, in `BENCH.md` (BENCH-20261012-03) with what it says
+- [x] The `performance` page of the documentation, which follows `BENCH.md`
+
+**Proven by:** `./mvnw -Pbench -pl tassis-bench -am verify`; the campaign ran 1 h 12 min
+without a failure.
+
+**A bug found on the way** (`BUG.md` T-002): the server left the algorithm of Nagle on the
+sockets it accepts, and a third-party client waited some 48 ms an exchange. Fixed here, in a
+commit of its own, since every figure of the network depended on it: Qpid JMS went from 21 to
+4 587 round trips a second (BENCH-20261012-01 and -02). The TCK through the network passes
+with the fix, 903 of 903.
+
+**What the figures decide**, each from BENCH-20261012-03:
+
+- **The broker lock is not split.** It does not scale (3.4 million round trips a second for
+  one thread, 1.5 million for sixteen between them), but what it serves at worst is five
+  hundred times what a client of the network asks, and splitting it would put `stop()` and
+  `close()` at risk for a throughput nobody has asked for. The question of M2 is closed
+  until a use says otherwise.
+- **The single condition goes** (M12-2). A hundred consumers waiting on other queues divide
+  the throughput of the broker by fifteen, a thousand by a hundred and eighty: every change
+  wakes them all. That is the cost named in M2, and it is the first to fix.
+- **The client fetches ahead** (M12-3). One credit at a time costs 182 µs a message where
+  Qpid JMS, fetching ahead, takes 6.8 µs from the same server. An option, as M11.2 said,
+  with its price: a message a consumer holds is not there for another.
+- **Delayed messages are kept aside** (M12-4). Ten thousand of them ahead in a queue divide
+  its throughput by three hundred.
+- **The AMQP code allocates less** (M12-5). 38 kB for a round trip of 100 bytes, four times
+  what Qpid JMS and Artemis allocate between them.
+- **Sessions are not pooled yet.** A session costs nothing in the JVM and 0.4 ms on the
+  network, as much as the round trip itself. Worth having for injected contexts, which open
+  one per request; after M12-3, which changes what a session of the network costs.
+- **Nothing to do for a listener's acknowledgement**: the lock acquisition of M11.1 does not
+  show.
+
+**Choices and limits:**
+
+- **One machine, a desktop under WSL2.** Good for orders of magnitude and for before and
+  after; not a figure to quote against another product.
+- **The callers are platform threads**, those of JMH.
+- **`ContentionBench` runs Artemis without fetching ahead**, on both kinds of queues: with
+  it, consumers of a shared queue starve one another in that benchmark.
+- **No latency percentiles, no endurance run, no TLS, and the benchmarks are not in the CI.**
+- **`tassis-bench` left the default build**: it is compiled under `-Pbench` only.
+- **The fix of T-002 has a test of the method, not of the socket of a live server**: nothing
+  but the time tells Nagle from the outside. The benchmark is that proof.
+
+#### M12-2 — A receive that waits wakes for its own queue only
+
+To open. Replaces the one condition of the broker by one a consumer waits on for what
+concerns it. Measured by `IdleWaitersBench`, and by `ContentionBench` for what it changes
+there.
+
+#### M12-3 — Fetching ahead over the network
+
+To open. An option of the factory, off by default until the TCK through the network passes
+with it. Measured by `DrainBench`, `RoundTripBench` and `ListenerBench`.
+
+#### M12-4 — Delayed messages kept aside
+
+To open. Measured by `BacklogBench`.
+
+#### M12-5 — Allocation of the AMQP code
+
+To open. Measured by the `Alloc` column of `RoundTripBench` and `DrainBench`.
 
 ### M13 — Transaction management (XA and JTA)
 

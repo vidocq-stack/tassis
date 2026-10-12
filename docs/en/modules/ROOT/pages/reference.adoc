@@ -512,5 +512,5 @@ Tassis is a Java SE provider. It has no message-driven beans, and CDI message li
 
 == Bugs and benchmarks
 
-* `BUG.md`, at the root of the repository: reproducible bugs. It has no entry today.
-* `BENCH.md`, at the root of the repository: benchmark runs. It has no entry today; benchmarks are milestone M12.
+* `BUG.md`, at the root of the repository: reproducible bugs, with their cause and their status.
+* `BENCH.md`, at the root of the repository: benchmark runs, with the machine, the exact command and the raw results. The xref:performance.adoc[Performance] page is a reading of it.

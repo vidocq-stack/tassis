@@ -66,10 +66,11 @@ The post horn of the logo is the emblem of that post, and the dotted circle arou
 * xref:concepts.adoc[Concepts]
 * xref:internals.adoc[Internals]
 * xref:tck.adoc[TCK status]
+* xref:performance.adoc[Performance]
 * xref:reference.adoc[Reference]
 * xref:migration.adoc[Migration]
 
 [NOTE]
 ====
-No performance figure appears in this documentation. Benchmarks are milestone M12, and `BENCH.md` at the root of the repository has no entry yet.
+Every performance figure of this documentation is on the xref:performance.adoc[Performance] page, and comes from an entry of `BENCH.md` at the root of the repository.
 ====

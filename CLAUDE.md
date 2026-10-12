@@ -410,8 +410,8 @@ PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivati
 ## Documentation (Antora) conventions
 
 The component is `docs/en`, on Vauban's layout and under the rules of `AGENTS.md`: `index`,
-`getting-started`, `usage`, `concepts`, `internals`, `tck`, `reference`, `migration`. There is no
-`performance` page before M12 and its `BENCH.md` entries. The logo is `tassis-logo.svg`, at the
+`getting-started`, `usage`, `concepts`, `internals`, `tck`, `performance`, `reference`, `migration`. The `performance`
+page follows `BENCH.md` and quotes no figure that is not in it: change them together. The logo is `tassis-logo.svg`, at the
 root for the README and under `docs/en/modules/ROOT/images` for the documentation; the `.png`
 beside each is its rendering, to regenerate when the SVG changes.
 

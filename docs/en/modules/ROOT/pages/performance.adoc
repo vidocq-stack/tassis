@@ -1,0 +1,162 @@
+= Performance
+:description: What Tassis has been measured to do, in the JVM and through the network, beside Apache ActiveMQ Artemis and Apache Qpid JMS; where it is slow today; and how to run the benchmarks.
+
+[.lead]
+Tassis is measured with JMH, alone and beside Apache ActiveMQ Artemis and Apache Qpid JMS. In the JVM a client sends and receives 3.3 million messages a second. Through the network the server holds its place beside Artemis, and the client is slower than it should be: it asks for one message at a time.
+
+The source of this page is `BENCH.md` at the root of the repository, which holds the machine, the exact command and the raw results of each run. Every figure here comes from its entry BENCH-20261012-03. If the two differ, `BENCH.md` is right.
+
+[IMPORTANT]
+====
+One machine, a desktop (AMD Ryzen 7 5800X, Temurin 25, Linux under WSL2), on 2026-10-12. These figures give orders of magnitude and tell a change from the previous run. They are not figures to quote against another product, and a difference of a few percent between two of them means nothing.
+====
+
+== What is measured
+
+The benchmarks are in the module `tassis-bench`. Each is written once, against Jakarta Messaging, and run with whoever is behind it:
+
+[cols="1,1,2"]
+|===
+| Name | Client | Broker
+
+| `tassis-vm` | Tassis | Tassis, in the JVM
+| `artemis-vm` | Artemis | Artemis 2.57.0, in the JVM
+| `tassis-amqp` | Tassis | a `TassisServer`, AMQP 1.0 on the loopback
+| `qpid-tassis` | Qpid JMS 2.11.0 | a `TassisServer`, AMQP 1.0 on the loopback
+| `tassis-artemis` | Tassis | Artemis, AMQP 1.0 on the loopback
+| `qpid-artemis` | Qpid JMS | Artemis, AMQP 1.0 on the loopback
+|===
+
+Messages are non-persistent, and Artemis keeps nothing on disk and checks no user, as Tassis does. Everything else is what each provider does by default. One difference remains: Tassis returns from `send` when the broker has the message, where the client of Artemis and Qpid JMS return before the broker answered.
+
+== A message sent and received
+
+One thread sends a message of 100 bytes to a queue and receives it, on a session that stays open.
+
+[cols="2,1,1"]
+|===
+| Client and broker | Round trips a second | Allocated per round trip
+
+| Tassis, in the JVM | 3 294 000 | 2.1 kB
+| Artemis, in the JVM | 10 700 | 6.3 kB
+| Tassis client, Tassis server | 2 770 | 38 kB
+| Qpid JMS, Tassis server | 4 750 | 23 kB
+| Tassis client, Artemis | 2 510 | 24 kB
+| Qpid JMS, Artemis | 6 030 | 9.3 kB
+|===
+
+In the JVM, Tassis is three hundred times faster than Artemis. This is not a contest: Artemis reaches its broker of the JVM through its protocol and its thread pools, Tassis through a method call. It is what a broker in the JVM is for.
+
+Through the network, read the table by its columns. With the same client, Qpid JMS, the Tassis server does 4 750 round trips a second and Artemis 6 030. With the same server, the Tassis client does 2 770 and Qpid JMS 4 750: see <<one-at-a-time>>.
+
+With a body of 10 kB, Tassis does 170 000 round trips a second in the JVM and 2 390 through the network.
+
+== Several clients at once
+
+Several threads, each with its connection, its session and its queue, each sending a message and receiving it. The figure is what they do between them.
+
+[cols="1,1,1"]
+|===
+| Threads | Tassis, in the JVM | Artemis, in the JVM
+
+| 1 | 3 372 000 | 6 800
+| 2 | 1 906 000 | 14 800
+| 4 | 1 540 000 | 26 800
+| 8 | 1 528 000 | 53 500
+| 16 | 1 463 000 | 94 100
+|===
+
+A Tassis broker has one lock, and it shows: more clients do not get more out of it, and the first of them alone gets more than twice what sixteen share. What it serves at worst is still fifteen times what Artemis does with sixteen threads, and five hundred times what one client of the network asks of it. The lock stays as it is.
+
+== Where Tassis is slow today
+
+Three things the benchmarks were written to look at, and found. Each has its milestone in the roadmap.
+
+[#waiting]
+=== Consumers that wait slow the broker down
+
+A consumer that waits in `receive` is woken by every change of its broker, whatever the queue, and looks at its own queue again.
+
+[cols="1,1,1"]
+|===
+| Consumers waiting on other queues | Tassis, in the JVM | Artemis, in the JVM
+
+| 0 | 3 282 000 | 10 800
+| 100 | 218 000 | 10 700
+| 1 000 | 18 200 | 10 400
+|===
+
+An application with many consumers that wait at once, on a broker of the JVM, pays for it today. Planned: milestone M12-2.
+
+[#one-at-a-time]
+=== The client asks the network for one message at a time
+
+The Tassis client asks a broker of the network for a message when the application asks it for one. Qpid JMS has the broker send a thousand ahead. Emptying a queue of 10 000 messages from a `TassisServer`:
+
+[cols="2,1"]
+|===
+| Client | Time per message
+
+| Tassis | 182 µs
+| Qpid JMS, one message at a time | 191 µs
+| Qpid JMS, as it comes | 6.8 µs
+|===
+
+The two clients cost the same when they work the same way: the difference is the choice, not the code. That choice is what keeps a message nobody asked for where another consumer can take it. Fetching ahead is planned as an option: milestone M12-3.
+
+=== Delayed messages are looked at by every receive
+
+A message sent with a delivery delay stays in its queue, and a receive passes it on its way to the first message that is due.
+
+[cols="1,1"]
+|===
+| Delayed messages ahead in the queue | Round trips a second, in the JVM
+
+| 0 | 3 264 000
+| 1 000 | 196 000
+| 10 000 | 10 300
+|===
+
+Planned: milestone M12-4.
+
+== Sessions and connections
+
+A session costs next to nothing in the JVM: opening a session, a producer and a consumer for each message takes the round trip from 0.30 µs to 0.52 µs. Through the network it costs 0.4 ms, as much as the round trip itself (771 µs for 361 µs): keep a session open rather than open one for each message.
+
+A connection of the network takes 1 ms to open and close, and 7.6 µs to borrow from a xref:usage.adoc#pool[pool] and give back. A connection of the JVM takes 0.9 µs to open and close, less than the pool takes (5.4 µs): the pool is for the network. That is why xref:usage.adoc#injection[injected contexts] come from a pool on the network only.
+
+== Listeners
+
+Messages delivered to a `MessageListener`, a hundred at a time:
+
+[cols="2,1"]
+|===
+| Client and broker | Messages a second
+
+| Tassis, in the JVM | 500 000
+| Artemis, in the JVM | 132 000
+| Tassis client, Tassis server | 6 100
+| Qpid JMS, Tassis server | 37 900
+|===
+
+How the session acknowledges does not show in the JVM: 500 000, 491 000 and 518 000 for automatic, lazy and transacted. The Tassis client through the network is behind for the reason above, and because its sends wait for the broker where those of Qpid JMS do not.
+
+== Running the benchmarks
+
+From the root of the repository:
+
+[source,bash]
+----
+# build the benchmarks, and check that each of them runs
+./mvnw -ntp -Pbench -pl tassis-bench -am verify
+
+# all of them: a little more than an hour
+java -jar tassis-bench/target/benchmarks.jar -prof gc
+
+# one of them, for one provider
+java -jar tassis-bench/target/benchmarks.jar RoundTripBench -p provider=tassis-vm
+----
+
+`tassis-bench` is the only module of Tassis, with the interoperability tests, that depends on third-party code: JMH, Artemis and Qpid JMS. It is behind the Maven profile `bench`, is never published, and a plain build downloads nothing for it.
+
+A figure that is published goes to `BENCH.md` first, with the machine, the command and the raw results.
