@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import io.vidocq.tassis.server.TassisServer;
 import jakarta.jms.Connection;
+import jakarta.jms.JMSConsumer;
 import jakarta.jms.JMSContext;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
@@ -202,6 +203,30 @@ class NetworkPoolTest {
                     () -> session.createProducer(left).send(session.createTextMessage("lost")));
         }
         assertEquals(1, relay.accepted());
+    }
+
+    // A pool reads its factory by its URL, which says how far ahead its consumers fetch (ROADMAP
+    // M12-3): what a borrower held ahead is back with the broker for the next one.
+    @Test
+    void whatABorrowerHeldAheadIsThereForTheNext() {
+        try (TassisConnectionPool ahead = TassisConnectionPool
+                .over(TassisConnectionFactory.fromUrl("tassis:amqp://localhost:" + relay.port() + "?prefetch=5"))
+                .maxSize(1).build()) {
+            try (JMSContext context = ahead.createContext()) {
+                for (int i = 0; i < 5; i++) {
+                    context.createProducer().send(context.createQueue("orders"), "n" + i);
+                }
+                assertEquals("n0", context.createConsumer(context.createQueue("orders")).receiveBody(String.class, SOON));
+            }
+
+            try (JMSContext context = ahead.createContext()) {
+                JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+                for (int i = 1; i < 5; i++) {
+                    assertEquals("n" + i, consumer.receiveBody(String.class, SOON));
+                }
+            }
+            assertEquals(1, relay.accepted(), "the same link served both");
+        }
     }
 
     @Test

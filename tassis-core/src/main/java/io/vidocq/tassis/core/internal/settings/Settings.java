@@ -41,9 +41,12 @@ import java.util.Set;
  * @param clientId the client identifier of the connections, or {@code null} for none
  * @param maxListenerDeliveries how many times a message is delivered to a listener that keeps
  *        failing before it is dropped
+ * @param prefetch how many messages a consumer has a broker of the network send it ahead of
+ *        the application asking for them; 1 is one at a time, asked for when the application asks
  * @param pool what configures a pool of the connections; a factory carries it and makes no use of it
  */
-public record Settings(String broker, String server, String clientId, int maxListenerDeliveries, Pool pool) {
+public record Settings(String broker, String server, String clientId, int maxListenerDeliveries, int prefetch,
+        Pool pool) {
 
     /**
      * What configures a connection pool. A duration of zero means never, where never makes sense:
@@ -112,6 +115,7 @@ public record Settings(String broker, String server, String clientId, int maxLis
     public static final String SERVER = PREFIX + "server";
     public static final String CLIENT_ID = PREFIX + "clientId";
     public static final String MAX_LISTENER_DELIVERIES = PREFIX + "listener.maxDeliveries";
+    public static final String PREFETCH = PREFIX + "prefetch";
     public static final String POOL_ENABLED = PREFIX + "pool.enabled";
     public static final String POOL_MAX_SIZE = PREFIX + "pool.maxSize";
     public static final String POOL_ACQUIRE_TIMEOUT = PREFIX + "pool.acquireTimeout";
@@ -121,6 +125,7 @@ public record Settings(String broker, String server, String clientId, int maxLis
 
     public static final String DEFAULT_BROKER = "default";
     public static final int DEFAULT_MAX_LISTENER_DELIVERIES = 10;
+    public static final int DEFAULT_PREFETCH = 1;
 
     /** Where the settings of the factory called {@code name} are: {@code tassis.factory.<name>.}. */
     private static final String FACTORY_PREFIX = PREFIX + "factory.";
@@ -132,12 +137,12 @@ public record Settings(String broker, String server, String clientId, int maxLis
     /** The transports to a broker of the network, and the port each uses unless told otherwise. */
     private static final Map<String, Integer> SERVER_TRANSPORTS = Map.of("amqp", 5672, "amqps", 5671);
 
-    private static final Set<String> KEYS = Set.of(URL, BROKER, SERVER, CLIENT_ID, MAX_LISTENER_DELIVERIES,
+    private static final Set<String> KEYS = Set.of(URL, BROKER, SERVER, CLIENT_ID, MAX_LISTENER_DELIVERIES, PREFETCH,
             POOL_ENABLED, POOL_MAX_SIZE, POOL_ACQUIRE_TIMEOUT, POOL_IDLE_TIMEOUT, POOL_MAX_LIFETIME,
             POOL_LEAK_THRESHOLD);
 
     public static final Settings DEFAULTS =
-            new Settings(DEFAULT_BROKER, null, null, DEFAULT_MAX_LISTENER_DELIVERIES, Pool.DEFAULTS);
+            new Settings(DEFAULT_BROKER, null, null, DEFAULT_MAX_LISTENER_DELIVERIES, DEFAULT_PREFETCH, Pool.DEFAULTS);
 
     public Settings {
         if (broker == null || broker.isEmpty()) {
@@ -153,27 +158,34 @@ public record Settings(String broker, String server, String clientId, int maxLis
             throw new IllegalArgumentException(
                     MAX_LISTENER_DELIVERIES + " must be at least 1, not " + maxListenerDeliveries);
         }
+        if (prefetch < 1) {
+            throw new IllegalArgumentException(PREFETCH + " must be at least 1, not " + prefetch);
+        }
         Objects.requireNonNull(pool, "pool");
     }
 
     public Settings withBroker(String newBroker) {
-        return new Settings(newBroker, server, clientId, maxListenerDeliveries, pool);
+        return new Settings(newBroker, server, clientId, maxListenerDeliveries, prefetch, pool);
     }
 
     public Settings withServer(String newServer) {
-        return new Settings(broker, newServer, clientId, maxListenerDeliveries, pool);
+        return new Settings(broker, newServer, clientId, maxListenerDeliveries, prefetch, pool);
     }
 
     public Settings withClientId(String newClientId) {
-        return new Settings(broker, server, newClientId, maxListenerDeliveries, pool);
+        return new Settings(broker, server, newClientId, maxListenerDeliveries, prefetch, pool);
     }
 
     public Settings withMaxListenerDeliveries(int newMaximum) {
-        return new Settings(broker, server, clientId, newMaximum, pool);
+        return new Settings(broker, server, clientId, newMaximum, prefetch, pool);
+    }
+
+    public Settings withPrefetch(int newPrefetch) {
+        return new Settings(broker, server, clientId, maxListenerDeliveries, newPrefetch, pool);
     }
 
     public Settings withPool(Pool newPool) {
-        return new Settings(broker, server, clientId, maxListenerDeliveries, newPool);
+        return new Settings(broker, server, clientId, maxListenerDeliveries, prefetch, newPool);
     }
 
     /** The transport of the server, {@code amqp} for one; {@code null} for a broker of this JVM. */
@@ -288,6 +300,9 @@ public record Settings(String broker, String server, String clientId, int maxLis
         if (keys.containsKey(MAX_LISTENER_DELIVERIES)) {
             result = result.withMaxListenerDeliveries(
                     number(shown(MAX_LISTENER_DELIVERIES, shownPrefix), keys.get(MAX_LISTENER_DELIVERIES)));
+        }
+        if (keys.containsKey(PREFETCH)) {
+            result = result.withPrefetch(number(shown(PREFETCH, shownPrefix), keys.get(PREFETCH)));
         }
         Pool pool = result.pool();
         if (keys.containsKey(POOL_ENABLED)) {
@@ -416,6 +431,10 @@ public record Settings(String broker, String server, String clientId, int maxLis
         }
         if (maxListenerDeliveries != DEFAULT_MAX_LISTENER_DELIVERIES) {
             url.append(separator).append("listener.maxDeliveries=").append(maxListenerDeliveries);
+            separator = '&';
+        }
+        if (prefetch != DEFAULT_PREFETCH) {
+            url.append(separator).append("prefetch=").append(prefetch);
             separator = '&';
         }
         Map<String, Object> ofThePool = new LinkedHashMap<>();

@@ -344,6 +344,11 @@ A connection factory is configured in code, by settings, or by a connection URL.
 | `10`
 | How many times a message is delivered to a listener that keeps failing, in an automatically acknowledged session, before the message is dropped. At least 1.
 
+| `tassis.prefetch`
+| `prefetch`
+| `1`
+| How many messages a consumer has a broker of the network send it ahead of the application asking for them. `1` is one at a time, asked for when the application asks. At least 1; ignored by the broker of the JVM. See xref:usage.adoc#prefetch[Fetching ahead] for what more costs.
+
 | `tassis.pool.enabled`
 | `pool.enabled`
 | `true`

@@ -314,4 +314,29 @@ class ConnectionFactorySettingsTest {
                 () -> TassisConnectionFactory.fromUrl("tassis:amqp://localhost:1").createConnection());
         assertTrue(missing.getMessage().contains("tassis-amqp"), missing.getMessage());
     }
+
+    // ---- fetching ahead (ROADMAP M12-3) ----------------------------------------------
+
+    @Test
+    void theNumberOfMessagesFetchedAheadIsASettingLikeTheOthers() {
+        assertEquals("tassis:amqp://broker.example:5672", TassisConnectionFactory.fromUrl("tassis:amqp://broker.example").toUrl());
+        assertEquals("tassis:amqp://broker.example:5672?prefetch=100",
+                TassisConnectionFactory.fromUrl("tassis:amqp://broker.example?prefetch=100").toUrl());
+        assertEquals("tassis:amqp://broker.example:5672?prefetch=20",
+                TassisConnectionFactory.from(Map.of("tassis.server", "amqp://broker.example", "tassis.prefetch", "20")).toUrl());
+        assertEquals("tassis:amqp://broker.example:5672?prefetch=5",
+                TassisConnectionFactory.fromUrl("tassis:amqp://broker.example").withPrefetch(5).toUrl());
+        // one at a time is the default, and is not written
+        assertEquals("tassis:amqp://broker.example:5672",
+                TassisConnectionFactory.fromUrl("tassis:amqp://broker.example?prefetch=7").withPrefetch(1).toUrl());
+    }
+
+    @Test
+    void aNumberOfMessagesFetchedAheadBelowOneIsRefused() {
+        IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                () -> TassisConnectionFactory.from(Map.of("tassis.prefetch", "0")));
+        assertTrue(rejected.getMessage().contains("tassis.prefetch"), rejected.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> new TassisConnectionFactory().withPrefetch(0));
+        assertThrows(IllegalArgumentException.class, () -> TassisConnectionFactory.fromUrl("tassis:vm:orders?prefetch=many"));
+    }
 }

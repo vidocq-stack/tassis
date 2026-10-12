@@ -53,6 +53,7 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -619,6 +620,306 @@ class NetworkClientTest {
             Message again = careful.createConsumer(careful.createQueue("orders")).receive(SOON);
             assertEquals("not lost", again.getBody(String.class));
             assertTrue(again.getJMSRedelivered());
+        }
+    }
+
+    // ---- fetching ahead (ROADMAP M12-3) ----------------------------------------------
+
+    /** Waits for the queue to hold that many messages: what a broker sends ahead leaves it a moment later. */
+    private void awaitMessagesLeft(int expected, String queue) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SOON);
+        while (messagesLeft(queue) != expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertEquals(expected, messagesLeft(queue));
+    }
+
+    private void fill(String queue, int messages) {
+        try (JMSContext sender = inVmContext()) {
+            for (int i = 0; i < messages; i++) {
+                sender.createProducer().send(sender.createQueue(queue), "message " + i);
+            }
+        }
+    }
+
+    @Test
+    void aConsumerToldToFetchAheadHasTheBrokerSendItMoreThanItWasAskedFor() throws Exception {
+        fill("orders", 10);
+        try (JMSContext context = network.withPrefetch(4).createContext()) {
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+
+            // the one it delivered, and three more it holds for the receives to come
+            awaitMessagesLeft(6, "orders");
+            for (int i = 1; i < 10; i++) {
+                assertEquals("message " + i, consumer.receiveBody(String.class, SOON));
+            }
+            assertNull(consumer.receiveNoWait());
+        }
+        assertEquals(0, messagesLeft("orders"));
+    }
+
+    // The price of fetching ahead, which the documentation states: this is what it looks like.
+    @Test
+    void aConsumerThatFetchesAheadTakesWhatComesLaterWhetherItIsAskedOrNot() throws Exception {
+        try (JMSContext context = network.withPrefetch(5).createContext(); JMSContext near = inVmContext()) {
+            Queue orders = context.createQueue("orders");
+            JMSConsumer first = context.createConsumer(orders);
+            JMSConsumer second = context.createConsumer(orders);
+            near.createProducer().send(near.createQueue("orders"), "asked for");
+            assertEquals("asked for", first.receiveBody(String.class, SOON));
+
+            // The first asked for five and got one: the next is its own too, and the second,
+            // which asks, gets nothing.
+            near.createProducer().send(near.createQueue("orders"), "not asked for");
+            awaitMessagesLeft(0, "orders");
+            assertNull(second.receive(BRIEFLY));
+            assertEquals("not asked for", first.receiveBody(String.class, SOON));
+        }
+    }
+
+    @Test
+    void aConsumerNotToldToFetchAheadTakesOneMessageAtATime() throws Exception {
+        fill("orders", 10);
+        try (JMSContext context = network.createContext()) {
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+
+            Thread.sleep(BRIEFLY);
+            assertEquals(9, messagesLeft("orders"));
+        }
+    }
+
+    @Test
+    void whatAConsumerFetchedAheadGoesBackWhenItClosesAsIfNeverDelivered() throws Exception {
+        fill("orders", 5);
+        try (JMSContext context = network.withPrefetch(5).createContext()) {
+            Queue orders = context.createQueue("orders");
+            JMSConsumer first = context.createConsumer(orders);
+            assertEquals("message 0", first.receiveBody(String.class, SOON));
+            awaitMessagesLeft(0, "orders");
+            first.close();
+            assertEquals(4, messagesLeft("orders"));
+
+            JMSConsumer second = context.createConsumer(orders);
+            for (int i = 1; i < 5; i++) {
+                Message message = second.receive(SOON);
+                assertEquals("message " + i, message.getBody(String.class));
+                // §3.4.7: the application never saw it
+                assertFalse(message.getJMSRedelivered());
+                assertEquals(1, message.getIntProperty("JMSXDeliveryCount"));
+            }
+        }
+    }
+
+    @Test
+    void whatAConsumerFetchedAheadGoesBackWhenItsConnectionStops() throws Exception {
+        fill("orders", 5);
+        try (JMSContext context = network.withPrefetch(5).createContext(); JMSContext near = inVmContext()) {
+            Queue orders = context.createQueue("orders");
+            JMSConsumer consumer = context.createConsumer(orders);
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+            awaitMessagesLeft(0, "orders");
+
+            // §6.1.5: a stopped connection delivers nothing, and holds nothing back from the others
+            context.stop();
+
+            assertEquals(4, messagesLeft("orders"));
+            assertEquals("message 1", near.createConsumer(near.createQueue("orders")).receiveBody(String.class, SOON));
+            context.start();
+            assertEquals("message 2", consumer.receiveBody(String.class, SOON));
+        }
+    }
+
+    @Test
+    void aSessionThatRecoversGetsItsMessagesAgainBeforeThoseFetchedAhead() throws Exception {
+        fill("orders", 6);
+        try (JMSContext context = network.withPrefetch(4).createContext(JMSContext.CLIENT_ACKNOWLEDGE)) {
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+            assertEquals("message 1", consumer.receiveBody(String.class, SOON));
+
+            // §6.2.11: delivery restarts with the oldest unacknowledged message
+            context.recover();
+
+            for (int i = 0; i < 6; i++) {
+                Message message = consumer.receive(SOON);
+                assertEquals("message " + i, message.getBody(String.class));
+                assertEquals(i < 2, message.getJMSRedelivered());
+            }
+            context.acknowledge();
+        }
+        assertEquals(0, messagesLeft("orders"));
+    }
+
+    @Test
+    void aTransactionRolledBackGetsItsMessagesAgainBeforeThoseFetchedAhead() throws Exception {
+        fill("orders", 6);
+        try (JMSContext context = network.withPrefetch(4).createContext(JMSContext.SESSION_TRANSACTED)) {
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+            assertEquals("message 1", consumer.receiveBody(String.class, SOON));
+
+            // §6.2.7: what the transaction consumed is recovered
+            context.rollback();
+
+            for (int i = 0; i < 6; i++) {
+                Message message = consumer.receive(SOON);
+                assertEquals("message " + i, message.getBody(String.class));
+                assertEquals(i < 2, message.getJMSRedelivered());
+            }
+            context.commit();
+        }
+        assertEquals(0, messagesLeft("orders"));
+    }
+
+    @Test
+    void aSessionClosedWithMessagesHeldAheadAndOthersUnacknowledgedGivesAllOfThemBack() throws Exception {
+        fill("orders", 6);
+        try (JMSContext context = network.withPrefetch(4).createContext(JMSContext.CLIENT_ACKNOWLEDGE)) {
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+            assertEquals("message 0", consumer.receiveBody(String.class, SOON));
+            assertEquals("message 1", consumer.receiveBody(String.class, SOON));
+        }
+
+        // §6.2.10: closing does not acknowledge; and what was only held was never delivered
+        assertEquals(6, messagesLeft("orders"));
+        try (JMSContext near = inVmContext()) {
+            JMSConsumer consumer = near.createConsumer(near.createQueue("orders"));
+            for (int i = 0; i < 6; i++) {
+                Message message = consumer.receive(SOON);
+                assertEquals("message " + i, message.getBody(String.class));
+                assertEquals(i < 2, message.getJMSRedelivered());
+            }
+        }
+    }
+
+    @Test
+    void aDurableSubscriberThatFetchesAheadLosesNothingWhenItComesBack() throws Exception {
+        TassisConnectionFactory reader = network.withPrefetch(4).withClientID("reader");
+        try (JMSContext context = reader.createContext()) {
+            context.createDurableConsumer(context.createTopic("news"), "all").close();
+        }
+        try (JMSContext near = inVmContext()) {
+            for (int i = 0; i < 10; i++) {
+                near.createProducer().send(near.createTopic("news"), "headline " + i);
+            }
+        }
+        try (JMSContext context = reader.createContext()) {
+            JMSConsumer subscriber = context.createDurableConsumer(context.createTopic("news"), "all");
+            assertEquals("headline 0", subscriber.receiveBody(String.class, SOON));
+            assertEquals("headline 1", subscriber.receiveBody(String.class, SOON));
+        }
+        // §8.3.3: what it held and did not deliver is still in the subscription
+        try (JMSContext context = reader.createContext()) {
+            JMSConsumer subscriber = context.createDurableConsumer(context.createTopic("news"), "all");
+            for (int i = 2; i < 10; i++) {
+                assertEquals("headline " + i, subscriber.receiveBody(String.class, SOON));
+            }
+            assertNull(subscriber.receiveNoWait());
+            subscriber.close();
+            context.unsubscribe("all");
+        }
+    }
+
+    @Test
+    void aMessageThatExpiresWhileHeldAheadIsNotDelivered() throws Exception {
+        try (JMSContext context = network.withPrefetch(5).createContext(); JMSContext near = inVmContext()) {
+            Queue orders = near.createQueue("orders");
+            near.createProducer().send(orders, "kept");
+            near.createProducer().setTimeToLive(1_000).send(orders, "short-lived");
+            near.createProducer().send(orders, "kept too");
+            JMSConsumer consumer = context.createConsumer(context.createQueue("orders"));
+            assertEquals("kept", consumer.receiveBody(String.class, SOON));
+            awaitMessagesLeft(0, "orders");
+
+            Thread.sleep(1_200);
+
+            // §3.4.9: a message is not delivered after its expiration
+            assertEquals("kept too", consumer.receiveBody(String.class, SOON));
+            assertNull(consumer.receiveNoWait());
+            // told that this consumer will not take it, the broker keeps it for nobody
+            awaitMessagesLeft(0, "orders");
+        }
+    }
+
+    @Test
+    void aListenerToldToFetchAheadGetsEveryMessageInOrder() throws Exception {
+        fill("orders", 50);
+        List<String> received = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch all = new CountDownLatch(50);
+        try (JMSContext context = network.withPrefetch(8).createContext()) {
+            context.createConsumer(context.createQueue("orders")).setMessageListener(message -> {
+                try {
+                    received.add(message.getBody(String.class));
+                } catch (JMSException e) {
+                    received.add(e.toString());
+                }
+                all.countDown();
+            });
+
+            assertTrue(all.await(SOON, TimeUnit.MILLISECONDS));
+        }
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            expected.add("message " + i);
+        }
+        assertEquals(expected, received);
+        assertEquals(0, messagesLeft("orders"));
+    }
+
+    @Test
+    void whatAListenerFetchedAheadGoesBackWhenItIsRemoved() throws Exception {
+        try (JMSContext context = network.withPrefetch(5).createContext(); JMSContext near = inVmContext()) {
+            Queue orders = context.createQueue("orders");
+            JMSConsumer consumer = context.createConsumer(orders);
+            CountDownLatch first = new CountDownLatch(1);
+            CountDownLatch removed = new CountDownLatch(1);
+            consumer.setMessageListener(message -> {
+                first.countDown();
+                try {
+                    removed.await(SOON, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            fill("orders", 6);
+            assertTrue(first.await(SOON, TimeUnit.MILLISECONDS));
+
+            // Removing a listener waits for its delivery in progress, which ends a moment later.
+            Thread.ofVirtual().start(() -> {
+                try {
+                    Thread.sleep(BRIEFLY);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                removed.countDown();
+            });
+            consumer.setMessageListener(null);
+
+            // the five it did not deliver, for whoever asks
+            awaitMessagesLeft(5, "orders");
+            JMSConsumer other = near.createConsumer(near.createQueue("orders"));
+            for (int i = 1; i < 6; i++) {
+                assertEquals("message " + i, other.receiveBody(String.class, SOON));
+            }
+        }
+    }
+
+    @Test
+    void aSubscriberToldToFetchAheadGetsEveryMessagePublished() {
+        try (JMSContext context = network.withPrefetch(4).createContext(); JMSContext near = inVmContext()) {
+            JMSConsumer subscriber = context.createConsumer(context.createTopic("news"));
+            for (int i = 0; i < 10; i++) {
+                near.createProducer().send(near.createTopic("news"), "headline " + i);
+            }
+
+            for (int i = 0; i < 10; i++) {
+                assertEquals("headline " + i, subscriber.receiveBody(String.class, SOON));
+            }
+            assertNull(subscriber.receiveNoWait());
         }
     }
 }

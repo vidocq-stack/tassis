@@ -257,10 +257,19 @@ that never writes and a writer that alone writes. Rules:
 - **One lock, one condition.** Every wait is on that condition, so it releases the lock; frames
   are queued under the lock. Never read or write the socket under it: `establish` talks to
   the socket itself, before anything else uses the connection, and takes the lock at the end.
-- **One credit at a time**, granted when the application asks for a message: a message nobody
-  asked for stays with the broker. Whoever stops waiting (`receive` out of time, a listener
-  gone, `stop`, `close`) **drains**, then gives back with `released` what came and nobody saw.
-  Nothing may stay in `arrived` behind a caller's back.
+- **One credit at a time** unless the factory says otherwise (`prefetch`, ROADMAP M12-3),
+  granted when the application asks for a message: a message nobody asked for stays with the
+  broker. Whoever stops waiting (`receive` out of time, a listener gone, `stop`, `close`)
+  **drains**, then gives back with `released` what came and nobody saw. One at a time, nothing
+  may stay in `arrived` behind a caller's back.
+- **A connection that fetches ahead keeps its credit between two receives**, as Apache Qpid JMS
+  does, and holds what comes in `arrived`. Everything else is the same code, written for any
+  number of credits. **Whatever takes messages back from the application gives back what is
+  held first** (`giveBackAhead` in `redeliver` and `returnUndelivered`, `listen(false)`,
+  `stop`, `close`): the broker must have all of it before it sends any of it again, or the
+  order is lost. A new way for a session to hand deliveries back goes through one of those.
+  Every branch that only makes sense when holding ahead is behind `prefetch > 1`: **at 1 the
+  frames are those of before**, which is what the TCK through the network runs.
 - **A drain ends** by the transfer that uses the credit or by a `flow` whose delivery count
   accounts for all of it; any other answer is that of an earlier drain.
 - **A closed consumer whose session still answers for deliveries keeps its link**

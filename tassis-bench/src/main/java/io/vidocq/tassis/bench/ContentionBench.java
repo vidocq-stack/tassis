@@ -75,7 +75,7 @@ public class ContentionBench {
 
     @Setup
     public void open() throws Exception {
-        rig = Rig.start(provider, "?consumerWindowSize=0");
+        rig = Rig.start(provider, provider.equals("artemis-vm") ? "?consumerWindowSize=0" : "");
     }
 
     @TearDown

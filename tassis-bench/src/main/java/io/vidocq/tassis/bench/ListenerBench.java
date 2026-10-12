@@ -56,7 +56,7 @@ public class ListenerBench {
 
     private static final int BATCH = 100;
 
-    @Param({"tassis-vm", "artemis-vm", "tassis-amqp", "qpid-tassis"})
+    @Param({"tassis-vm", "artemis-vm", "tassis-amqp", "tassis-ahead", "qpid-tassis"})
     public String provider;
 
     /** {@code auto}, {@code dups-ok}, or {@code transacted}: the listener commits each message. */

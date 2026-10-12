@@ -544,4 +544,38 @@ class TassisClientAgainstArtemisTest {
             }
         }
     }
+
+    // ---- fetching ahead (ROADMAP M12-3) ---------------------------------------------
+
+    @Test
+    void aConsumerThatFetchesAheadGetsEveryMessageInOrderAndGivesBackWhatItDidNotDeliver() throws Exception {
+        try (JMSContext context = tassis.withPrefetch(8).createContext(JMSContext.SESSION_TRANSACTED)) {
+            Queue orders = context.createQueue(name("ahead"));
+            for (int i = 0; i < 30; i++) {
+                context.createProducer().send(orders, "message " + i);
+            }
+            context.commit();
+
+            JMSConsumer consumer = context.createConsumer(orders);
+            for (int i = 0; i < 12; i++) {
+                assertEquals("message " + i, consumer.receiveBody(String.class, SOON));
+            }
+            // §6.2.7: what was consumed comes again, before what the consumer held ahead
+            context.rollback();
+            for (int i = 0; i < 12; i++) {
+                assertEquals("message " + i, consumer.receiveBody(String.class, SOON));
+            }
+            context.commit();
+            consumer.close();
+
+            // what the closed consumer held is there for another
+            JMSConsumer other = context.createConsumer(orders);
+            for (int i = 12; i < 30; i++) {
+                Message message = other.receive(SOON);
+                assertEquals("message " + i, message.getBody(String.class));
+            }
+            assertNull(other.receiveNoWait());
+            context.commit();
+        }
+    }
 }

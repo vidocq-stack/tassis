@@ -294,9 +294,9 @@ How the seam meets AMQP, from the client's side:
 | `send` | A transfer on the link without an address (an anonymous relay), then the wait for its disposition
 | `commit(sends, consumed)` | `declare`, the transfers and the dispositions in the transaction, `discharge`. A commit that only acknowledges, or sends one message, needs no transaction
 | `attach`, `subscribe` | A receiving link, described as the server reads it
-| `receive`, `take` | One credit, then the wait. Out of time, or the listener gone: a `flow` with `drain`, so that the broker sends what it has or says it has nothing
+| `receive`, `take` | One credit, or as many as the connection fetches ahead (`prefetch`), topped up once half is used; then the wait. Out of time, or the listener gone: a `flow` with `drain`, so that the broker sends what it has or says it has nothing
 | `stop` | `drain` on every link, and `released` for what came and nobody had seen
-| `settle`, `redeliver`, `returnUndelivered` | Dispositions `accepted`, `modified` with `delivery-failed`, `released`
+| `settle`, `redeliver`, `returnUndelivered` | Dispositions `accepted`, `modified` with `delivery-failed`, `released`. A connection that fetches ahead first gives back what the consumers concerned hold (`drain`, `released`), so that the broker sends all of it again in its order
 | `Consumer.close()` | `drain`, then `detach`: put off while the session still answers for deliveries of the link, which a broker gives back when a link goes
 | `browse` | A link in the mode `copy`, credit and `drain` together until the broker has nothing more
 | `createTemporaryQueue`, `deleteTemporaryQueue` | A sending link with a dynamic target, kept until the destination is deleted

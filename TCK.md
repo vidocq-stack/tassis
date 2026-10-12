@@ -78,8 +78,20 @@ connection of every test goes through the AMQP client of `tassis-amqp`, a socket
 server.
 
 **903 passed / 0 failed**, nothing excluded and nothing adapted, in about 14 minutes
-(2026-10-11). The direct run stays the reference. Replay this one when the client transport,
+(2026-10-12). The direct run stays the reference. Replay this one when the client transport,
 the server or `BrokerConnection` changes.
+
+### With consumers that fetch ahead
+
+A factory may tell its consumers to have the broker send them messages ahead
+(`tassis.prefetch`, ROADMAP M12-3). It is 1 by default, which is what the run above uses.
+`./run-official-tck-messaging-3.1.sh network -Dtassis.tck.prefetch=100` runs the same selection
+with a hundred: **899 passed / 4 failed** (2026-10-12). The four are
+`core20.jmscontexttopictests.ClientIT.createSharedConsumerTest1` and `Test2`, and
+`core20.sessiontests.ClientIT.createSharedConsumerTopicTest1` and `TopicTest2`: two consumers
+share a subscription, the first receives a message, and the test expects the second to get
+the next one. A consumer that fetches ahead has asked for it already and holds it. That is the
+documented price of the setting, not a defect to fix, and the reason it is not the default.
 
 ## Signature test
 

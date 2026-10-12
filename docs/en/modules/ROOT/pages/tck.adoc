@@ -110,6 +110,8 @@ Same selection, same settings, same result: 903 passed, 0 failed, in about 14 mi
 
 The direct run stays the reference: it is the one that says what the provider does. The run through the network is to be replayed when the client transport, the server or the interface between client and broker changes.
 
+That run uses consumers as they come, which ask for one message at a time. With consumers told to xref:usage.adoc#prefetch[fetch ahead] (`-Dtassis.tck.prefetch=100`), 899 tests pass and 4 fail: the shared-consumer tests of `core20`, where a first consumer receives a message and a second is expected to get the next, which the first already holds. That is the price of the setting, and why it is not the default.
+
 == History
 
 [cols="1,1,3",options="header"]

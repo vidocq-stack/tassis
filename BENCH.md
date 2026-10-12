@@ -23,6 +23,86 @@ which question it answers, and `Rig` who is behind the name of a provider.
 
 ---
 
+## BENCH-20261012-05 — The client fetches ahead when told to (M12-3)
+
+- **Date**: 2026-10-12
+- **Commit**: the commit of M12-3 (branch `feat/m12-3-fetch-ahead`)
+- **JVM**: Temurin 25+36-LTS, default flags
+- **Hardware**: AMD Ryzen 7 5800X (8 cores, 16 threads), 16 GB given to WSL2
+- **OS**: Ubuntu 20.04.6 LTS under WSL2, Linux 5.15.167.4
+- **Exact command** (21 min):
+  ```bash
+  ./mvnw -ntp -Pbench -pl tassis-bench -am verify        # Maven 3.9.16
+  java -jar tassis-bench/target/benchmarks.jar 'DrainBench|RoundTripBench|ListenerBench|SessionBench' \
+      -p provider=tassis-amqp,tassis-ahead,qpid-tassis -prof gc -rf json
+  ```
+  `tassis-amqp` is the Tassis client as it comes, one message at a time; `tassis-ahead` the
+  same with `prefetch=1000`, the number Qpid JMS uses. In `DrainBench` the client is named with
+  the number of messages it fetches ahead.
+- **Results**:
+  ```
+  Benchmark         (broker)     (client)  Mode  Cnt    Score    Error  Units  Alloc
+  DrainBench.drain    tassis     tassis-1    ss   20  182.824  ± 3.156  us/op  40280  B/op
+  DrainBench.drain    tassis  tassis-1000    ss   20    6.339  ± 0.485  us/op  37782  B/op
+  DrainBench.drain    tassis       qpid-1    ss   20  191.650  ± 2.196  us/op  24779  B/op
+  DrainBench.drain    tassis    qpid-1000    ss   20    6.591  ± 0.338  us/op  23382  B/op
+  DrainBench.drain   artemis     tassis-1    ss   20  190.684  ± 2.387  us/op  26471  B/op
+  DrainBench.drain   artemis  tassis-1000    ss   20    5.562  ± 0.409  us/op  24545  B/op
+  DrainBench.drain   artemis       qpid-1    ss   20  140.691  ± 2.854  us/op  10072  B/op
+  DrainBench.drain   artemis    qpid-1000    ss   20    5.446  ± 0.246  us/op   9680  B/op
+
+  Benchmark                   (provider)  (size)   Mode  Cnt     Score      Error  Units   Alloc
+  RoundTripBench.roundTrip   tassis-amqp     100  thrpt   10  2785.505  ± 131.963  ops/s   38060  B/op
+  RoundTripBench.roundTrip   tassis-amqp   10000  thrpt   10  2398.212   ± 76.154  ops/s  552872  B/op
+  RoundTripBench.roundTrip  tassis-ahead     100  thrpt   10  5272.451  ± 135.586  ops/s   35452  B/op
+  RoundTripBench.roundTrip  tassis-ahead   10000  thrpt   10  4314.485  ± 102.461  ops/s  550271  B/op
+  RoundTripBench.roundTrip   qpid-tassis     100  thrpt   10  4745.281  ± 121.834  ops/s   22823  B/op
+  RoundTripBench.roundTrip   qpid-tassis   10000  thrpt   10  4308.061  ± 116.471  ops/s  322866  B/op
+
+  Benchmark                  (mode)    (provider)   Mode  Cnt      Score       Error  Units  Alloc
+  ListenerBench.deliver        auto   tassis-amqp  thrpt   10   6087.423   ± 126.170  ops/s  37702  B/op
+  ListenerBench.deliver        auto  tassis-ahead  thrpt   10   5891.508   ± 210.780  ops/s  36547  B/op
+  ListenerBench.deliver        auto   qpid-tassis  thrpt   10  37693.552  ± 1039.030  ops/s  22744  B/op
+  ListenerBench.deliver     dups-ok   tassis-amqp  thrpt   10   6038.902   ± 137.699  ops/s  37744  B/op
+  ListenerBench.deliver     dups-ok  tassis-ahead  thrpt   10   5822.024   ± 148.729  ops/s  36093  B/op
+  ListenerBench.deliver     dups-ok   qpid-tassis  thrpt   10  37479.992  ± 1187.017  ops/s  22555  B/op
+  ListenerBench.deliver  transacted   tassis-amqp  thrpt   10   6025.682    ± 82.299  ops/s  37783  B/op
+  ListenerBench.deliver  transacted  tassis-ahead  thrpt   10   5899.409    ± 94.440  ops/s  36129  B/op
+  ListenerBench.deliver  transacted   qpid-tassis  thrpt   10   4732.247    ± 51.369  ops/s  30904  B/op
+
+  Benchmark                           (provider)   Mode  Cnt     Score     Error  Units  Alloc
+  SessionBench.sessionPerRoundTrip   tassis-amqp  thrpt   10  1334.232  ± 46.566  ops/s  51765  B/op
+  SessionBench.sessionPerRoundTrip  tassis-ahead  thrpt   10  1085.999  ± 50.053  ops/s  57029  B/op
+  SessionBench.sessionPerRoundTrip   qpid-tassis  thrpt   10   708.541  ± 62.232  ops/s  71680  B/op
+  ```
+- **Comparison with the previous run**: the Tassis client one at a time and Qpid JMS are
+  where BENCH-20261012-03 and -04 had them (`DrainBench` 182.8 µs for 182.4; `RoundTripBench`
+  2 786 and 4 745 ops/s for 2 771 and 4 748). What is new is the client told to fetch ahead,
+  beside the same client one at a time:
+
+  | Benchmark | one at a time | fetching ahead | | Qpid JMS |
+  |---|---|---|---|---|
+  | `DrainBench`, Tassis server, per message | 182.8 µs | 6.3 µs | **29× faster** | 6.6 µs |
+  | `DrainBench`, Artemis, per message | 190.7 µs | 5.6 µs | **34× faster** | 5.4 µs |
+  | `RoundTripBench`, 100 bytes | 2 786 ops/s | 5 272 ops/s | **1.9× faster** | 4 745 ops/s |
+  | `RoundTripBench`, 10 kB | 2 398 ops/s | 4 314 ops/s | **1.8× faster** | 4 308 ops/s |
+  | `ListenerBench`, automatic | 6 087 ops/s | 5 892 ops/s | within the errors | 37 694 ops/s |
+  | `SessionBench` | 1 334 ops/s | 1 086 ops/s | **19 % slower** | 709 ops/s |
+
+**What the figures say.**
+
+- **Fetching ahead, the Tassis client receives as fast as Qpid JMS**, from a Tassis server
+  and from Artemis: the gap BENCH-20261012-03 measured was the choice of one credit at a
+  time, and nothing else.
+- **A message sent and received takes half the time**: the credit is already with the broker
+  when the message arrives, where one at a time it is asked for after.
+- **Delivery to a listener does not move**, and stays six times under Qpid JMS. What that
+  benchmark measures on the Tassis side is therefore not the receiving. It sends its hundred
+  messages with the same client, which waits for the broker to answer each `send` where Qpid
+  JMS does not: that is the likely cause, and it is not established.
+- **A consumer opened and closed for each message costs more when it fetches ahead**: closing
+  it gives back what it held, one exchange more. Fetching ahead is for consumers that last.
+
 ## BENCH-20261012-04 — A receive that waits is woken for its own queue only (M12-2)
 
 - **Date**: 2026-10-12

@@ -52,6 +52,8 @@ import org.apache.qpid.jms.JmsConnectionFactory;
  * <tr><td>{@code tassis-vm}</td><td>Tassis</td><td>Tassis, in the JVM</td></tr>
  * <tr><td>{@code artemis-vm}</td><td>Artemis</td><td>Artemis, in the JVM</td></tr>
  * <tr><td>{@code tassis-amqp}</td><td>Tassis</td><td>a {@code TassisServer}, on the loopback</td></tr>
+ * <tr><td>{@code tassis-ahead}</td><td>Tassis, fetching a thousand messages ahead as Qpid JMS
+ * does</td><td>a {@code TassisServer}, on the loopback</td></tr>
  * <tr><td>{@code qpid-tassis}</td><td>Qpid JMS</td><td>a {@code TassisServer}, on the loopback</td></tr>
  * <tr><td>{@code tassis-artemis}</td><td>Tassis</td><td>Artemis, AMQP 1.0, on the loopback</td></tr>
  * <tr><td>{@code qpid-artemis}</td><td>Qpid JMS</td><td>Artemis, AMQP 1.0, on the loopback</td></tr>
@@ -77,7 +79,10 @@ final class Rig implements AutoCloseable {
         try {
             factory = switch (provider) {
                 case "tassis-vm" -> new TassisConnectionFactory("bench-" + id);
-                case "tassis-amqp" -> TassisConnectionFactory.fromUrl("tassis:amqp://127.0.0.1:" + tassis(id));
+                case "tassis-amqp" ->
+                    TassisConnectionFactory.fromUrl("tassis:amqp://127.0.0.1:" + tassis(id) + clientOptions);
+                case "tassis-ahead" ->
+                    TassisConnectionFactory.fromUrl("tassis:amqp://127.0.0.1:" + tassis(id) + "?prefetch=1000");
                 case "qpid-tassis" -> new JmsConnectionFactory("amqp://127.0.0.1:" + tassis(id) + clientOptions);
                 case "artemis-vm" -> {
                     artemis("vm://" + id);
@@ -85,7 +90,8 @@ final class Rig implements AutoCloseable {
                     opened.push(artemis);
                     yield artemis;
                 }
-                case "tassis-artemis" -> TassisConnectionFactory.fromUrl("tassis:amqp://127.0.0.1:" + artemis(id));
+                case "tassis-artemis" ->
+                    TassisConnectionFactory.fromUrl("tassis:amqp://127.0.0.1:" + artemis(id) + clientOptions);
                 case "qpid-artemis" -> new JmsConnectionFactory("amqp://127.0.0.1:" + artemis(id) + clientOptions);
                 default -> throw new IllegalArgumentException("unknown provider: " + provider);
             };
@@ -100,8 +106,9 @@ final class Rig implements AutoCloseable {
     }
 
     /**
-     * @param clientOptions the query of the URL of a client that is not Tassis: of Qpid JMS, as
-     *        {@code ?jms.prefetchPolicy.all=1}, or of Artemis, as {@code ?consumerWindowSize=0}
+     * @param clientOptions the query of the URL of the client: of Qpid JMS, as
+     *        {@code ?jms.prefetchPolicy.all=1}, of Artemis, as {@code ?consumerWindowSize=0}, or of
+     *        Tassis over the network, as {@code ?prefetch=1000}
      */
     static Rig start(String provider, String clientOptions) throws Exception {
         return new Rig(provider, clientOptions);

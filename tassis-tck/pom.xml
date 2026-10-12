@@ -49,6 +49,9 @@
             broker through a TassisServer and a socket (run-official-tck-messaging-3.1.sh network).
         -->
         <tassis.tck.transport>vm</tassis.tck.transport>
+        <!-- Through the network, how many messages a consumer fetches ahead (tassis.prefetch): 1 is
+             one at a time, the default of a factory. -->
+        <tassis.tck.prefetch>1</tassis.tck.prefetch>
 
         <!--
             What the TCK run executes: the packages Tassis is expected to pass. A test of one
@@ -212,6 +215,7 @@
                         <user>j2ee</user>
                         <password>j2ee</password>
                         <tassis.tck.transport>${tassis.tck.transport}</tassis.tck.transport>
+                        <tassis.tck.prefetch>${tassis.tck.prefetch}</tassis.tck.prefetch>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

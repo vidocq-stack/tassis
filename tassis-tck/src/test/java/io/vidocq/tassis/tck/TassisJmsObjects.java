@@ -54,11 +54,13 @@ public final class TassisJmsObjects implements TSJMSObjectsInterface {
 
     /**
      * The URL of the broker when the TCK is run through the network, {@code null} when it uses
-     * the broker of its JVM directly. The server lasts as long as the JVM of the tests.
+     * the broker of its JVM directly. The server lasts as long as the JVM of the tests. The
+     * consumers fetch ahead if {@code tassis.tck.prefetch} says how many messages.
      */
     private static final String SERVER_URL = "amqp".equals(System.getProperty("tassis.tck.transport"))
             ? "tassis:amqp://localhost:"
                     + TassisServer.forBroker(TassisConnectionFactory.DEFAULT_BROKER).port(0).start().port()
+                    + "?prefetch=" + System.getProperty("tassis.tck.prefetch", "1")
             : null;
 
     private static TassisConnectionFactory factory(String name) {

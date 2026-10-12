@@ -41,6 +41,6 @@ public final class AmqpTransport implements Transport {
             throws JMSException {
         boolean encrypted = settings.serverTransport().equals("amqps");
         return new AmqpBrokerConnection(settings.serverHost(), settings.serverPort(), encrypted, tls,
-                settings.clientId(), user, password);
+                settings.clientId(), user, password, settings.prefetch());
     }
 }

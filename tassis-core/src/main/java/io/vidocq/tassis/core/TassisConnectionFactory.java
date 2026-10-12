@@ -74,6 +74,9 @@ import javax.net.ssl.SSLContext;
  * <tr><td>{@code tassis.listener.maxDeliveries}</td><td>{@code listener.maxDeliveries}</td>
  * <td>10</td><td>deliveries of a message to a listener that keeps failing before the message
  * is dropped (§8.7)</td></tr>
+ * <tr><td>{@code tassis.prefetch}</td><td>{@code prefetch}</td><td>1</td><td>messages a consumer
+ * has a broker of the network send it ahead of the application asking for them; 1 is one at a
+ * time, asked for when the application asks. See {@link #withPrefetch(int)}</td></tr>
  * <tr><td>{@code tassis.pool.enabled}</td><td>{@code pool.enabled}</td><td>{@code true}</td>
  * <td>whether the CDI integration pools the connections of this factory to a broker of the
  * network</td></tr>
@@ -199,6 +202,23 @@ public final class TassisConnectionFactory
      */
     public TassisConnectionFactory withMaxListenerDeliveries(int maximum) {
         return new TassisConnectionFactory(settings.withMaxListenerDeliveries(maximum), tls);
+    }
+
+    /**
+     * Returns a factory for the same broker whose consumers have a broker of the network send
+     * them up to this many messages ahead of the application asking for them, which spares an
+     * exchange with the broker for each message. The default is 1: a message is asked for when
+     * the application asks for one, and a message nobody asked for stays with the broker.
+     *
+     * <p>The price of more: a message a consumer holds is not there for another consumer of the
+     * same queue or shared subscription, however idle the first. It goes back to the broker
+     * when the consumer closes, its connection stops, or its session recovers or rolls back.
+     * The broker of the JVM has no exchange to spare and ignores this.
+     *
+     * @throws IllegalArgumentException if the number is less than 1
+     */
+    public TassisConnectionFactory withPrefetch(int messages) {
+        return new TassisConnectionFactory(settings.withPrefetch(messages), tls);
     }
 
     /**

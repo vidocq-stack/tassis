@@ -84,9 +84,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -119,8 +121,12 @@ import javax.net.ssl.SSLSocket;
  *
  * <p>One AMQP session carries the whole connection. Messages are sent by one link without an
  * address (an anonymous relay), where each message says where it goes; each consumer has a link
- * of its own, granted one credit at a time: a message the application has not asked for stays
- * with the broker, where another consumer can take it.
+ * of its own. Unless told to fetch ahead it is granted one credit at a time: a message the
+ * application has not asked for stays with the broker, where another consumer can take it. Told
+ * to ({@code prefetch}), it is granted that many and keeps that credit between two receives,
+ * as Apache Qpid JMS does: it holds what comes until the application asks, another consumer
+ * waiting or not. Whatever takes messages back from the application (a stop, a close, a
+ * recover, a rollback, a listener removed) gives those back to the broker first.
  */
 public final class AmqpBrokerConnection implements BrokerConnection {
 
@@ -255,6 +261,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     private boolean coordinatorAttaching;
     private long syncsAsked;
     private long syncsAnswered;
+    // How many messages a consumer may hold and have asked for, together: 1 is one at a time.
+    private final int prefetch;
 
     /**
      * Connects and authenticates.
@@ -264,7 +272,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
      * @throws InvalidClientIDException if another connection holds that client identifier
      */
     AmqpBrokerConnection(String host, int port, boolean encrypted, SSLContext tls, String clientId, String user,
-            String password) throws JMSException {
+            String password, int prefetch) throws JMSException {
+        this.prefetch = prefetch;
         this.host = host;
         this.port = port;
         this.encrypted = encrypted;
@@ -1539,10 +1548,41 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         }
     }
 
+    /**
+     * Gives back what the consumers of some deliveries hold ahead of the application, before
+     * those deliveries go back themselves: the broker then has all of it, and sends it again in
+     * its order. Under the lock.
+     */
+    private void giveBackAhead(Collection<? extends Delivery> deliveries) {
+        if (prefetch == 1) {
+            // One at a time: a consumer holds nothing the application has not asked for.
+            return;
+        }
+        Set<ReceiverLink> links = new HashSet<>();
+        for (Delivery delivery : deliveries) {
+            if (delivery instanceof AmqpDelivery ours && unsettled.get(ours.id) == ours) {
+                links.add(ours.link);
+            }
+        }
+        if (links.isEmpty()) {
+            return;
+        }
+        // Nothing is handed out by those consumers meanwhile: the wait below releases the lock,
+        // and the drain itself brings messages a receive in progress would take.
+        links.forEach(link -> link.givingBack++);
+        try {
+            quiet(links::contains);
+        } finally {
+            links.forEach(link -> link.givingBack--);
+            changed.signalAll();
+        }
+    }
+
     @Override
     public void redeliver(Collection<? extends Delivery> deliveries) {
         lock.lock();
         try {
+            giveBackAhead(deliveries);
             boolean any = false;
             for (Delivery delivery : deliveries) {
                 // The application has seen it: its next delivery is a redelivery.
@@ -1561,6 +1601,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     public void returnUndelivered(Delivery delivery) {
         lock.lock();
         try {
+            giveBackAhead(List.of(delivery));
             if (dispose(delivery, new Released())) {
                 sync();
             }
@@ -1617,8 +1658,10 @@ public final class AmqpBrokerConnection implements BrokerConnection {
     // ---- a consumer -------------------------------------------------------------------
 
     /**
-     * The link of one consumer. It has one credit at most, granted when the application asks
-     * for a message: what the application has not asked for stays with the broker.
+     * The link of one consumer. It is granted credit when the application asks for a message:
+     * one, so that what the application has not asked for stays with the broker, or as many as
+     * the connection fetches ahead ({@code prefetch}), topped up as the application takes what
+     * came.
      *
      * <p>Guarded by the lock of the connection.
      */
@@ -1652,6 +1695,8 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         boolean detached;
         /** Whether a close is still giving back what the link held. */
         boolean closing;
+        /** How many callers are giving back what the link holds ahead: it hands out nothing meanwhile. */
+        int givingBack;
 
         ReceiverLink(long handle, String address, String subscription, boolean durable, boolean browsing) {
             this.handle = handle;
@@ -1666,12 +1711,37 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                     drain ? Boolean.TRUE : null, null, null));
         }
 
-        /** Asks the broker for one message, unless it was asked already. */
+        /**
+         * Asks the broker for messages, up to what the consumer may hold and have asked for
+         * together, unless enough was asked already: once half of it is used, so that one flow
+         * asks for several messages. One at a time, this asks for one when none was asked.
+         */
         private void grant() {
-            if (credit == 0 && !draining) {
-                credit = 1;
+            long ahead = credit + arrived.size();
+            if (!draining && ahead * 2 <= prefetch) {
+                credit = prefetch - arrived.size();
                 flow(false);
             }
+        }
+
+        /**
+         * The next message that came and may be given to the application, or {@code null}. A
+         * message held ahead may have expired since it came (§3.4.9): the broker is told this
+         * consumer will not take it, and it is not delivered.
+         */
+        private AmqpDelivery ready() {
+            while (true) {
+                AmqpDelivery delivery = arrived.poll();
+                if (delivery == null || prefetch == 1 || !expired(delivery)) {
+                    return delivery;
+                }
+                dispose(delivery, new Modified(true, true, null));
+            }
+        }
+
+        private static boolean expired(AmqpDelivery delivery) {
+            long expiration = delivery.message().getJMSExpiration();
+            return expiration != 0 && expiration <= System.currentTimeMillis();
         }
 
         /** Asks the broker to use the credit now or give it up (§2.6.7); the answer ends {@code draining}. */
@@ -1720,10 +1790,15 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                     }
                     return null;
                 }
-                if (started && !arrived.isEmpty()) {
-                    return arrived.poll();
-                }
-                if (started) {
+                if (started && givingBack == 0) {
+                    AmqpDelivery ready = ready();
+                    if (ready != null) {
+                        if (prefetch > 1) {
+                            // Before the application is out of them: it should not have to wait.
+                            grant();
+                        }
+                        return ready;
+                    }
                     grant();
                 }
                 try {
@@ -1745,7 +1820,7 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                 drain();
                 awaitQuietly(() -> !draining || detached);
                 checkUsable();
-                return started && !closed && !detached ? arrived.poll() : null;
+                return started && !closed && !detached && givingBack == 0 ? ready() : null;
             }
         }
 
@@ -1797,6 +1872,15 @@ public final class AmqpBrokerConnection implements BrokerConnection {
                     listening = false;
                     period++;
                     changed.signalAll();
+                    if (prefetch > 1 && !detached) {
+                        // What came ahead for the listener goes back now: its dispatcher may
+                        // never ask again, and nobody else would give it back before a close.
+                        drain();
+                        awaitQuietly(() -> !draining || detached);
+                        if (release()) {
+                            sync();
+                        }
+                    }
                 }
                 return period;
             } finally {

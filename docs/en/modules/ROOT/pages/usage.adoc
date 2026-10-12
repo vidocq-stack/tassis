@@ -486,9 +486,33 @@ What differs from the broker of the JVM:
 
 * **A connection can be lost.** When the broker goes away, or says nothing for two minutes, the `ExceptionListener` of the connection is called, once, with a `JMSException`; every call on the connection then fails, and a `receive` in progress ends with a `JMSException`. Tassis does not reconnect: the application creates another connection. What the lost connection had not acknowledged is delivered again, by the broker, to whoever consumes next.
 * **`setClientID` reconnects.** AMQP says who a connection is when it opens. A client identifier set in the settings of the factory is there from the start; one set with `setClientID` closes the connection made without it and opens another. Prefer the factory, as the specification does.
-* **A consumer asks for one message at a time.** A message stays with the broker until an application asks for it, so that another consumer can take it: nothing is fetched ahead. Each message costs a round trip.
+* **A consumer asks for one message at a time**, unless told to fetch ahead. A message stays with the broker until an application asks for it, so that another consumer can take it, and each message costs an exchange with the broker: see <<prefetch>>.
 * **A consumer closed with unacknowledged messages keeps its place** until its session acknowledges them, commits or gives them back: the broker would otherwise deliver them again at once. A durable subscription is therefore still in use, for another connection, until then.
 * **A message larger than 16 MiB ends the connection**: it is the limit of the server.
+
+[#prefetch]
+=== Fetching ahead
+
+A factory can tell its consumers to have the broker send them messages before the application asks, which spares the exchange each message otherwise costs:
+
+[source,java]
+----
+ConnectionFactory factory = TassisConnectionFactory
+        .fromUrl("tassis:amqp://broker.example.org?prefetch=500");
+// or: TassisConnectionFactory.fromUrl("tassis:amqp://broker.example.org").withPrefetch(500)
+----
+
+`prefetch` is the number of messages a consumer may hold and have asked for, together; it is the setting `tassis.prefetch`, `1` by default. It is what Apache Qpid JMS does with a thousand. A queue is emptied some thirty times faster with it: see xref:performance.adoc#one-at-a-time[Performance].
+
+It has a price, which is why it is not the default:
+
+* **A message a consumer holds is not there for another.** A consumer that fetches ahead keeps asking between two `receive`: a message that arrives goes to it, whether or not the application will ever ask it for one, while another consumer of the same queue or shared subscription waits. Give `prefetch` to consumers that work alone on their queue, or that all keep receiving.
+* **Priorities are those of the moment a message was sent ahead.** A message of a higher priority that arrives later is delivered after those the consumer already holds.
+* A message that expires while a consumer holds it is not delivered. It is the clock of the client that says so then, where it is otherwise the clock of the broker.
+
+What a consumer holds goes back to the broker, as if it had never left, when the consumer closes, when its listener is removed, when its connection stops, and when its session recovers or rolls back: the messages of the session then come again before those that were only held. Nothing is lost if the connection is.
+
+The broker of the JVM has no exchange to spare and ignores the setting.
 
 [#tls]
 === Encrypting the connection

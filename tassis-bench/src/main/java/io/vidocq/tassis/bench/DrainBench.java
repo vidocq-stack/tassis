@@ -43,10 +43,11 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * The question of fetching ahead (ROADMAP M11.2 and M11.3): the Tassis client asks a broker of
- * the network for one message at a time, where Qpid JMS has it send a thousand ahead. A queue
- * that already holds the messages is emptied by a new consumer; the time is per message. Qpid
- * JMS asking for one message at a time shows what the client costs apart from that choice.
+ * The question of fetching ahead (ROADMAP M11.2, M11.3 and M12-3): unless told otherwise the
+ * Tassis client asks a broker of the network for one message at a time, where Qpid JMS has it
+ * send a thousand ahead. A queue that already holds the messages is emptied by a new consumer;
+ * the time is per message. Each client is run both ways, which tells what the choice costs
+ * from what the client does.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SingleShotTime)
@@ -58,8 +59,8 @@ public class DrainBench {
 
     private static final int MESSAGES = 10_000;
 
-    /** {@code tassis}, or Qpid JMS with the number of messages it lets the broker send ahead. */
-    @Param({"tassis", "qpid-1", "qpid-1000"})
+    /** Tassis or Qpid JMS, with the number of messages the client lets the broker send ahead. */
+    @Param({"tassis-1", "tassis-1000", "qpid-1", "qpid-1000"})
     public String client;
 
     @Param({"tassis", "artemis"})
@@ -73,10 +74,10 @@ public class DrainBench {
 
     @Setup
     public void open() throws Exception {
-        if (client.equals("tassis")) {
-            rig = Rig.start(broker.equals("tassis") ? "tassis-amqp" : "tassis-artemis");
+        String ahead = client.substring(client.indexOf('-') + 1);
+        if (client.startsWith("tassis")) {
+            rig = Rig.start(broker.equals("tassis") ? "tassis-amqp" : "tassis-artemis", "?prefetch=" + ahead);
         } else {
-            String ahead = client.substring("qpid-".length());
             rig = Rig.start("qpid-" + broker, "?jms.prefetchPolicy.all=" + ahead);
         }
         connection = rig.connect();

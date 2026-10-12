@@ -1150,7 +1150,7 @@ with the fix, 903 of 903.
 - **The single condition goes** (M12-2). A hundred consumers waiting on other queues divide
   the throughput of the broker by fifteen, a thousand by a hundred and eighty: every change
   wakes them all. That is the cost named in M2, and it is the first to fix.
-- **The client fetches ahead** (M12-3). One credit at a time costs 182 µs a message where
+- **The client fetches ahead when told to** (M12-3). One credit at a time costs 182 µs a message where
   Qpid JMS, fetching ahead, takes 6.8 µs from the same server. An option, as M11.2 said,
   with its price: a message a consumer holds is not there for another.
 - **Delayed messages are kept aside** (M12-4). Ten thousand of them ahead in a queue divide
@@ -1207,10 +1207,49 @@ same as with nobody waiting. Nothing else moved.
 - **A test that loses a wake-up hangs rather than fails** when what is lost is the end of a
   receive a closing consumer waits for: that wait cannot be interrupted.
 
-#### M12-3 — Fetching ahead over the network
+#### M12-3 — Fetching ahead over the network ✅
 
-To open. An option of the factory, off by default until the TCK through the network passes
-with it. Measured by `DrainBench`, `RoundTripBench` and `ListenerBench`.
+- [x] The setting `tassis.prefetch` (URL parameter `prefetch`, `withPrefetch`): how many
+      messages a consumer may hold and have asked a broker of the network for, together. 1 by
+      default, which is one at a time and changes nothing
+- [x] The client grants that many credits and tops them up once half is used; the rest of
+      its code was already written for any number of credits
+- [x] What a consumer holds goes back to the broker before anything is taken back from the
+      application: at a recover or a rollback (§6.2.7, §6.2.11), when a listener is removed,
+      at a stop (§6.1.5) and at a close, so that the broker sends all of it again in its order
+- [x] A message that expires while it is held is not delivered (§3.4.9)
+- [x] The TCK runner takes `-Dtassis.tck.prefetch=<n>` for its run through the network
+
+**Proven by:** `NetworkClientTest`, thirteen scenarios, run again over TLS; one against Artemis
+in the `interop` profile and one through the pool; the TCK in the JVM and through the
+network, 903 of 903 each, with the default.
+
+**Measured** (BENCH-20261012-05), with a thousand messages ahead: a queue is emptied in
+6.3 µs a message where it took 182.8 µs, and a message sent and received 5 272 times a second
+where it was 2 786. In both the Tassis client is where Qpid JMS is.
+
+**Choices and limits:**
+
+- **A consumer keeps its credit between two receives**, as Apache Qpid JMS does: a message
+  that arrives goes to it whether or not the application will ask, while another consumer of
+  the same queue or shared subscription waits. That is the price, and why the default stays
+  one at a time. The other way was tried and measured, giving the credit back when a receive
+  returns: nothing is taken behind the application's back and the TCK passes whole, but a
+  message sent and received drops to 1 800 a second, under what one at a time does. Not kept.
+- **The TCK through the network with `prefetch=100`: 899 of 903.** The four that fail are the
+  shared-consumer tests of `core20` (`createSharedConsumerTest1` and `2`, and their topic
+  twins): a first consumer receives, a second is expected to get the next message, and the
+  first has it. They pass with the default, which is the run that counts.
+- **Delivery to a listener gains nothing** (`ListenerBench`): what holds it back is elsewhere,
+  probably in the send, which waits for the broker. Not looked into here.
+- **The clock that says a held message has expired is the client's**, where one at a time it
+  is the broker's.
+- **Priorities are those of the moment a message was sent ahead.**
+- **One race has no test**: a recover made from the listener of one consumer while the
+  dispatcher of another consumer of the same session waits for a message. The client refuses
+  to hand out a message while its link gives back what it holds (`givingBack`); the
+  concurrency review found the case, and nothing reproduces it reliably.
+- **The broker of the JVM ignores the setting.**
 
 #### M12-4 — Delayed messages kept aside
 

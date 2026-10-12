@@ -204,6 +204,7 @@ ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?cl
 | `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default) or, over TLS, `amqps://<host>[:<port>]` (port 5671), instead of the in-VM one; needs `tassis-amqp` |
 | `tassis.clientId` | `clientId` | none | The client identifier of the connections |
 | `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
+| `tassis.prefetch` | `prefetch` | `1` | Messages a consumer has a broker of the network send it ahead of the application asking for them; `1` is one at a time |
 | `tassis.pool.enabled` | `pool.enabled` | `true` | Whether the CDI integration pools the connections of this factory to a broker of the network |
 | `tassis.pool.maxSize` | `pool.maxSize` | `10` | Connections a pool opens at most |
 | `tassis.pool.acquireTimeout` | `pool.acquireTimeout` | `PT5S` | How long a borrower waits when all are lent |
