@@ -23,6 +23,107 @@ which question it answers, and `Rig` who is behind the name of a provider.
 
 ---
 
+## BENCH-20261013-01 — The AMQP code copies a body a few times, not dozens (M12-5)
+
+- **Date**: 2026-10-13
+- **Commit**: the commit of M12-5 (branch `feat/m12-5-amqp-allocation`), and `37441a9` before it
+- **JVM**: Temurin 25+36-LTS, default flags
+- **Hardware**: AMD Ryzen 7 5800X (8 cores, 16 threads), 16 GB given to WSL2
+- **OS**: Ubuntu 20.04.6 LTS under WSL2, Linux 5.15.167.4
+- **Exact command** (17 min each), on the jar of each commit, one after the other:
+  ```bash
+  ./mvnw -ntp -Pbench -pl tassis-bench -am verify        # Maven 3.9.16
+  java -jar tassis-bench/target/benchmarks.jar 'RoundTripBench|DrainBench|ListenerBench' \
+      -p provider=tassis-vm,tassis-amqp,tassis-ahead,qpid-tassis,tassis-artemis \
+      -p mode=auto -p client=tassis-1,tassis-1000 -prof gc -rf json
+  ```
+  What was looked for first, with the same jar and `-prof jfr` on `RoundTripBench` for
+  `tassis-amqp`, is where the allocation came from: the samples of `jdk.ObjectAllocationSample`
+  by call site.
+- **Results**, before (`37441a9`):
+  ```
+  Benchmark                 (parameters)                         Mode  Cnt        Score        Error  Units   Alloc
+  ListenerBench.deliver     mode=auto provider=tassis-vm        thrpt   10   490734.855  ± 39172.788  ops/s    2167  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-amqp      thrpt   10     5327.839    ± 216.963  ops/s   37830  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-ahead     thrpt   10     5116.525    ± 126.217  ops/s   36165  B/op
+  ListenerBench.deliver     mode=auto provider=qpid-tassis      thrpt   10    32872.601   ± 1029.522  ops/s   22762  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-artemis   thrpt   10     4150.396    ± 119.907  ops/s   23215  B/op
+  RoundTripBench.roundTrip  provider=tassis-vm size=100         thrpt   10  3043109.806  ± 43105.915  ops/s    2112  B/op
+  RoundTripBench.roundTrip  provider=tassis-vm size=10000       thrpt   10   148237.982   ± 3602.659  ops/s   61488  B/op
+  RoundTripBench.roundTrip  provider=tassis-amqp size=100       thrpt   10     2567.021    ± 173.346  ops/s   37963  B/op
+  RoundTripBench.roundTrip  provider=tassis-amqp size=10000     thrpt   10     2241.171     ± 65.181  ops/s  552920  B/op
+  RoundTripBench.roundTrip  provider=tassis-ahead size=100      thrpt   10     5010.554    ± 174.983  ops/s   35499  B/op
+  RoundTripBench.roundTrip  provider=tassis-ahead size=10000    thrpt   10     4046.660    ± 167.551  ops/s  550411  B/op
+  RoundTripBench.roundTrip  provider=qpid-tassis size=100       thrpt   10     4537.531    ± 159.718  ops/s   22855  B/op
+  RoundTripBench.roundTrip  provider=qpid-tassis size=10000     thrpt   10     4056.789    ± 107.903  ops/s  322948  B/op
+  RoundTripBench.roundTrip  provider=tassis-artemis size=100    thrpt   10     2391.746    ± 112.497  ops/s   23566  B/op
+  RoundTripBench.roundTrip  provider=tassis-artemis size=10000  thrpt   10     2183.389     ± 97.948  ops/s  305107  B/op
+  DrainBench.drain          broker=tassis client=tassis-1          ss   20      193.050      ± 5.186  us/op   40264  B/op
+  DrainBench.drain          broker=tassis client=tassis-1000       ss   20        7.529      ± 0.685  us/op   37785  B/op
+  DrainBench.drain          broker=artemis client=tassis-1         ss   20      203.762      ± 6.069  us/op   26481  B/op
+  DrainBench.drain          broker=artemis client=tassis-1000      ss   20        5.808      ± 0.309  us/op   24528  B/op
+  ```
+  and after:
+  ```
+  Benchmark                 (parameters)                         Mode  Cnt        Score        Error  Units   Alloc
+  ListenerBench.deliver     mode=auto provider=tassis-vm        thrpt   10   438639.694  ± 24875.391  ops/s    2134  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-amqp      thrpt   10     5898.559    ± 198.595  ops/s   27364  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-ahead     thrpt   10     5760.111    ± 125.422  ops/s   25754  B/op
+  ListenerBench.deliver     mode=auto provider=qpid-tassis      thrpt   10    36920.136   ± 1273.202  ops/s   17364  B/op
+  ListenerBench.deliver     mode=auto provider=tassis-artemis   thrpt   10     4627.767     ± 88.235  ops/s   17898  B/op
+  RoundTripBench.roundTrip  provider=tassis-vm size=100         thrpt   10  3128263.990  ± 98774.674  ops/s    2080  B/op
+  RoundTripBench.roundTrip  provider=tassis-vm size=10000       thrpt   10   223264.329   ± 9374.387  ops/s   41664  B/op
+  RoundTripBench.roundTrip  provider=tassis-amqp size=100       thrpt   10     2820.662    ± 115.435  ops/s   27877  B/op
+  RoundTripBench.roundTrip  provider=tassis-amqp size=10000     thrpt   10     2486.935    ± 132.465  ops/s  195455  B/op
+  RoundTripBench.roundTrip  provider=tassis-ahead size=100      thrpt   10     5233.492    ± 144.323  ops/s   24587  B/op
+  RoundTripBench.roundTrip  provider=tassis-ahead size=10000    thrpt   10     4810.982    ± 285.593  ops/s  193363  B/op
+  RoundTripBench.roundTrip  provider=qpid-tassis size=100       thrpt   10     4700.368    ± 152.075  ops/s   17769  B/op
+  RoundTripBench.roundTrip  provider=qpid-tassis size=10000     thrpt   10     4419.640    ± 172.032  ops/s  149538  B/op
+  RoundTripBench.roundTrip  provider=tassis-artemis size=100    thrpt   10     2422.475     ± 85.364  ops/s   18028  B/op
+  RoundTripBench.roundTrip  provider=tassis-artemis size=10000  thrpt   10     2363.406    ± 126.427  ops/s  120870  B/op
+  DrainBench.drain          broker=tassis client=tassis-1          ss   20      185.912      ± 6.012  us/op   28901  B/op
+  DrainBench.drain          broker=tassis client=tassis-1000       ss   20        5.799      ± 0.264  us/op   26298  B/op
+  DrainBench.drain          broker=artemis client=tassis-1         ss   20      194.517      ± 2.887  us/op   20169  B/op
+  DrainBench.drain          broker=artemis client=tassis-1000      ss   20        5.478      ± 0.313  us/op   18230  B/op
+  ```
+- **Comparison with the previous run**, what the whole JVM allocates for a message sent and
+  received (`RoundTripBench`, client and broker together):
+
+  | Client and broker | body | before | after | |
+  |---|---|---|---|---|
+  | Tassis client, Tassis server | 100 bytes | 38.0 kB | 27.9 kB | **−27 %** |
+  | Tassis client, Tassis server | 10 kB | 552.9 kB | 195.5 kB | **−65 %** |
+  | Tassis client fetching ahead, Tassis server | 10 kB | 550.4 kB | 193.4 kB | **−65 %** |
+  | Qpid JMS, Tassis server | 100 bytes | 22.9 kB | 17.8 kB | **−22 %** |
+  | Qpid JMS, Tassis server | 10 kB | 322.9 kB | 149.5 kB | **−54 %** |
+  | Tassis client, Artemis | 10 kB | 305.1 kB | 120.9 kB | **−60 %** |
+  | Tassis, in the JVM | 10 kB | 61.5 kB | 41.7 kB | **−32 %** |
+
+  and what it does in a second:
+
+  | Benchmark | before | after | |
+  |---|---|---|---|
+  | `RoundTripBench`, Tassis client and server, 10 kB | 2 241 | 2 487 | **11 % faster** |
+  | `RoundTripBench`, fetching ahead, 10 kB | 4 047 | 4 811 | **19 % faster** |
+  | `RoundTripBench`, in the JVM, 10 kB | 148 200 | 223 300 | **51 % faster** |
+  | `RoundTripBench`, Tassis client and server, 100 bytes | 2 567 | 2 821 | 10 % faster, at the edge of the errors |
+  | `ListenerBench`, Tassis client and server | 5 328 | 5 899 | **11 % faster** |
+  | `RoundTripBench`, in the JVM, 100 bytes | 3 043 000 | 3 128 000 | within the errors |
+  | `ListenerBench`, in the JVM | 490 700 | 438 600 | within the errors, which are wide there |
+
+**What the figures say.**
+
+- **A body was copied some fifty times on its way and is copied some twenty.** For 10 kB
+  sent and received through a Tassis server, 553 kB were allocated and 195 kB are. What went
+  is the copy a `Binary` made each time it was built and each time it was read, the stream a
+  message of one frame was put together in, and the arrays that grew under the encoder.
+- **A small message gains less**: 38 kB to 28 kB. What it costs is not its body but its
+  shape: a decoder for each list, a map for each section, an array for each list encoded.
+  Qpid JMS and Artemis carry the same message for 9 kB between them
+  (BENCH-20261012-03), and Tassis is still three times that.
+- **The broker of the JVM gains too**, on large bodies: a message copied for a delivery is
+  copied once, into an array of its size.
+
 ## BENCH-20261012-06 — Delayed messages are kept aside (M12-4)
 
 - **Date**: 2026-10-12, in the evening

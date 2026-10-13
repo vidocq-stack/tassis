@@ -22,13 +22,34 @@ package io.vidocq.tassis.amqp.internal.types;
 import java.util.Arrays;
 import java.util.HexFormat;
 
-/** An AMQP {@code binary}: a sequence of octets, compared by content (§1.6.19). */
+/**
+ * An AMQP {@code binary}: a sequence of octets, compared by content (§1.6.19).
+ *
+ * <p>It never changes. Built and read the ordinary way ({@link #Binary(byte[])},
+ * {@link #bytes()}), it copies, so that nobody else holds its octets. The code that carries
+ * messages does not: a body would be copied at each of the dozen hands it goes through.
+ * {@link #wrap(byte[])} and {@link #array()} are for that code, under one rule: an array that
+ * went into a binary or came out of one is never written to again.
+ */
 public final class Binary {
 
     private final byte[] bytes;
 
     public Binary(byte[] bytes) {
-        this.bytes = bytes.clone();
+        this(bytes.clone(), null);
+    }
+
+    /** @param mine a marker to tell this constructor, which keeps the array, from the public one */
+    private Binary(byte[] bytes, Void mine) {
+        this.bytes = bytes;
+    }
+
+    /**
+     * A binary of those octets, which are not copied: the caller gives the array up, and no
+     * longer writes to it.
+     */
+    public static Binary wrap(byte[] givenUp) {
+        return new Binary(givenUp, null);
     }
 
     public static Binary of(int... octets) {
@@ -39,8 +60,14 @@ public final class Binary {
         return new Binary(bytes);
     }
 
+    /** A copy of the octets, the caller's own. */
     public byte[] bytes() {
         return bytes.clone();
+    }
+
+    /** The octets themselves, to read: whoever writes to them breaks every holder of this binary. */
+    public byte[] array() {
+        return bytes;
     }
 
     public int length() {

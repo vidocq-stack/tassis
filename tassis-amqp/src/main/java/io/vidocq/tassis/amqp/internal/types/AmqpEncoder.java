@@ -39,13 +39,41 @@ public final class AmqpEncoder {
 
     /** Returns the encoding of {@code value}. */
     public static byte[] encode(Object value) {
-        Output out = new Output();
+        Output out = new Output(64);
         new AmqpEncoder(out).write(value);
-        return out.toByteArray();
+        return out.octets();
+    }
+
+    /**
+     * Returns the encodings of the values, one after the other, written to one array.
+     *
+     * @param expected about how many octets that will be: an array of that size is not grown
+     */
+    public static byte[] encodeAll(List<?> values, int expected) {
+        Output out = new Output(expected);
+        AmqpEncoder encoder = new AmqpEncoder(out);
+        for (Object value : values) {
+            encoder.write(value);
+        }
+        return out.octets();
     }
 
     /** A byte array that grows, written in network byte order. */
     private static final class Output extends ByteArrayOutputStream {
+
+        Output(int expected) {
+            super(expected);
+        }
+
+        /** What was written: the array itself when it is exactly full, which spares a copy. */
+        byte[] octets() {
+            return count == buf.length ? buf : toByteArray();
+        }
+
+        /** Appends what was written to another output, without an array in between. */
+        void appendTo(Output other) {
+            other.write(buf, 0, count);
+        }
 
         void u8(int value) {
             write(value);
@@ -173,7 +201,7 @@ public final class AmqpEncoder {
                 out.u64(u.getMostSignificantBits());
                 out.u64(u.getLeastSignificantBits());
             }
-            case Binary b -> variable(0xA0, b.bytes());
+            case Binary b -> variable(0xA0, b.array());
             case byte[] b -> variable(0xA0, b);
             case String s -> variable(0xA1, s.getBytes(StandardCharsets.UTF_8));
             case Symbol s -> variable(0xA3, s.value().getBytes(StandardCharsets.US_ASCII));
@@ -212,7 +240,7 @@ public final class AmqpEncoder {
             out.u8(0x45);
             return;
         }
-        Output items = new Output();
+        Output items = new Output(64);
         AmqpEncoder nested = new AmqpEncoder(items);
         for (Object item : list) {
             nested.write(item);
@@ -221,7 +249,7 @@ public final class AmqpEncoder {
     }
 
     private void map(Map<?, ?> map) {
-        Output items = new Output();
+        Output items = new Output(64);
         AmqpEncoder nested = new AmqpEncoder(items);
         for (Map.Entry<?, ?> entry : map.entrySet()) {
             nested.write(entry.getKey());
@@ -244,12 +272,12 @@ public final class AmqpEncoder {
             out.u32(items.size() + 4L);
             out.u32(count);
         }
-        out.bytes(items.toByteArray());
+        items.appendTo(out);
     }
 
     /** The constructor is written once, then each element without one (§1.6.24). */
     private void array(AmqpArray array) {
-        Output body = new Output();
+        Output body = new Output(64);
         AmqpEncoder nested = new AmqpEncoder(body);
         if (array.descriptor() != null) {
             body.u8(0x00);
@@ -380,7 +408,7 @@ public final class AmqpEncoder {
                 }
             }
             case BINARY -> variableElements(0xA0,
-                    elements.stream().map(element -> as(Binary.class, type, element).bytes()).toList());
+                    elements.stream().map(element -> as(Binary.class, type, element).array()).toList());
             case STRING -> variableElements(0xA1, elements.stream()
                     .map(element -> as(String.class, type, element).getBytes(StandardCharsets.UTF_8)).toList());
             case SYMBOL -> variableElements(0xA3, elements.stream()
@@ -389,7 +417,7 @@ public final class AmqpEncoder {
             case LIST -> {
                 out.u8(0xD0);
                 for (Object element : elements) {
-                    Output items = new Output();
+                    Output items = new Output(64);
                     AmqpEncoder nested = new AmqpEncoder(items);
                     List<?> list = as(List.class, type, element);
                     for (Object item : list) {
@@ -401,7 +429,7 @@ public final class AmqpEncoder {
             case MAP -> {
                 out.u8(0xD1);
                 for (Object element : elements) {
-                    Output items = new Output();
+                    Output items = new Output(64);
                     AmqpEncoder nested = new AmqpEncoder(items);
                     Map<?, ?> map = as(Map.class, type, element);
                     for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -415,7 +443,7 @@ public final class AmqpEncoder {
                 out.u8(0xF0);
                 for (Object element : elements) {
                     AmqpArray array = as(AmqpArray.class, type, element);
-                    Output body = new Output();
+                    Output body = new Output(64);
                     AmqpEncoder nested = new AmqpEncoder(body);
                     if (array.descriptor() != null) {
                         body.u8(0x00);

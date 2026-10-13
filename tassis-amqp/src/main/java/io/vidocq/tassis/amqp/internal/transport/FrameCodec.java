@@ -52,7 +52,15 @@ public final class FrameCodec {
      */
     public static byte[] encode(Frame frame, long maxFrameSize) {
         byte[] body = frame.body() == null ? new byte[0] : AmqpEncoder.encode(frame.body());
-        byte[] payload = frame.payload().bytes();
+        return encode(frame.type(), frame.channel(), body, frame.payload().array(), maxFrameSize);
+    }
+
+    /**
+     * The frame of a body that is encoded already, for whoever had to encode it to know its size.
+     *
+     * @throws IllegalArgumentException if the frame is larger than the peer accepts
+     */
+    static byte[] encode(int type, int channel, byte[] body, byte[] payload, long maxFrameSize) {
         long size = (long) HEADER_LENGTH + body.length + payload.length;
         if (size > maxFrameSize) {
             throw new IllegalArgumentException(
@@ -61,8 +69,8 @@ public final class FrameCodec {
         ByteBuffer out = ByteBuffer.allocate((int) size);
         out.putInt((int) size);
         out.put((byte) MIN_DOFF);
-        out.put((byte) frame.type());
-        out.putShort((short) frame.channel());
+        out.put((byte) type);
+        out.putShort((short) channel);
         out.put(body);
         out.put(payload);
         return out.array();
@@ -134,7 +142,7 @@ public final class FrameCodec {
         if (!(body instanceof Performative performative)) {
             throw new AmqpDecodeException("an AMQP frame carries a performative, not " + describe(body));
         }
-        return Frame.amqp(channel, performative, new Binary(payload));
+        return Frame.amqp(channel, performative, Binary.wrap(payload));
     }
 
     private static String describe(Object body) {

@@ -1156,7 +1156,7 @@ with the fix, 903 of 903.
 - **Delayed messages are kept aside** (M12-4). Ten thousand of them ahead in a queue divided
   its throughput by three hundred.
 - **The AMQP code allocates less** (M12-5). 38 kB for a round trip of 100 bytes, four times
-  what Qpid JMS and Artemis allocate between them.
+  what Qpid JMS and Artemis allocated between them.
 - **Sessions are not pooled yet.** A session costs nothing in the JVM and 0.4 ms on the
   network, as much as the round trip itself. Worth having for injected contexts, which open
   one per request; after M12-3, which changes what a session of the network costs.
@@ -1282,9 +1282,44 @@ and received on a queue without any is where it was.
   on the previous commit too: the entry measures both commits one after the other, and
   again alternately where a line differed.
 
-#### M12-5 — Allocation of the AMQP code
+#### M12-5 — Allocation of the AMQP code ✅
 
-To open. Measured by the `Alloc` column of `RoundTripBench` and `DrainBench`.
+- [x] A profile first (JFR, allocation by call site): the body of a message was copied some
+      fifty times between the one who sends and the one who receives
+- [x] `Binary` can hold an array it was given and hand out the one it holds (`wrap`, `array`),
+      for the code that carries messages; built and read the ordinary way it still copies
+- [x] A message that fits in one frame is no longer put together from its frames, on either
+      side, and its transfer is encoded once
+- [x] The sections of a message are encoded into one array of about the right size; a nested
+      list is appended without an array in between
+- [x] The body of a bytes message goes into the codec and comes out of it as it is held
+      (`TassisBytesMessage.content`, `holding`); a message copied for a delivery is copied once
+
+**Proven by:** `CodecAllocationTest`, which counts what a thread allocates to turn a message
+into frames and back: 2.1 MB for a body of 100 kB before, 610 kB now, twenty-one copies of
+the body and six; the tests of the codec and of the server, unchanged; the TCK in the JVM and
+through the network, 903 of 903 each; the `interop` profile.
+
+**Measured** (BENCH-20261013-01): a message of 10 kB sent and received through a Tassis
+server allocates 195 kB where it allocated 553 kB, and one of 100 bytes 28 kB for 38 kB.
+Large bodies go 11 to 19 % faster through the network and 51 % faster in the JVM.
+
+**Choices and limits:**
+
+- **One rule holds the sharing together**: an array that went into a `Binary`, or came out of
+  one, is never written to again. The concurrency review followed every such array and found
+  none that anything writes to.
+- **A small message is still three times what Qpid JMS and Artemis allocate for it.** Its cost
+  is its shape, not its body: a decoder for each list, a map for each section, an array for
+  each list encoded. Going further means an encoder that writes in one pass and a decoder
+  without one object per level, both hardened against hostile input today: a slice of its
+  own, if a use asks for it.
+- **A message that fits in one frame beside its own transfer is sent in one frame**, where it
+  was split when it only fitted beside the shorter of the two forms of a transfer: a frame of
+  at most what the peer accepts, as before.
+- **The allocation test is in `tassis-bench`**: the count of what a thread allocated is the
+  JDK's (`jdk.management`), which no module of Tassis has a reason to read.
+- **Object messages still copy their serialized form** on the way in and out.
 
 ### M13 — Transaction management (XA and JTA)
 

@@ -76,21 +76,26 @@ public record AmqpMessage(Header header, DeliveryAnnotations deliveryAnnotations
 
     /** The octets of the message: what a transfer carries as its payload. */
     public byte[] encode() {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        List<Section> sections = new ArrayList<>();
-        sections.add(header);
-        sections.add(deliveryAnnotations);
-        sections.add(messageAnnotations);
-        sections.add(properties);
-        sections.add(applicationProperties);
-        sections.addAll(body);
-        sections.add(footer);
-        for (Section section : sections) {
+        List<Section> sections = new ArrayList<>(6 + body.size());
+        // Most of a message is its body, when it has one of some size: written to an array large
+        // enough for it, the body is copied once and not at each time the array grows.
+        int expected = 256;
+        for (Section section : new Section[] {header, deliveryAnnotations, messageAnnotations, properties,
+            applicationProperties}) {
             if (section != null) {
-                out.writeBytes(AmqpEncoder.encode(section));
+                sections.add(section);
             }
         }
-        return out.toByteArray();
+        for (Section section : body) {
+            sections.add(section);
+            if (section instanceof Data data) {
+                expected += data.value().length() + 16;
+            }
+        }
+        if (footer != null) {
+            sections.add(footer);
+        }
+        return AmqpEncoder.encodeAll(sections, expected);
     }
 
     /** Where each kind of section comes in a message; the three kinds of body share a place. */
@@ -108,7 +113,7 @@ public record AmqpMessage(Header header, DeliveryAnnotations deliveryAnnotations
         };
     }
 
-    /** Reads a message from all of {@code octets}. */
+    /** Reads a message from all of {@code octets}, which are read and not kept. */
     public static AmqpMessage decode(byte[] octets) throws AmqpDecodeException {
         AmqpDecoder decoder = new AmqpDecoder(ByteBuffer.wrap(octets), AmqpTypes.ALL);
         Section[] single = new Section[7];

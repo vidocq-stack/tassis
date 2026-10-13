@@ -373,9 +373,15 @@ public class TassisMessage implements Message {
 
     /** A property name obeys the rules of a message selector identifier (§3.5.1, §3.8.1.1). */
     private static boolean isIdentifier(String name) {
-        return Character.isJavaIdentifierStart(name.charAt(0))
-                && name.chars().skip(1).allMatch(Character::isJavaIdentifierPart)
-                && !RESERVED_NAMES.contains(name.toUpperCase(Locale.ROOT));
+        if (!Character.isJavaIdentifierStart(name.charAt(0))) {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++) {
+            if (!Character.isJavaIdentifierPart(name.charAt(i))) {
+                return false;
+            }
+        }
+        return !RESERVED_NAMES.contains(name.toUpperCase(Locale.ROOT));
     }
 
     // ---- acknowledgement -----------------------------------------------

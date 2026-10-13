@@ -190,9 +190,9 @@ public final class AmqpDecoder {
             case 0x98:
                 return new UUID(i64(), i64());
             case 0xA0:
-                return new Binary(octets(u8()));
+                return Binary.wrap(octets(u8()));
             case 0xB0:
-                return new Binary(octets(u32()));
+                return Binary.wrap(octets(u32()));
             case 0xA1:
                 return utf8(octets(u8()));
             case 0xB1:

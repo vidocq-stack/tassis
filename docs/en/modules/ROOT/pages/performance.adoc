@@ -49,7 +49,7 @@ In the JVM, Tassis is three hundred times faster than Artemis. This is not a con
 
 Through the network, read the table by its columns. With the same client, Qpid JMS, the Tassis server does 4 750 round trips a second and Artemis 6 030. With the same server, the Tassis client does 2 770 and Qpid JMS 4 750: see <<one-at-a-time>>.
 
-With a body of 10 kB, Tassis does 170 000 round trips a second in the JVM and 2 390 through the network.
+With a body of 10 kB, Tassis does 223 000 round trips a second in the JVM and 2 490 through the network (entry BENCH-20261013-01). Since milestone M12-5 the rows of the table that go through a Tassis server allocate less than it shows: 28 kB for the Tassis client, 18 kB for Qpid JMS.
 
 == Several clients at once
 
@@ -144,7 +144,7 @@ How the session acknowledges does not show in the JVM: 500 000, 491 000 and 518 
 == What is still slow
 
 * **Delivery to a listener through the network**, six times under Qpid JMS (see <<_listeners>>). The cause is not established.
-* **The AMQP code allocates a lot**: 38 kB for a message of 100 bytes sent and received, where Qpid JMS and Artemis allocate 9 kB between them. Planned: milestone M12-5.
+* **A small message allocates three times what it does elsewhere**: 28 kB for a message of 100 bytes sent and received through a Tassis server, where Qpid JMS and Artemis allocate 9 kB between them. It was 38 kB before milestone M12-5, which took the copies of the body away: a message of 10 kB went from 553 kB to 195 kB (entry BENCH-20261013-01). What is left is the shape of a message, not its body.
 * **Several clients of one broker of the JVM share its one lock** (see <<_several_clients_at_once>>), by decision.
 
 == Running the benchmarks

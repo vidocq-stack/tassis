@@ -37,23 +37,26 @@ public final class Transfers {
      *
      * @param first the transfer of a message that fits in one frame, which is also what the
      *        last frame of a longer one carries
+     * @param message the octets of the message, which are read and not kept
      * @param maxFrameSize the largest frame the peer accepts
      */
     public static List<byte[]> split(int channel, Transfer first, byte[] message, long maxFrameSize) {
+        // Nearly every message fits in one frame: its transfer is encoded once, to know that.
+        byte[] alone = AmqpEncoder.encode(first);
+        if (8L + alone.length + message.length <= maxFrameSize) {
+            // The array is the caller's, which only reads it: no copy before the one into the frame.
+            return List.of(FrameCodec.encode(Frame.TYPE_AMQP, channel, alone, message, maxFrameSize));
+        }
         List<byte[]> frames = new ArrayList<>();
         Transfer more = new Transfer(first.handle(), first.deliveryId(), first.deliveryTag(), first.messageFormat(),
                 first.settled(), true, null, first.state(), null, null, null);
         // The frame header and the performative, the longer of the two it may take.
         int overhead = 8 + AmqpEncoder.encode(more).length;
         int room = (int) Math.min(Integer.MAX_VALUE, maxFrameSize) - overhead;
-        if (message.length <= room) {
-            frames.add(FrameCodec.encode(Frame.amqp(channel, first, new Binary(message)), maxFrameSize));
-            return frames;
-        }
         for (int from = 0; from < message.length; from += room) {
             int to = Math.min(message.length, from + room);
             byte[] part = Arrays.copyOfRange(message, from, to);
-            frames.add(FrameCodec.encode(Frame.amqp(channel, to < message.length ? more : first, new Binary(part)),
+            frames.add(FrameCodec.encode(Frame.amqp(channel, to < message.length ? more : first, Binary.wrap(part)),
                     maxFrameSize));
         }
         return frames;

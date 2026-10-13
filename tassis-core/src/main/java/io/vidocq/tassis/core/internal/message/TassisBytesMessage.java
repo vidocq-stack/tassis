@@ -54,6 +54,30 @@ public final class TassisBytesMessage extends TassisMessage implements BytesMess
     private byte[] content;
     private DataInputStream in;
 
+    /**
+     * A message whose body is those octets, ready to be read. They are not copied: the caller
+     * gives the array up. For the code that carries messages, which has just read them.
+     */
+    public static TassisBytesMessage holding(byte[] givenUp) {
+        TassisBytesMessage message = new TassisBytesMessage();
+        message.written = null;
+        message.out = null;
+        message.content = givenUp;
+        message.in = new DataInputStream(new ByteArrayInputStream(givenUp));
+        message.setBodyReadOnly();
+        return message;
+    }
+
+    /**
+     * The body as the message holds it, not a copy, to read: the message becomes read-only, as
+     * {@link #reset()} makes it, and its octets are never written to. For the code that carries
+     * messages.
+     */
+    public byte[] content() {
+        reset();
+        return content;
+    }
+
     @Override
     public long getBodyLength() throws JMSException {
         checkBodyReadable();
@@ -252,8 +276,22 @@ public final class TassisBytesMessage extends TassisMessage implements BytesMess
 
     @Override
     void copyBodyTo(TassisMessage target) {
-        // Copies whatever was written so far, without switching this message to read-only.
-        ((TassisBytesMessage) target).written.writeBytes(isBodyReadOnly() ? content : written.toByteArray());
+        // Copies whatever was written so far, without switching this message to read-only, into
+        // an array of the size of it: one copy, where an array that grows makes several.
+        TassisBytesMessage copy = (TassisBytesMessage) target;
+        int length = isBodyReadOnly() ? content.length : written.size();
+        copy.written = new ByteArrayOutputStream(Math.max(32, length));
+        copy.out = new DataOutputStream(copy.written);
+        if (isBodyReadOnly()) {
+            copy.written.writeBytes(content);
+        } else {
+            try {
+                written.writeTo(copy.written);
+            } catch (IOException e) {
+                // An array in memory: nothing it writes to can fail.
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
     }
 
     @Override

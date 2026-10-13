@@ -129,10 +129,8 @@ public final class JmsMessageCodec {
             case TassisBytesMessage bytes -> {
                 annotations.put(MSG_TYPE, TYPE_BYTES);
                 contentType = OCTET_STREAM;
-                bytes.reset();
-                byte[] content = new byte[(int) bytes.getBodyLength()];
-                bytes.readBytes(content);
-                body = List.of(new Data(new Binary(content)));
+                // The body as the message holds it, which nothing writes to: no copy on the way.
+                body = List.of(new Data(Binary.wrap(bytes.content())));
             }
             case TassisMapMessage map -> {
                 annotations.put(MSG_TYPE, TYPE_MAP);
@@ -393,13 +391,11 @@ public final class JmsMessageCodec {
                 }
                 return text;
             case TYPE_BYTES:
-                TassisBytesMessage bytes = new TassisBytesMessage();
-                bytes.writeBytes(value instanceof Binary binary ? binary.bytes() : octets(body));
-                bytes.reset();
-                return bytes;
+                // The octets were read for this message alone: it holds them as they are.
+                return TassisBytesMessage.holding(value instanceof Binary binary ? binary.array() : octets(body));
             case TYPE_OBJECT:
                 TassisObjectMessage object = new TassisObjectMessage();
-                byte[] serialized = value instanceof Binary binary ? binary.bytes() : octets(body);
+                byte[] serialized = value instanceof Binary binary ? binary.array() : octets(body);
                 // Never deserialized here: what the octets are is the business of whoever reads them.
                 object.setSerialized(serialized.length == 0 ? null : serialized);
                 return object;
@@ -446,14 +442,25 @@ public final class JmsMessageCodec {
 
     /** The octets of a body made of data sections, which are one body whatever their number. */
     private static byte[] octets(List<Section> body) throws AmqpDecodeException {
-        ByteArrayOutputStream octets = new ByteArrayOutputStream();
+        int length = 0;
         for (Section section : body) {
             if (!(section instanceof Data data)) {
                 throw new AmqpDecodeException("a body of octets is made of data sections");
             }
-            octets.writeBytes(data.value().bytes());
+            length += data.value().length();
         }
-        return octets.toByteArray();
+        if (body.size() == 1) {
+            // The usual case: the octets of the one section, read for this message alone.
+            return ((Data) body.get(0)).value().array();
+        }
+        byte[] octets = new byte[length];
+        int at = 0;
+        for (Section section : body) {
+            byte[] part = ((Data) section).value().array();
+            System.arraycopy(part, 0, octets, at, part.length);
+            at += part.length;
+        }
+        return octets;
     }
 
     private static String utf8(byte[] octets) throws AmqpDecodeException {

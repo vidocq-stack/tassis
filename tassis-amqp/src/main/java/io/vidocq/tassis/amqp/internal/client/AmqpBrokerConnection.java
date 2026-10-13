@@ -791,16 +791,23 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         if (link == null) {
             return;
         }
+        boolean more = Boolean.TRUE.equals(transfer.more());
+        // A message that came in one frame is the payload of that frame: nothing to put together.
+        boolean whole = link.partial == null && !more;
         if (link.partial == null) {
-            link.partial = new ByteArrayOutputStream();
             link.partialId = transfer.deliveryId() == null ? -1 : transfer.deliveryId();
             link.partialSettled = Boolean.TRUE.equals(transfer.settled());
+            if (!whole) {
+                link.partial = new ByteArrayOutputStream(2 * payload.length());
+            }
         }
-        link.partial.writeBytes(payload.bytes());
-        if (Boolean.TRUE.equals(transfer.more())) {
+        if (!whole) {
+            link.partial.writeBytes(payload.array());
+        }
+        if (more) {
             return;
         }
-        byte[] octets = link.partial.toByteArray();
+        byte[] octets = whole ? payload.array() : link.partial.toByteArray();
         long id = link.partialId;
         boolean settled = link.partialSettled || Boolean.TRUE.equals(transfer.settled());
         link.partial = null;

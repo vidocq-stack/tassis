@@ -248,6 +248,13 @@ Apache Qpid JMS, whose names are in `Conventions`. Exported to `tassis-server` o
   and report whatever is wrong as an `AmqpDecodeException`: no other exception may come out
   because of what a peer sent. Any change there adds its case to `HostileInputTest`.
 - **No reflection**: a record lists its own fields.
+- **A body is not copied at each hand it goes through** (ROADMAP M12-5). `Binary` copies when
+  built with `new` and read with `bytes()`, and does not with `wrap` and `array()`, which are
+  for the code that carries messages, under one rule: **an array that went into a `Binary` or
+  came out of one is never written to again**. The same for `TassisBytesMessage.holding` and
+  `content`. What an application hands over or is handed (a property, a correlation
+  identifier, a value of a map message) is still copied: keep it so. `CodecAllocationTest`, in
+  `tassis-bench`, fails when the copies come back.
 - **An object message is never deserialized on the way**: it travels as its serialized form
   (`TassisObjectMessage.serialized()`). Deserializing what a client sent would hand the broker
   to whoever can connect.

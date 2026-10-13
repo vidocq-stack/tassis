@@ -1204,30 +1204,37 @@ public final class AmqpConnection {
             }
             session.nextIncomingId++;
             session.incomingWindow--;
+            boolean more = Boolean.TRUE.equals(transfer.more());
+            // A message that came in one frame is the payload of that frame: nothing to put together.
+            boolean whole = incoming.partial == null && !more;
             if (incoming.partial == null) {
                 if (incoming.credit <= 0) {
                     throw new AmqpFailure(AmqpFailure.NOT_ALLOWED, "a transfer on a link that has no credit");
                 }
-                incoming.partial = new ByteArrayOutputStream();
+                if (!whole) {
+                    incoming.partial = new ByteArrayOutputStream(2 * payload.length());
+                }
                 incoming.partialDeliveryId = transfer.deliveryId();
                 incoming.partialSettled = Boolean.TRUE.equals(transfer.settled());
                 // Part 4, §4.4.1: a message that only arrives if its transaction is committed.
                 incoming.partialTransaction =
                         transfer.state() instanceof TransactionalState transactional ? transactional.txnId() : null;
             }
-            if (incoming.partial.size() + (long) payload.length() > Limits.MAX_MESSAGE_SIZE) {
+            if ((whole ? 0 : incoming.partial.size()) + (long) payload.length() > Limits.MAX_MESSAGE_SIZE) {
                 throw new AmqpFailure(AmqpFailure.MESSAGE_SIZE_EXCEEDED,
                         "a message larger than " + Limits.MAX_MESSAGE_SIZE + " octets");
             }
-            incoming.partial.writeBytes(payload.bytes());
-            if (Boolean.TRUE.equals(transfer.more())) {
+            if (!whole) {
+                incoming.partial.writeBytes(payload.array());
+            }
+            if (more) {
                 return;
             }
             deliveryId = incoming.partialDeliveryId;
             transactionId = incoming.partialTransaction;
             settled = incoming.partialSettled || Boolean.TRUE.equals(transfer.settled());
             if (!Boolean.TRUE.equals(transfer.aborted())) {
-                message = incoming.partial.toByteArray();
+                message = whole ? payload.array() : incoming.partial.toByteArray();
             }
             incoming.partial = null;
             incoming.credit--;
