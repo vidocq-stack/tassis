@@ -425,6 +425,13 @@ fails at once, run `PortingSmokeTest`: TCK tests swallow the exception of a fail
 **Release discipline:** no structural merge on `tassis-core` without TCK
 PASS at 100%. Any challenge goes in a `TCK.md` with spec citation and reactivation plan.
 
+**No release for now** (Vidocq/tassis#1). Tassis stays out of the 0.4.0 release until the
+maintainer says otherwise. The tracked file `.forgejo/release-blocked` makes the `release-maven`
+action of `Vidocq/ci` stop a real run before it tags, pushes or uploads; a dry run still goes
+through. The file is outside `release.yml`, which is generated and rewritten. Never start
+`release.yml`, never change the version on `main` (`0.4.0-SNAPSHOT`: no `0.4.0`, no bump), and
+never delete the file, unless the maintainer asks for the release.
+
 ## AI Principles — Collaboration on This Repository
 
 - **Plan mode by default** on any structural change (new module, new SPI).

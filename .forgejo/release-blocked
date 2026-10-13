@@ -1,0 +1,6 @@
+Tassis stays out of the 0.4.0 release, and of any release, until the maintainer says otherwise.
+The version on main stays 0.4.0-SNAPSHOT; snapshots keep being deployed by ci.yml.
+
+Tracked in https://codefloe.com/Vidocq/tassis/issues/1
+
+To allow the release: delete this file in the pull request that prepares it, and close the issue.

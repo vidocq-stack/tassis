@@ -52,7 +52,9 @@ forward. The post horn of the logo is the emblem of that post. The whole story i
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published.
+🚧 **In development, not released.** Only `0.4.0-SNAPSHOT` is published, on every push to `main`.
+A release is blocked until the maintainer decides otherwise
+([tassis#1](https://codefloe.com/Vidocq/tassis/issues/1)).
 
 Messages live in memory and do not survive the JVM. That is a choice, not a gap: the broker
 writes nothing to the file system.
