@@ -52,10 +52,13 @@ forward. The post horn of the logo is the emblem of that post. The whole story i
 
 ## Status
 
-🚧 **In development, not released.** No artifact is published. Messages live in memory and do not survive the JVM: that
-one is a choice, not a gap. [ROADMAP.md](ROADMAP.md) has
-the milestones, and the limits a user must know are in the
-[reference](docs/en/modules/ROOT/pages/reference.adoc).
+🚧 **In development, not released.** No artifact is published.
+
+Messages live in memory and do not survive the JVM. That is a choice, not a gap: the broker
+writes nothing to the file system.
+
+The milestones are in [ROADMAP.md](ROADMAP.md), and the limits a user must know are in the
+[reference](docs/en/modules/ROOT/pages/reference.adoc#limits).
 
 ## Quick Start
 
@@ -154,8 +157,8 @@ public class OrderDesk {
 
 An injected context lives for the request in progress: created on first use, shared by the
 injection points that carry the same annotations, closed when the request ends. Its connection
-factory is a `ConnectionFactory` bean of the application, or else the settings below read from
-the system properties.
+factory is a `ConnectionFactory` bean of the application, or else the settings described below,
+read from the system properties.
 
 The runnable versions of the first three examples are in
 [tassis-examples](tassis-examples/src/main/java/io/vidocq/tassis/examples); the build compiles
@@ -176,27 +179,14 @@ ConnectionFactory fromSettings = TassisConnectionFactory.from(System.getProperti
 ConnectionFactory fromUrl = TassisConnectionFactory.fromUrl("tassis:vm:orders?clientId=reader");
 ```
 
-| Key | In a URL | Default | Meaning |
-|---|---|---|---|
-| `tassis.url` | | | A connection URL holding the settings below; a setting given by its own key overrides it |
-| `tassis.broker` | `tassis:vm:<broker>` | `default` | The name of the in-VM broker |
-| `tassis.server` | `tassis:amqp://<host>[:<port>]` | none | A broker of the network, as `amqp://<host>[:<port>]` (port 5672 by default) or, over TLS, `amqps://<host>[:<port>]` (port 5671), instead of the in-VM one; needs `tassis-amqp` |
-| `tassis.clientId` | `clientId` | none | The client identifier of the connections |
-| `tassis.listener.maxDeliveries` | `listener.maxDeliveries` | `10` | Deliveries of a message to a listener that keeps failing before the message is dropped |
-| `tassis.prefetch` | `prefetch` | `1` | Messages a consumer has a broker of the network send it ahead of the application asking for them; `1` is one at a time |
-| `tassis.pool.enabled` | `pool.enabled` | `true` | Whether the CDI integration pools the connections of this factory to a broker of the network |
-| `tassis.pool.maxSize` | `pool.maxSize` | `10` | Connections a pool opens at most |
-| `tassis.pool.acquireTimeout` | `pool.acquireTimeout` | `PT5S` | How long a borrower waits when all are lent |
-| `tassis.pool.idleTimeout` | `pool.idleTimeout` | `PT10M` | How long a connection nobody uses is kept; `PT0S` for ever |
-| `tassis.pool.maxLifetime` | `pool.maxLifetime` | `PT30M` | How long a connection is kept at all; `PT0S` for ever |
-| `tassis.pool.leakThreshold` | `pool.leakThreshold` | `PT0S` | How long a connection may be lent before it is reported in the log; `PT0S` for never |
+The settings are the name of the in-VM broker (`tassis.broker`) or the address of a broker of
+the network (`tassis.server`), the client identifier, the redelivery limit of a listener, how
+many messages a consumer fetches ahead, and those of the connection pool. Several factories can
+be defined by name, `tassis.factory.<name>.<key>`. An unknown key or an invalid value is an
+error that names the key.
 
-The `tassis.pool.*` settings are those a `TassisConnectionPool` built over the factory starts
-from; a factory alone makes no use of them. Durations are written as ISO-8601 (`PT30S`, `PT10M`).
-
-Several factories can be defined by name, `tassis.factory.<name>.<key>`, and obtained with
-`TassisConnectionFactory.named(name, settings)`; a named factory inherits the settings that carry
-no name. An unknown key or an invalid value is an error that names the key.
+Every key, its form in a URL and its default are in
+[Configuration](docs/en/modules/ROOT/pages/reference.adoc#configuration).
 
 ### Authentication
 
@@ -215,7 +205,7 @@ factory.createContext();                      // refused too, unless allowAnonym
 ```
 
 Users live in memory and every user has the same rights: see
-[Authentication](docs/en/modules/ROOT/pages/usage.adoc) in the documentation.
+[Authentication](docs/en/modules/ROOT/pages/usage.adoc#authentication).
 
 ### Opening the broker to the network
 
@@ -228,30 +218,21 @@ try (TassisServer server = TassisServer.forBroker("orders").port(5672).start()) 
 ```
 
 A Tassis client in another process reaches it by changing its URL, with `tassis-amqp` among its
-dependencies:
+dependencies. A client needs nothing of Tassis, though: any AMQP 1.0 client will do, Apache Qpid
+JMS for instance.
 
 ```java
-ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqp://broker-host:5672");
-```
+ConnectionFactory tassis = TassisConnectionFactory.fromUrl("tassis:amqp://broker-host:5672");
 
-A client needs nothing of Tassis, though. With Apache Qpid JMS, for instance:
-
-```java
-ConnectionFactory factory = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
+ConnectionFactory qpid = new org.apache.qpid.jms.JmsConnectionFactory("amqp://broker-host:5672");
 ```
 
 A client of the network has the whole of Jakarta Messaging, short of XA.
 
 **Nothing is encrypted unless asked.** The server listens on the loopback address unless told
-otherwise, and encrypts with TLS when it is given a context; clients then say `amqps`:
-
-```java
-TassisServer server = TassisServer.forBroker("orders").host("0.0.0.0").tls(sslContext).start();  // port 5671
-
-ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://broker-host");
-```
-
-See [Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc).
+otherwise, and encrypts with TLS when it is given a context; clients then say `amqps`. See
+[Opening a broker to the network](docs/en/modules/ROOT/pages/usage.adoc#network) and
+[Encrypting the connection](docs/en/modules/ROOT/pages/usage.adoc#tls).
 
 ### Pooling the connections
 
@@ -267,21 +248,11 @@ try (TassisConnectionPool pool = TassisConnectionPool.over(factory).maxSize(8).b
 }
 ```
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `maxSize(int)` | 10 | connections to the broker open at most, lent or not |
-| `acquireTimeout(Duration)` | 5 s | how long a borrower waits when all are lent, before a `ResourceAllocationException` |
-| `idleTimeout(Duration)` | 10 min | how long a connection nobody uses is kept |
-| `maxLifetime(Duration)` | 30 min | how long a connection is kept at all; never closed under a borrower |
-| `leakThreshold(Duration)` | never | how long a connection may be lent before it is reported in the log |
-
-The same settings are keys (`tassis.pool.maxSize`) and URL parameters (`pool.maxSize`) of the
-factory the pool is built over. Contexts injected with CDI come from a pool when their factory
-reaches a broker of the network.
-
-A borrower finds a connection as a factory gives it: stopped, with nothing of the one before.
-A connection given a client identifier (`setClientID`) is not kept: closing it really closes
-it. See [Pooling the connections](docs/en/modules/ROOT/pages/usage.adoc).
+A pool opens ten connections at most by default. Its size, how long a borrower waits and how
+long a connection is kept are set on the builder, by key (`tassis.pool.maxSize`) or in the URL
+of the factory (`pool.maxSize`). Contexts injected with CDI come from a pool when their factory
+reaches a broker of the network. See
+[Pooling the connections](docs/en/modules/ROOT/pages/usage.adoc#pool).
 
 ## Architecture
 
