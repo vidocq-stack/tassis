@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Messaging_TCK-901%2F903-yellowgreen" alt="TCK">
+  <img src="https://img.shields.io/badge/Messaging_TCK-903%2F903-brightgreen" alt="TCK">
   <img src="https://img.shields.io/badge/status-in_development-orange" alt="Status">
   <img src="https://img.shields.io/badge/JDK-25-orange" alt="JDK">
   <img src="https://img.shields.io/badge/Maven-3.9.16-purple" alt="Maven">
@@ -29,33 +29,12 @@ that today runs inside the JVM of the application.
 
 ### Why the name Tassis?
 
-Every brick of Vidocq carries the name of someone whose work resembles its own. For messaging,
-that is the **Tassis** family.
-
-In 1490 Maximilian I of Habsburg entrusted Francesco de Tassis (Franz von Taxis), from a family
-of couriers of Cornello near Bergamo, with a line of mounted couriers between Innsbruck and his
-court in the Low Countries. In 1505 a contract with Philip the Handsome turned it into a network:
-fixed routes from Brussels to Innsbruck, to the French court and to Spain, and delivery times
-written into the contract (five and a half days from Brussels to Innsbruck in summer, six and a
-half in winter). The family, known from 1650 as Thurn und Taxis, ran the post of the Holy Roman
-Empire and then its own until 1867.
-
-What they invented is what a messaging provider does:
-
-| The Tassis post | Jakarta Messaging |
-|---|---|
-| The sender hands a letter to the post and goes back to work. It neither travels nor waits for the addressee to be home. | A producer sends a message and carries on. The consumer may be busy, or absent. |
-| The letter goes from **relay** to relay. Each relay keeps it until a fresh rider takes it over. | The broker stores the message until a consumer takes it: store and forward. |
-| A letter has one addressee, on a known route. | A **queue**: each message goes to one consumer. |
-| A slip travels with the bag, and each relay writes on it the hour the bag went through. | A message carries its **headers**: when it was sent, when it expires, whether it is being delivered again. |
-| Delivery times are part of the contract. | Delivery mode, priority, expiration and delivery delay are part of the message. |
-| The post horn announces the courier before it arrives. | A **message listener** is called when a message arrives. |
-
-The post horn of the logo is the emblem of that post, and is still the one of many European
-postal services. The dotted circle around it is the road and its relays.
-
-The spelling is the one the family used in the Low Countries and in Spain, *de Tassis*, between
-the Italian *Tasso* and the German *Taxis*.
+Every brick of Vidocq carries the name of someone whose work resembles its own. From 1490 the
+**Tassis** family, later Thurn und Taxis, ran the relay post of the Habsburgs: a sender handed a
+letter over and went back to work, each relay kept it until a fresh rider took it on, and the
+delivery times were written into the contract. That is what a messaging provider does: store and
+forward. The post horn of the logo is the emblem of that post. The whole story is in the
+[documentation](docs/en/modules/ROOT/pages/index.adoc).
 
 ### Philosophy
 
@@ -309,9 +288,13 @@ it. See [Pooling the connections](docs/en/modules/ROOT/pages/usage.adoc).
 ```mermaid
 graph TB
     APP[Application] --> CORE
+    REMOTE[AMQP 1.0 client<br/><i>Tassis, Qpid JMS, ...</i>] -. network .-> SERVER
     subgraph "Runtime"
         CORE[tassis-core<br/><i>client API + in-VM broker</i>] --> API[tassis-api<br/><i>jakarta.messaging</i>]
-        CDI[tassis-cdi-vauban<br/><i>JMSContext injection</i>] --> CORE
+        AMQP[tassis-amqp<br/><i>AMQP 1.0 codec and client</i>] --> CORE
+        SERVER[tassis-server<br/><i>TassisServer</i>] --> AMQP
+        POOL[tassis-pool<br/><i>TassisConnectionPool</i>] --> CORE
+        CDI[tassis-cdi-vauban<br/><i>JMSContext injection</i>] --> POOL
     end
     subgraph "Testing"
         TCK[tassis-tck<br/><i>903/903</i>]
@@ -397,7 +380,7 @@ The `ee` tests need EJB or a web container and do not apply to a Java SE provide
 
 | Document | Contents |
 |----------|---------|
-| [docs/en](docs/en/modules/ROOT/pages) | The Antora component: getting started, usage, concepts, internals, TCK status, reference, migration |
+| [docs/en](docs/en/modules/ROOT/pages) | The Antora component: getting started, usage, concepts, internals, performance, TCK status, reference, migration |
 | [ROADMAP.md](ROADMAP.md) | Design decisions and milestones |
 | [TCK.md](TCK.md) | TCK runner, score, deviations |
 | [BUG.md](BUG.md), [BENCH.md](BENCH.md) | Bug and benchmark records |
