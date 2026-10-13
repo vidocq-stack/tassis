@@ -128,6 +128,10 @@ reads must signal the condition of the storages concerned**: `Storage.add` does 
 message that arrives or comes back, `detach` and `listen` for their consumer, `wake` for a
 connection. A change that signals nothing is a receive that never returns; one that signals
 everything is what M12-2 removed. `WaitingReceiveTest` has a scenario per reason to wake.
+A `Storage` keeps what is not due yet aside (`delayed`, §7.9), where no receive looks, and
+`release(now)` moves it among the others: **whoever reads the messages of a storage calls
+`release` first** (`receive`, `browse`), and whoever counts them counts both. `Storage.add` and
+`Storage.remove` know both sets: go through them.
 The subscription rules of §8.3 (reuse, replacement, conflicts) are all in the private
 `Broker.named(LocalConnection, Subscribing)`, not to be confused with the registry lookup
 `Broker.named(String)`.

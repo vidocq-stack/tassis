@@ -1153,7 +1153,7 @@ with the fix, 903 of 903.
 - **The client fetches ahead when told to** (M12-3). One credit at a time costs 182 µs a message where
   Qpid JMS, fetching ahead, takes 6.8 µs from the same server. An option, as M11.2 said,
   with its price: a message a consumer holds is not there for another.
-- **Delayed messages are kept aside** (M12-4). Ten thousand of them ahead in a queue divide
+- **Delayed messages are kept aside** (M12-4). Ten thousand of them ahead in a queue divided
   its throughput by three hundred.
 - **The AMQP code allocates less** (M12-5). 38 kB for a round trip of 100 bytes, four times
   what Qpid JMS and Artemis allocate between them.
@@ -1251,9 +1251,36 @@ where it was 2 786. In both the Tassis client is where Qpid JMS is.
   concurrency review found the case, and nothing reproduces it reliably.
 - **The broker of the JVM ignores the setting.**
 
-#### M12-4 — Delayed messages kept aside
+#### M12-4 — Delayed messages kept aside ✅
 
-To open. Measured by `BacklogBench`.
+- [x] A queue or a subscription keeps apart the messages whose delivery time has not come
+      (§7.9), ordered by that time; they join the others when it comes, each at the place its
+      priority and its sending give it (§3.4.10, §4.1)
+- [x] A receive looks at none of them, and waits no longer than until the next is due; a
+      browser, which must not show them before, sees them from then on
+- [x] The clock is read for a message only when it is stamped later than the last time a
+      receive read it: a message sent without a delay costs what it did
+
+**Proven by:** `DelayedMessagesTest`, thirteen scenarios, one for what changes (a receive
+behind a thousand delayed messages looked at 11 010 messages to take 10, and now looks at 10)
+and twelve for what must not; the TCK in the JVM and through the network, 903 of 903 each; the
+`interop` profile.
+
+**Measured** (BENCH-20261012-06): behind a thousand delayed messages, 2 490 000 round trips a
+second where there were 169 000; behind ten thousand, 2 249 000 for 9 800. A message sent
+and received on a queue without any is where it was.
+
+**Choices and limits:**
+
+- **A receive wakes when the next delayed message of its queue is due**, whether or not its
+  selector accepts it: once for each, for nothing at worst.
+- **A message that expires before it is due stays counted** until a receive or a browser
+  looks at its queue, as an expired message always did.
+- **The broker counts for its test** the messages its receives look at (`Broker.examined`,
+  visible to its package only), as M12-2 did for the wake-ups.
+- **The machine was 10 % slower in the evening than in the morning**, on every benchmark and
+  on the previous commit too: the entry measures both commits one after the other, and
+  again alternately where a line differed.
 
 #### M12-5 — Allocation of the AMQP code
 

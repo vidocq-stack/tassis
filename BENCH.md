@@ -23,6 +23,71 @@ which question it answers, and `Rig` who is behind the name of a provider.
 
 ---
 
+## BENCH-20261012-06 — Delayed messages are kept aside (M12-4)
+
+- **Date**: 2026-10-12, in the evening
+- **Commit**: the commit of M12-4 (branch `feat/m12-4-delayed-aside`), and `64a2c6e` before it
+- **JVM**: Temurin 25+36-LTS, default flags
+- **Hardware**: AMD Ryzen 7 5800X (8 cores, 16 threads), 16 GB given to WSL2
+- **OS**: Ubuntu 20.04.6 LTS under WSL2, Linux 5.15.167.4
+- **Exact command** (6 min each), on the jar of each commit, one after the other:
+  ```bash
+  ./mvnw -ntp -Pbench -pl tassis-bench -am verify        # Maven 3.9.16
+  java -jar tassis-bench/target/benchmarks.jar 'BacklogBench|RoundTripBench|IdleWaitersBench' \
+      -p provider=tassis-vm -prof gc -rf json
+  ```
+  The previous commit is measured again, not read from an earlier entry: by the evening the
+  machine did everything some 10 % slower than in the morning, that commit included
+  (`RoundTripBench` 2 870 000 ops/s where BENCH-20261012-04 has 3 332 000).
+- **Results**, before (`64a2c6e`):
+  ```
+  Benchmark                   (parameters)    Mode  Cnt        Score         Error  Units  Alloc
+  BacklogBench.roundTrip      delayed=0      thrpt   10  3103511.626  ± 100787.390  ops/s   2112  B/op
+  BacklogBench.roundTrip      delayed=1000   thrpt   10   169311.450   ± 10614.209  ops/s   2176  B/op
+  BacklogBench.roundTrip      delayed=10000  thrpt   10     9783.451    ± 1605.814  ops/s   2260  B/op
+  IdleWaitersBench.roundTrip  waiters=0      thrpt   10  2928571.205   ± 79186.916  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip  waiters=100    thrpt   10  2804529.483   ± 54083.217  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip  waiters=1000   thrpt   10  2804218.745   ± 82172.987  ops/s   2112  B/op
+  RoundTripBench.roundTrip    size=100       thrpt   10  2869560.977   ± 85262.936  ops/s   2112  B/op
+  RoundTripBench.roundTrip    size=10000     thrpt   10   126798.904    ± 4886.837  ops/s  61488  B/op
+  ```
+  and after:
+  ```
+  Benchmark                   (parameters)    Mode  Cnt        Score         Error  Units  Alloc
+  BacklogBench.roundTrip      delayed=0      thrpt   10  2783166.817   ± 54667.570  ops/s   2112  B/op
+  BacklogBench.roundTrip      delayed=1000   thrpt   10  2489641.099  ± 154485.924  ops/s   2160  B/op
+  BacklogBench.roundTrip      delayed=10000  thrpt   10  2248870.717   ± 53612.152  ops/s   2200  B/op
+  IdleWaitersBench.roundTrip  waiters=0      thrpt   10  2879593.765   ± 83122.779  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip  waiters=100    thrpt   10  2857572.940   ± 87975.006  ops/s   2112  B/op
+  IdleWaitersBench.roundTrip  waiters=1000   thrpt   10  2789677.366   ± 73208.751  ops/s   2112  B/op
+  RoundTripBench.roundTrip    size=100       thrpt   10  2775334.024  ± 109826.069  ops/s   2112  B/op
+  RoundTripBench.roundTrip    size=10000     thrpt   10   131147.538    ± 5465.855  ops/s  61488  B/op
+  ```
+- **Comparison with the previous run**, in round trips a second:
+
+  | Benchmark | before | after | |
+  |---|---|---|---|
+  | `BacklogBench`, 1 000 delayed messages ahead | 169 000 | 2 490 000 | **14.7× faster** |
+  | `BacklogBench`, 10 000 delayed messages ahead | 9 800 | 2 249 000 | **230× faster** |
+  | `RoundTripBench`, 100 bytes | 2 870 000 | 2 775 000 | within the errors |
+  | `RoundTripBench`, 10 kB | 126 800 | 131 100 | within the errors |
+  | `IdleWaitersBench`, 1 000 waiting | 2 804 000 | 2 790 000 | within the errors |
+
+  A queue no longer pays for the delayed messages it holds: with ten thousand of them it does
+  2.2 million round trips a second, for 2.8 million with none. What is left of the difference
+  is the set they are kept in, larger and deeper.
+
+  One line reads lower and is not: `BacklogBench` with no delayed message, 2 783 000 for
+  3 104 000. It is the first benchmark of its run, and does what `RoundTripBench` and
+  `IdleWaitersBench` with nobody waiting do, which the same run of the same commit has at
+  2 870 000 and 2 929 000. Run again alone, one commit after the other, three times
+  (`BacklogBench -p provider=tassis-vm -p delayed=0`): 2 749 000, 2 764 000 and 2 767 000
+  before, 2 870 000, 2 717 000 and 2 744 000 after. The two do the same.
+
+  A first version of the change did cost something, 6 % of a round trip: it read the clock
+  for each message sent, to know whether it was delayed. The broker now reads it only for a
+  message stamped later than the last time a receive read it.
+
 ## BENCH-20261012-05 — The client fetches ahead when told to (M12-3)
 
 - **Date**: 2026-10-12

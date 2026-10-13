@@ -1,5 +1,5 @@
 = Performance
-:description: What Tassis has been measured to do, in the JVM and through the network, beside Apache ActiveMQ Artemis and Apache Qpid JMS; where it is slow today; and how to run the benchmarks.
+:description: What Tassis has been measured to do, in the JVM and through the network, beside Apache ActiveMQ Artemis and Apache Qpid JMS; what is still slow; and how to run the benchmarks.
 
 [.lead]
 Tassis is measured with JMH, alone and beside Apache ActiveMQ Artemis and Apache Qpid JMS. In the JVM a client sends and receives 3.3 million messages a second. Through the network the server holds its place beside Artemis, and the client, which asks for one message at a time unless told to fetch ahead, is as fast as Qpid JMS once it is.
@@ -68,8 +68,6 @@ Several threads, each with its connection, its session and its queue, each sendi
 
 A Tassis broker has one lock, and it shows: more clients do not get more out of it, and the first of them alone gets more than twice what sixteen share. What it serves at worst is still fifteen times what Artemis does with sixteen threads, and five hundred times what one client of the network asks of it. The lock stays as it is.
 
-== Where Tassis is slow today
-
 [#one-at-a-time]
 == One message at a time, or fetching ahead
 
@@ -89,24 +87,21 @@ The two clients cost the same when they work the same way: the difference is the
 
 One at a time is the default because it keeps a message nobody asked for where another consumer can take it. Fetching ahead is for consumers that last and that work alone on their queue, or that all keep receiving: xref:usage.adoc#prefetch[Fetching ahead] says what it costs. It does nothing for a consumer opened and closed for each message, which is slower with it (1 090 round trips a second for 1 330), and nothing measurable for a listener.
 
-== Where Tassis is slow today
 
-One thing the benchmarks were written to look at, and found, is still there. It has its milestone in the roadmap.
+== Delayed messages
 
-=== Delayed messages are looked at by every receive
+A message sent with a delivery delay is kept aside until its time comes: a queue that holds many of them is nearly as fast as one that holds none (entry BENCH-20261012-06, measured in the evening, when the machine did everything some 10 % slower than for the figures above).
 
-A message sent with a delivery delay stays in its queue, and a receive passes it on its way to the first message that is due.
-
-[cols="1,1"]
+[cols="1,1,1"]
 |===
-| Delayed messages ahead in the queue | Round trips a second, in the JVM
+| Delayed messages held by the queue | Round trips a second, in the JVM | Before milestone M12-4
 
-| 0 | 3 264 000
-| 1 000 | 196 000
-| 10 000 | 10 300
+| 0 | 2 783 000 | 3 104 000
+| 1 000 | 2 490 000 | 169 000
+| 10 000 | 2 249 000 | 9 800
 |===
 
-Planned: milestone M12-4.
+The first line is the same on both sides once the two are measured alternately: `BENCH.md` has the detail.
 
 [#waiting]
 == Consumers that wait
@@ -145,6 +140,12 @@ Messages delivered to a `MessageListener`, a hundred at a time:
 |===
 
 How the session acknowledges does not show in the JVM: 500 000, 491 000 and 518 000 for automatic, lazy and transacted. The Tassis client through the network is behind, fetching ahead or not (5 900 and 6 100, entry BENCH-20261012-05): the receiving is not what holds it back. That benchmark sends with the same client, whose sends wait for the broker where those of Qpid JMS do not; that is the likely cause, and it has not been established.
+
+== What is still slow
+
+* **Delivery to a listener through the network**, six times under Qpid JMS (see <<_listeners>>). The cause is not established.
+* **The AMQP code allocates a lot**: 38 kB for a message of 100 bytes sent and received, where Qpid JMS and Artemis allocate 9 kB between them. Planned: milestone M12-5.
+* **Several clients of one broker of the JVM share its one lock** (see <<_several_clients_at_once>>), by decision.
 
 == Running the benchmarks
 

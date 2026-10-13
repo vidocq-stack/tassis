@@ -158,7 +158,7 @@ Whatever delivery depends on is state of the broker, changed by a `BrokerConnect
 
 Two other locks exist beside these three: `TassisContext.lifecycle`, which guards the lazily created session of a context and is never held while waiting for a callback to return, and `TassisConnection.identity`, which serialises the calls to `setClientID`.
 
-One broker lock is the simplest design that honours `stop()` and `close()`. The benchmarks of milestone M12 settled that it is not split: see xref:performance.adoc[Performance]. Its known costs: more threads do not get more out of a broker, a message wakes every receive that waits on its queue where one could take it, and a receive without a view scans past the messages that are delayed (milestone M12-4).
+One broker lock is the simplest design that honours `stop()` and `close()`. The benchmarks of milestone M12 settled that it is not split: see xref:performance.adoc[Performance]. Its known costs: more threads do not get more out of a broker, a message wakes every receive that waits on its queue where one could take it. A message whose delivery is delayed is kept aside, ordered by its delivery time, and joins the others when that time comes, at the place its priority and its sending give it: no receive looks at it before.
 
 == `close()` versus `shut()`
 

@@ -150,7 +150,11 @@ public final class Broker {
         // What the receives of its consumers wait on, and whoever waits for one of them to end.
         // A condition of the broker lock.
         final Condition changed;
+        // The messages a consumer may take now, in delivery order.
         final TreeSet<Stored> messages = new TreeSet<>(Stored.DELIVERY_ORDER);
+        // Those whose delivery time has not come (§7.9), the soonest first: kept aside, so that
+        // no receive looks at them, and moved among the others when their time comes (release).
+        final TreeSet<Stored> delayed = new TreeSet<>(Stored.DUE_ORDER);
         // One view per selector in use by the queue's consumers: see View.
         final Map<Selector, View> views = new HashMap<>();
         int consumers;
@@ -173,37 +177,63 @@ public final class Broker {
             }
             List<Stored> expired = new ArrayList<>();
             long next = Long.MAX_VALUE;
-            for (Stored stored : messages) {
-                long expiration = stored.message.getJMSExpiration();
-                if (expiration != 0 && expiration <= now) {
-                    expired.add(stored);
-                } else if (expiration != 0) {
-                    next = Math.min(next, expiration);
+            for (TreeSet<Stored> held : List.of(messages, delayed)) {
+                for (Stored stored : held) {
+                    long expiration = stored.message.getJMSExpiration();
+                    if (expiration != 0 && expiration <= now) {
+                        expired.add(stored);
+                    } else if (expiration != 0) {
+                        next = Math.min(next, expiration);
+                    }
                 }
             }
             expired.forEach(this::remove);
             nextExpiration = next;
         }
 
-        void add(Stored stored) {
-            long expiration = stored.message.getJMSExpiration();
-            if (expiration != 0) {
-                nextExpiration = Math.min(nextExpiration, expiration);
+        /**
+         * Moves among the messages a consumer may take those whose delivery time has come
+         * (§7.9), each to the place its priority and its sending give it.
+         *
+         * @return when the next one is due, or {@code Long.MAX_VALUE} if none is delayed
+         */
+        long release(long now) {
+            while (!delayed.isEmpty() && delayed.first().message.getJMSDeliveryTime() <= now) {
+                place(delayed.pollFirst());
             }
+            return delayed.isEmpty() ? Long.MAX_VALUE : delayed.first().message.getJMSDeliveryTime();
+        }
+
+        private void place(Stored stored) {
             messages.add(stored);
             views.forEach((selector, view) -> {
                 if (stored.selectedBy(selector)) {
                     view.messages.add(stored);
                 }
             });
+        }
+
+        /** @param due whether the delivery time of the message has come: see {@link Broker#isDue} */
+        void add(Stored stored, boolean due) {
+            long expiration = stored.message.getJMSExpiration();
+            if (expiration != 0) {
+                nextExpiration = Math.min(nextExpiration, expiration);
+            }
+            if (due) {
+                place(stored);
+            } else {
+                delayed.add(stored);
+            }
             // All of them, not one: the first to wake may not be able to take it (its selector,
             // its connection stopped, its listener gone), or be no receive at all but whoever
-            // waits for one to end (detach).
+            // waits for one to end (detach). A delayed message wakes them too: they then wait
+            // no longer than until it is due.
             changed.signalAll();
         }
 
         void remove(Stored stored) {
             messages.remove(stored);
+            delayed.remove(stored);
             for (View view : views.values()) {
                 view.messages.remove(stored);
             }
@@ -229,6 +259,11 @@ public final class Broker {
         static final Comparator<Stored> DELIVERY_ORDER = Comparator
                 .comparingInt((Stored stored) -> -stored.message.getJMSPriority())
                 .thenComparingLong(stored -> stored.sequence);
+
+        /** The soonest due first (§7.9); the delivery order tells apart those due together. */
+        static final Comparator<Stored> DUE_ORDER = Comparator
+                .comparingLong((Stored stored) -> stored.message.getJMSDeliveryTime())
+                .thenComparing(DELIVERY_ORDER);
 
         final Storage storage;
         // Shared by every subscription the message was published to: it is never modified.
@@ -289,6 +324,10 @@ public final class Broker {
     private long sequence;
     // How many times a receive came back from waiting, for a message or for nothing.
     private long awakenings;
+    // A time the clock has shown: never ahead of it. See isDue.
+    private long clock;
+    // How many messages the receives have looked at to find the one to take.
+    private long examined;
     // How many receives are waiting right now.
     private int waiting;
     private final Users users;
@@ -556,8 +595,21 @@ public final class Broker {
         }
     }
 
+    /**
+     * Whether the delivery time of a message has come (§7.9). Under the lock. Nearly every
+     * message is sent without a delay and is due the moment it arrives: the time a receive last
+     * read is enough to tell, and the clock is only read for a message that is ahead of it.
+     */
+    private boolean isDue(TassisMessage message) {
+        long time = message.getJMSDeliveryTime();
+        if (time > clock) {
+            clock = Math.max(clock, System.currentTimeMillis());
+        }
+        return time <= clock;
+    }
+
     private void store(Storage storage, TassisMessage message) {
-        storage.add(new Stored(storage, message, sequence++));
+        storage.add(new Stored(storage, message, sequence++), isDue(message));
     }
 
     // ---- settling --------------------------------------------------------
@@ -625,7 +677,8 @@ public final class Broker {
     private static void giveBack(Delivery delivery) {
         Storage storage = delivery.stored.storage;
         if (!storage.deleted) {
-            storage.add(delivery.stored);
+            // Delivered once already: its time has come.
+            storage.add(delivery.stored, true);
         }
     }
 
@@ -722,6 +775,7 @@ public final class Broker {
         Subscribing request = subscription.request;
         subscription.storage.deleted = true;
         subscription.storage.messages.clear();
+        subscription.storage.delayed.clear();
         List<Subscription> ofTopic = subscriptionsByTopic.get(request.topic());
         ofTopic.remove(subscription);
         if (ofTopic.isEmpty()) {
@@ -835,6 +889,7 @@ public final class Broker {
             while (!consumer.closed
                     && (ofPeriod == NO_PERIOD || consumer.listening && consumer.period == ofPeriod)) {
                 long now = System.currentTimeMillis();
+                clock = Math.max(clock, now);
                 long nextDeliveryTime = Long.MAX_VALUE;
                 // A stopped connection delivers nothing, but its receive timers keep running (§6.1.5).
                 if (consumer.connection.started) {
@@ -842,9 +897,12 @@ public final class Broker {
                     TreeSet<Stored> candidates =
                             consumer.view != null ? consumer.view.messages : consumer.storage.messages;
                     consumer.storage.sweepExpired(now);
+                    // Whatever is not due is aside: the wait below ends when the next of it is.
+                    nextDeliveryTime = consumer.storage.release(now);
                     Stored taken = null;
                     List<Stored> gone = new ArrayList<>();
                     for (Stored next : candidates) {
+                        examined++;
                         TassisMessage message = next.message;
                         if (noLongerSelected(consumer.subscription, next)) {
                             gone.add(next);
@@ -853,8 +911,6 @@ public final class Broker {
                             // A selector on the delivery count, checked each time. Not for this
                             // consumer: the message stays where it is.
                             continue;
-                        } else if (message.getJMSDeliveryTime() > now) {
-                            nextDeliveryTime = Math.min(nextDeliveryTime, message.getJMSDeliveryTime());
                         } else {
                             taken = next;
                             break;
@@ -919,10 +975,11 @@ public final class Broker {
             if (storage == null) {
                 return messages;
             }
+            // §7.9: a browser must not return a message before its delivery time, and those are aside.
+            storage.release(now);
             for (Stored stored : storage.messages) {
                 TassisMessage message = stored.message;
-                // §7.9: a browser must not return a message before its delivery time.
-                if (!isExpired(message, now) && message.getJMSDeliveryTime() <= now
+                if (!isExpired(message, now)
                         && (selector == null || selector.matches(message, stored.deliveryCount + 1))) {
                     TassisMessage copy = message.copy();
                     copy.markReceived();
@@ -943,6 +1000,16 @@ public final class Broker {
         lock.lock();
         try {
             return awakenings;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Returns how many messages the receives have looked at so far, taken or passed over. */
+    long examined() {
+        lock.lock();
+        try {
+            return examined;
         } finally {
             lock.unlock();
         }
@@ -969,12 +1036,12 @@ public final class Broker {
         }
     }
 
-    /** Returns how many messages the queue holds, delivered ones excluded. */
+    /** Returns how many messages the queue holds, delayed ones included and delivered ones excluded. */
     public int messageCount(String queue) {
         lock.lock();
         try {
             Storage storage = queues.get(queue);
-            return storage == null ? 0 : storage.messages.size();
+            return storage == null ? 0 : storage.messages.size() + storage.delayed.size();
         } finally {
             lock.unlock();
         }
