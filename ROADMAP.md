@@ -414,7 +414,7 @@ The signature file is under the Eclipse Foundation TCK License and is downloaded
 not stored here; the `sigtest-maven-plugin` is a build-time plugin of the `signature` profile
 only.
 
-### M8b — Documentation
+### M8b — Documentation ✅
 
 Added on 2026-10-10 after an inventory at the end of M7. The milestone is numbered M8b so that
 M9 to M12, which the code, `TCK.md` and `CLAUDE.md` refer to by number, keep theirs. It depends
@@ -453,9 +453,9 @@ What is missing:
   - `tck`: the content of `TCK.md`, kept in step with it.
 - [x] **Logo**: `tassis-logo.svg` and its rendering `tassis-logo.png`, at the root for the README
       and in `docs/en/modules/ROOT/images`: a post horn, the emblem of the Tassis post.
-- [ ] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
+- [x] **Registration in `vidocq-docs`**: the two playbooks, `components-quick-nav.js`, and the
       site's own pages that list the bricks. The published playbook clones from Codefloe, so
-      this needs the `Vidocq/tassis` repository to exist there.
+      this needed the `Vidocq/tassis` repository to exist there.
 - [x] **`tassis-examples`**: `SimplifiedHello`, `ClassicHello` and `ConfiguredHello`, a Java
       module with a test that runs them. `getting-started` quotes them.
 - [x] **A usage snippet in `README.md`**.
@@ -475,8 +475,16 @@ repository.**
   warning; every cross-reference and anchor resolves. That build used a playbook holding this
   component alone and Antora's default UI, **not** the `vidocq-docs` playbook: Tassis is not
   registered there yet, so the first half of the exit criterion is not met to the letter.
-- Still open: the **registration in `vidocq-docs`**, which is a change in another repository and, for the published playbook,
-  needs `Vidocq/tassis` to exist on Codefloe.
+- The **registration in `vidocq-docs`** was the item left open.
+
+**State on 2026-10-13: done.** Tassis was registered in `vidocq-docs` on 2026-10-12 (its commit
+`b496963`): both playbooks build the component from `main`, as they do for a brick that has no
+release yet; the sidebar lists it under "Jakarta EE Platform"; the home, architecture, roadmap
+and "What's new" pages of the site name it. The site is published with the component, built by
+the playbook of `vidocq-docs` and its UI, which is the exit criterion: checked on 2026-10-13 at
+`https://doc.vidocq.dev/tassis/dev/`, where the `performance` page carried the entry of
+`BENCH.md` pushed the same day. A push to `main` that changes `docs/` rebuilds the site
+(`notify-docs.yml`).
 
 ### M8c — Configuration ✅
 

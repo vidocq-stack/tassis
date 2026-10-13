@@ -191,8 +191,9 @@ made an asynchronous send. Application callbacks run on them and nowhere else.
 
 `Settings` is the one description of what configures a connection factory. A new setting is
 added there once, as a key (`tassis.<name>`) **and** as a URL parameter, with its default and
-its validation, and gets its line in the tables of `README.md`, of the `TassisConnectionFactory`
-Javadoc and of the Antora `reference` page in the same change. `tassis-core` reads no file and
+its validation, and gets its line in the tables of the `TassisConnectionFactory` Javadoc and of
+the Antora `reference` page in the same change. `README.md` has no such table: it names the
+settings in a sentence and links to the `reference` page. `tassis-core` reads no file and
 no system property by itself: the application hands over a `Map` or `Properties`.
 
 ## Simplified API
