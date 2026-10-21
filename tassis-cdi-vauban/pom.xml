@@ -103,7 +103,9 @@
                         package of the integration's own beans is NOT opened: they are wired by
                         the generated _VaubanComponents.
                     -->
+                    <!-- @{argLine} keeps the JaCoCo agent of the quality profile (vidocq-parent). -->
                     <argLine>
+                        @{argLine}
                         --add-reads io.vidocq.tassis.cdi.vauban=io.vidocq.vauban.core
                         --add-opens io.vidocq.tassis.cdi.vauban/io.vidocq.tassis.cdi.app=io.vidocq.vauban.core
                     </argLine>

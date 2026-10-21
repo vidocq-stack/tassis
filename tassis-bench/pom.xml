@@ -26,6 +26,10 @@
         <!-- What Tassis is compared with: the versions tassis-interop tests against, to raise together. -->
         <artemis.version>2.57.0</artemis.version>
         <qpid.jms.version>2.11.0</qpid.jms.version>
+
+        <!-- SonarQube: JMH benchmarks, not production code; their code would only count as
+             uncovered (Vidocq/vidocq#284). -->
+        <sonar.skip>true</sonar.skip>
     </properties>
 
     <dependencies>

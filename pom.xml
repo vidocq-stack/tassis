@@ -70,6 +70,19 @@
         <jakarta.annotation.version>3.0.0</jakarta.annotation.version>
         <!-- Vidocq upstream, by property so that a cross-repo PR can override it -->
         <vauban.version>0.4.0-SNAPSHOT</vauban.version>
+
+        <!--
+            SonarQube (Vidocq/vidocq#284): every module reads the aggregated JaCoCo report of
+            tassis-coverage (quality profile), so the tests of tassis-cdi-vauban-module-it count
+            for the code they exercise in the other modules. tassis-examples stays analysed
+            (people copy examples) but out of the coverage, and may print to System.out (rule
+            java:S106).
+        -->
+        <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/tassis-coverage/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <sonar.coverage.exclusions>**/tassis-examples/**</sonar.coverage.exclusions>
+        <sonar.issue.ignore.multicriteria>examples</sonar.issue.ignore.multicriteria>
+        <sonar.issue.ignore.multicriteria.examples.ruleKey>java:S106</sonar.issue.ignore.multicriteria.examples.ruleKey>
+        <sonar.issue.ignore.multicriteria.examples.resourceKey>**/tassis-examples/**/src/main/java/**</sonar.issue.ignore.multicriteria.examples.resourceKey>
     </properties>
 
     <!--
@@ -201,6 +214,16 @@
             <id>bench</id>
             <modules>
                 <module>tassis-bench</module>
+            </modules>
+        </profile>
+        <!--
+            Quality profile (with the one of vidocq-parent, which runs the JaCoCo agent): adds
+            the aggregated coverage report that SonarQube reads (Vidocq/vidocq#284).
+        -->
+        <profile>
+            <id>quality</id>
+            <modules>
+                <module>tassis-coverage</module>
             </modules>
         </profile>
     </profiles>
