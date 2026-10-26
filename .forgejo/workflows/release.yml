@@ -29,11 +29,16 @@ on:
         description: "io.vidocq:vidocq-parent — stable version (must be released on Central first)"
         type: string
         required: true
-        default:     "0.2.0"
+        default:     "0.4.0-RC1"
+      vauban_release:
+        description: "io.vidocq.vauban:* (all artifacts under io.vidocq.vauban) — stable version (must be released on Central first)"
+        type: string
+        required: true
+        default:     "0.3.0"
 
 jobs:
   release:
-    runs-on: vidocq-runner
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +57,10 @@ jobs:
           auto-publish:     ${{ inputs.auto_publish == 'auto' && 'true' || 'false' }}
           overrides: |
             io.vidocq=${{ inputs.vidocq_parent_release }}
+            io.vidocq.vauban=${{ inputs.vauban_release }}
+          excluded-modules: |
+            tassis-cdi-vauban-module-it
+            tassis-examples
           central-username: ${{ secrets.CENTRAL_USERNAME }}
           central-password: ${{ secrets.CENTRAL_PASSWORD }}
           gpg-private-key:  ${{ secrets.GPG_PRIVATE_KEY }}
