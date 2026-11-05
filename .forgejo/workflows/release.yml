@@ -29,7 +29,7 @@ on:
         description: "io.vidocq:vidocq-parent — stable version (must be released on Central first)"
         type: string
         required: true
-        default:     "0.4.0-RC1"
+        default:     "0.4.0-RC2"
       vauban_release:
         description: "io.vidocq.vauban:* (all artifacts under io.vidocq.vauban) — stable version (must be released on Central first)"
         type: string
@@ -61,6 +61,10 @@ jobs:
           excluded-modules: |
             tassis-cdi-vauban-module-it
             tassis-examples
+            tassis-tck
+            tassis-interop
+            tassis-bench
+            tassis-coverage
           central-username: ${{ secrets.CENTRAL_USERNAME }}
           central-password: ${{ secrets.CENTRAL_PASSWORD }}
           gpg-private-key:  ${{ secrets.GPG_PRIVATE_KEY }}
