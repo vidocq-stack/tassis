@@ -20,6 +20,7 @@
 package io.vidocq.tassis.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -27,7 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.vidocq.tassis.core.TassisConnectionFactory;
 import jakarta.jms.JMSContext;
 import jakarta.jms.JMSException;
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
 import javax.net.ssl.SSLSocket;
@@ -110,6 +114,32 @@ class TlsNetworkClientTest extends NetworkClientTest {
                     () -> assertThrows(JMSException.class, encrypting::createConnection));
 
             assertTrue(refused.getMessage().contains("TLS"), refused.getMessage());
+        }
+    }
+
+    @Test
+    void aBrokerThatCutsTheHandshakeShortWasReached() throws Exception {
+        // What a port in clear does to a client that wants encryption, when its reset comes before
+        // its answer: the connection was made, and what failed is the handshake (T-004).
+        try (ServerSocket cuttingShort = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            Thread.ofVirtual().start(() -> resetTheNextClient(cuttingShort));
+            TassisConnectionFactory encrypting = TassisConnectionFactory
+                    .fromUrl("tassis:amqps://localhost:" + cuttingShort.getLocalPort()).withSslContext(LOCALHOST.client());
+
+            JMSException refused = assertTimeoutPreemptively(Duration.ofSeconds(20),
+                    () -> assertThrows(JMSException.class, encrypting::createConnection));
+
+            assertTrue(refused.getMessage().contains("TLS"), refused.getMessage());
+            assertFalse(refused.getMessage().contains("cannot be reached"), refused.getMessage());
+        }
+    }
+
+    /** Accepts one client and ends its connection with a reset, as a socket closed on what it has not read does. */
+    private static void resetTheNextClient(ServerSocket listener) {
+        try (Socket client = listener.accept()) {
+            client.setSoLinger(true, 0);
+        } catch (IOException _) {
+            // nobody came, or the test is over: its own assertion says so
         }
     }
 

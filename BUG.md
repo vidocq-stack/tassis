@@ -68,3 +68,28 @@ Entry format: `short id · date · symptom · minimal repro · cause hypothesis 
   ends the connections, as the `stop()` of Chappe does. A thread that is interrupted does not
   wait, and stays interrupted
   (`TassisServerTest.aThreadInterruptedWhileItClosesTheServerStaysInterrupted`).
+
+
+## T-004 · 2026-11-17 · a broker that cut the TLS handshake short was reported as one that cannot be reached
+
+- **Symptom**: a client that asks for an encrypted connection (`tassis:amqps://`) to a port that
+  does not encrypt was told one of two things, depending on which came first: "the broker
+  and the client could not make an encrypted connection (TLS)", or "the broker cannot be
+  reached: Connection reset" (or "Broken pipe"). The second sends the reader to the network,
+  where nothing is wrong: the port was reached. It was seen as
+  `TlsNetworkClientTest.aClientThatWantsEncryptionRefusesAPortInClear` failing on macOS, three
+  runs out of four on 2026-11-17, on `main` too; it had not failed on the CI runners (Linux).
+- **Minimal repro**: a socket that accepts a client and resets its connection (closed with
+  `SO_LINGER` at 0), and a factory `tassis:amqps://` on its port:
+  `TlsNetworkClientTest.aBrokerThatCutsTheHandshakeShortWasReached`.
+- **Cause**: a broker in clear reads the first octets of the TLS handshake as a protocol
+  header, answers with its own and closes; closing a socket on what it has not read resets
+  the connection. The client then reads either the answer or the end of the connection,
+  which the JDK reports as an `SSLException`, or the reset, which comes out of
+  `SSLSocket.startHandshake()` as a plain `SocketException`. A handshake that runs out of time
+  comes out as a `SocketTimeoutException` in the same way. `AmqpBrokerConnection.establish`
+  reported every `IOException` that is not an `SSLException` as a broker that cannot be
+  reached. Present since M11.3d-2.
+- **Status**: **fixed**: `AmqpBrokerConnection.secured` reports whatever fails during the
+  handshake as a failure of the handshake. The connection is made before the handshake
+  starts, so nothing that fails there means that the broker cannot be reached.

@@ -545,6 +545,7 @@ ConnectionFactory factory = TassisConnectionFactory.fromUrl("tassis:amqps://brok
 * **The certificate must be trusted.** By default a factory trusts what the JVM trusts: the certificate authorities of the JDK, or the trust store named by the system property `javax.net.ssl.trustStore`. For anything else, such as a certificate the organisation issued itself, the application gives the factory a context: `factory.withSslContext(context)`.
 * **The certificate must bear the name of the host.** The name in the URL is checked against the certificate, as a browser does for HTTPS. There is no setting to turn that off: a certificate is issued to the name clients use.
 * **A broker that is not trusted is refused** with a `JMSException` before anything is sent, the password included.
+* **A port that does not encrypt is not one a client reaches with `amqps`.** The `JMSException` says that the broker and the client could not make an encrypted connection (TLS), however the broker ends the attempt: with an answer in clear, by closing the connection, by resetting it, or by saying nothing.
 * **The client proves who it is with its user name and password**, now encrypted. The server asks clients for no certificate.
 * **The versions of TLS** are those the JDK enables: 1.3 and 1.2 today.
 

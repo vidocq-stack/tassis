@@ -436,7 +436,16 @@ public final class AmqpBrokerConnection implements BrokerConnection {
         SSLParameters parameters = socket.getSSLParameters();
         parameters.setEndpointIdentificationAlgorithm("HTTPS");
         socket.setSSLParameters(parameters);
-        socket.startHandshake();
+        try {
+            socket.startHandshake();
+        } catch (SSLException e) {
+            throw e;
+        } catch (IOException e) {
+            // The broker was reached: what failed is the handshake. A peer that ends the connection
+            // with a reset, as a port in clear does to what it cannot read, or that does not answer
+            // in time, comes out of the handshake as a plain I/O failure (BUG.md T-004).
+            throw new SSLException(e.getMessage(), e);
+        }
         return socket;
     }
 

@@ -306,6 +306,10 @@ that never writes and a writer that alone writes. Rules:
   `abort`): closing a TLS socket waits behind whoever is writing. Whatever a scenario of
   `NetworkClientTest` proves, `TlsNetworkClientTest` proves again over TLS by inheriting it:
   add network scenarios to the first.
+- **What fails during the TLS handshake is a failure of the handshake**, never a broker that
+  cannot be reached: the connection is made before it starts. A reset or a time-out comes out
+  of `startHandshake()` as a plain `IOException`, which `secured` reports as the `SSLException`
+  it is (BUG.md T-004). Keep "cannot be reached" for what fails before the handshake.
 - A change here is proven by `NetworkClientTest` (in `tassis-server`) **and by the TCK through
   the network**: `./run-official-tck-messaging-3.1.sh network`.
 
