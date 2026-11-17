@@ -19,6 +19,7 @@
  */
 package io.vidocq.tassis.server;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -60,10 +61,15 @@ import jakarta.jms.BytesMessage;
 import jakarta.jms.JMSContext;
 import jakarta.jms.Message;
 import jakarta.jms.TextMessage;
+import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,6 +82,8 @@ import org.junit.jupiter.api.Test;
 class TassisServerTest {
 
     private static final long SOON = 5_000;
+    // How long the carriers of the virtual threads are kept busy: far longer than close() takes to return.
+    private static final long BUSY_NANOS = 250_000_000L;
 
     private String brokerName;
     private TassisServer server;
@@ -162,6 +170,70 @@ class TassisServerTest {
         assertThrows(java.io.IOException.class, () -> new Wire(server.port()).saslAnonymous());
         assertThrows(IllegalArgumentException.class, () -> TassisServer.forBroker(""));
         assertThrows(IllegalArgumentException.class, () -> TassisServer.forBroker("x").port(70_000));
+    }
+
+    @Test
+    void aClientIsRefusedOnceTheServerIsClosed() throws Exception {
+        int port = server.port();
+        keepEveryCarrierBusy();
+
+        server.close();
+
+        try (Socket late = new Socket()) {
+            InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
+            assertThrows(ConnectException.class, () -> late.connect(address, (int) SOON),
+                    "a server that is closed took a client in (T-003)");
+        }
+    }
+
+    @Test
+    void theNextServerStartsOnThePortOfOneThatIsClosed() throws Exception {
+        int port = server.port();
+        keepEveryCarrierBusy();
+
+        server.close();
+
+        TassisServer next = assertDoesNotThrow(() -> TassisServer.forBroker(brokerName).port(port).start(),
+                "the port of a server that is closed is not free (T-003)");
+        next.close();
+    }
+
+    @Test
+    void aThreadInterruptedWhileItClosesTheServerStaysInterrupted() throws Exception {
+        keepEveryCarrierBusy();
+        Thread.currentThread().interrupt();
+        try {
+            // returns without the wait for the port, which an interrupted thread does not make
+            server.close();
+
+            assertTrue(Thread.currentThread().isInterrupted(), "close() kept the interruption to itself");
+        } finally {
+            // not left to the next test of this thread
+            assertTrue(Thread.interrupted());
+        }
+    }
+
+    /**
+     * Gives every carrier of the virtual threads something to do for a moment, and returns once
+     * they are all at it: a virtual thread that is woken up meanwhile waits for its turn. It is
+     * what a busy machine does to the thread of the server that accepts, which {@code close()}
+     * wakes up and which is the one that gives the port back.
+     */
+    private static void keepEveryCarrierBusy() throws InterruptedException {
+        int carriers = Integer.getInteger("jdk.virtualThreadScheduler.parallelism",
+                Runtime.getRuntime().availableProcessors());
+        CountDownLatch busy = new CountDownLatch(carriers);
+        for (int carrier = 0; carrier < carriers; carrier++) {
+            Thread.ofVirtual().start(() -> {
+                busy.countDown();
+                // counted from when this one runs: a carrier that starts late is busy as long as the others
+                long until = System.nanoTime() + BUSY_NANOS;
+                while (System.nanoTime() < until) {
+                    Thread.onSpinWait();
+                }
+            });
+        }
+        busy.await();
     }
 
     @Test

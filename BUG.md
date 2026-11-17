@@ -39,3 +39,32 @@ Entry format: `short id · date · symptom · minimal repro · cause hypothesis 
 - **Status**: **fixed** in M12-1: `TassisServer.prepared` sets `TCP_NODELAY` on every accepted
   socket (`TassisServerTest.theSocketOfAClientSendsItsFramesWithoutWaiting`); the figures after
   the fix are BENCH-20261012-02.
+
+
+## T-003 · 2026-11-17 · a server that was closed still held its port
+
+- **Symptom**: right after `TassisServer.close()` had returned, a client could still connect to
+  the port and was dropped a moment later, and a server started on the same port failed with
+  `cannot listen on port N` (`Address already in use`). On a busy machine only. It was seen
+  as `TlsNetworkClientTest.aBrokerThatIsNotThereIsReportedAsSuch` failing on two CI runners at
+  once, on the build of `main` and on the one of its pull request (2026-11-17): "could not
+  make an encrypted connection (TLS): Remote host terminated the handshake" where "cannot be
+  reached" was expected. In clear the same client reads an end of stream, which is reported
+  as "cannot be reached", so the scenario passed and no test saw the defect.
+- **Minimal repro**: keep every carrier of the virtual threads busy, close the server, then
+  connect to its port or start a server on it:
+  `TassisServerTest.aClientIsRefusedOnceTheServerIsClosed` and
+  `theNextServerStartsOnThePortOfOneThatIsClosed`. Without Tassis: a `ServerSocket`, a virtual
+  thread in `accept()`, and `close()` from another thread while the carriers are busy. The
+  close returns at once, a connect then succeeds, a bind fails, and `accept()` returns that
+  client once its thread runs. With a platform thread in `accept()` the connect is refused
+  and the bind succeeds.
+- **Cause**: the server accepts on a virtual thread, and `close()` did not wait for it. For a
+  virtual thread blocked in `accept()`, closing the `ServerSocket` only wakes the thread up:
+  the socket of the listener is closed by that thread, when it runs again. Until then the
+  system takes clients in on the port, and the thread accepts one more of them on its way
+  out, which the server then drops. Present since M11.3b.
+- **Status**: **fixed**: `TassisServer.close()` waits for the thread that accepts before it
+  ends the connections, as the `stop()` of Chappe does. A thread that is interrupted does not
+  wait, and stays interrupted
+  (`TassisServerTest.aThreadInterruptedWhileItClosesTheServerStaysInterrupted`).

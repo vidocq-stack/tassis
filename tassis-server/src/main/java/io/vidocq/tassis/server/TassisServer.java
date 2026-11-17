@@ -74,12 +74,15 @@ public final class TassisServer implements AutoCloseable {
     // What encrypts the connections, or null for a server that speaks in clear.
     private final SSLContext tls;
     private final Set<AmqpConnection> connections = ConcurrentHashMap.newKeySet();
+    // The thread that accepts: the one that gives the port back, see close().
+    private final Thread acceptor;
     private volatile boolean closed;
 
     private TassisServer(String brokerName, ServerSocket listener, SSLContext tls) {
         this.brokerName = brokerName;
         this.listener = listener;
         this.tls = tls;
+        this.acceptor = Thread.ofVirtual().name("tassis-server-" + brokerName).unstarted(this::accept);
     }
 
     /** Starts describing a server for the broker of that name in this JVM. */
@@ -152,7 +155,7 @@ public final class TassisServer implements AutoCloseable {
                 listener.setReuseAddress(true);
                 listener.bind(new InetSocketAddress(address, listeningPort));
                 TassisServer server = new TassisServer(brokerName, listener, tls);
-                Thread.ofVirtual().name("tassis-server-" + brokerName).start(server::accept);
+                server.acceptor.start();
                 return server;
             } catch (IOException e) {
                 throw new UncheckedIOException("cannot listen on port " + listeningPort, e);
@@ -241,8 +244,13 @@ public final class TassisServer implements AutoCloseable {
     }
 
     /**
-     * Stops listening and ends the connections of the clients. What they had not acknowledged
-     * is back in its queue when this returns; the broker itself, and what it holds, stays.
+     * Stops listening and ends the connections of the clients. When this returns the port is
+     * free: no client connects to it any more, and another server can be started on it. What
+     * the clients had not acknowledged is back in its queue; the broker itself, and what it
+     * holds, stays.
+     *
+     * <p>A thread that is interrupted does not wait for the port to be free, nor for the
+     * connections to end, and stays interrupted.
      */
     @Override
     public void close() {
@@ -252,6 +260,7 @@ public final class TassisServer implements AutoCloseable {
         } catch (IOException e) {
             LOG.log(System.Logger.Level.DEBUG, "closing the listener", e);
         }
+        awaitAcceptor();
         List<AmqpConnection> ending = List.copyOf(connections);
         for (AmqpConnection connection : ending) {
             connection.abort();
@@ -259,6 +268,27 @@ public final class TassisServer implements AutoCloseable {
         // Not returned from before the broker has back what the clients held.
         for (AmqpConnection connection : ending) {
             connection.awaitEnd(CLOSE_TIME_OUT_MILLIS);
+        }
+    }
+
+    /**
+     * Waits for the thread that accepts to end, which is when the port is given back. Closing
+     * the listener only wakes that thread up: a virtual thread blocked in {@code accept()} is
+     * the one that closes the socket it waits on, once it runs again. Until then the system
+     * still takes clients in on the port, that thread accepts one more of them on its way out,
+     * and nothing else can listen there (BUG.md T-003). A caller that is interrupted, or that
+     * waited in vain, is told that the port is not free yet.
+     */
+    private void awaitAcceptor() {
+        try {
+            acceptor.join(CLOSE_TIME_OUT_MILLIS);
+        } catch (InterruptedException _) {
+            Thread.currentThread().interrupt();
+        }
+        if (acceptor.isAlive()) {
+            // Interrupted, or out of time: the port is given back when that thread runs.
+            LOG.log(System.Logger.Level.WARNING, "the server of " + brokerName + " is closed, and its port "
+                    + listener.getLocalPort() + " is not free yet: the thread that accepts has not ended");
         }
     }
 }

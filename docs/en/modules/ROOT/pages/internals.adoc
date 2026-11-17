@@ -245,6 +245,8 @@ Each connection, an `AmqpConnection`, is served by virtual threads of three kind
 * the **writer** writes the frames the others queue, in the order they were queued, and an empty frame when it has had nothing to write for half the time-out the client announced;
 * one **pump** per link the client receives by (`OutgoingLink`) takes messages from the broker and queues their transfers, for as long as the client has credit.
 
+One more virtual thread, for the whole server, accepts the connections. `close()` closes the listener, waits for that thread to end, then ends the connections. The wait is what frees the port: a virtual thread blocked in `accept()` is the one that closes the socket it waits on, when it runs again, and until then the system still takes clients in on that port.
+
 One lock per connection guards its sessions, its links, their credit and the deliveries sent and not settled. It is taken before the broker's lock, never after, and is not held while waiting for the broker or for the socket.
 
 How AMQP meets the seam:

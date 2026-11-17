@@ -355,6 +355,10 @@ Rules:
 - **Three kinds of virtual thread per connection.** The reader handles frames and **never
   writes to the socket**: it queues. The writer alone writes, in queue order. One pump per link
   the client receives by (`OutgoingLink`).
+- **One more virtual thread accepts, and `close()` waits for it** before it ends the
+  connections. A virtual thread blocked in `accept()` is the one that closes the socket of the
+  listener, when it runs again: until then the port still takes clients in and nothing else
+  can listen on it (BUG.md T-003). Keep the wait, and keep it before the connections are ended.
 - **One lock per connection** (`AmqpConnection.lock`) guards sessions, links, credit and the
   unsettled deliveries. Order: that lock, then the broker lock. Never hold it while waiting for
   the broker (`take`, `receive`) or for the socket.

@@ -188,7 +188,7 @@ In the module `tassis-server`, package `io.vidocq.tassis.server`. See xref:usage
 | The name of the broker.
 
 | `close()`
-| Stops listening and ends the connections of the clients. What they had not acknowledged goes back to its queue; the broker and its messages stay.
+| Stops listening and ends the connections of the clients. When it returns the port is free: no client connects to it any more, and another server can be started on it. What the clients had not acknowledged goes back to its queue; the broker and its messages stay.
 |===
 
 What the server announces to a client, and accepts from it, is not configurable yet:
