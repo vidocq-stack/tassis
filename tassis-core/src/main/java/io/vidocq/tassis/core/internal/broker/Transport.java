@@ -13,7 +13,8 @@
  *
  * It is also made available under the European Union Public Licence v. 1.2,
  * which is available at
- * https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12 *
+ * https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12
+ *
  * SPDX-License-Identifier: EPL-2.0 OR EUPL-1.2 OR GPL-2.0-or-later
  */
 package io.vidocq.tassis.core.internal.broker;
