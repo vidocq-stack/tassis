@@ -134,10 +134,17 @@ class TlsNetworkClientTest extends NetworkClientTest {
         }
     }
 
-    /** Accepts one client and ends its connection with a reset, as a socket closed on what it has not read does. */
+    /**
+     * Accepts one client and ends its connection with a reset, as a socket closed on what it has not read does,
+     * once the client has sent the first octet of its handshake. A reset that came sooner could reach the client
+     * before its connect is finished, which the client rightly reports as a broker it cannot reach (T-005).
+     */
     private static void resetTheNextClient(ServerSocket listener) {
         try (Socket client = listener.accept()) {
             client.setSoLinger(true, 0);
+            // the start of the ClientHello, or the end of the wait: never longer than the test allows
+            client.setSoTimeout(10_000);
+            client.getInputStream().read();
         } catch (IOException _) {
             // nobody came, or the test is over: its own assertion says so
         }

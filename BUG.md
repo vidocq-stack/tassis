@@ -93,3 +93,29 @@ Entry format: `short id · date · symptom · minimal repro · cause hypothesis 
 - **Status**: **fixed**: `AmqpBrokerConnection.secured` reports whatever fails during the
   handshake as a failure of the handshake. The connection is made before the handshake
   starts, so nothing that fails there means that the broker cannot be reached.
+
+
+## T-005 · 2026-11-18 · the test of T-004 could reset the client before its connect was finished
+
+- **Symptom**: `TlsNetworkClientTest.aBrokerThatCutsTheHandshakeShortWasReached` failed on a CI
+  runner (Linux), twice in a row in the same job: "the broker at localhost:37001 cannot be
+  reached: Connection reset by peer (connect failed)", where a failure of the TLS handshake was
+  expected. The defect is in the test: the client reported what happened to it correctly.
+- **Minimal repro**: not kept in the build, since it opens its window only now and then. Keep
+  all carriers of the virtual threads busy but one, then create the connection on a virtual
+  thread and occupy the last carrier behind it: when the client parks in its connect
+  (`NioSocketImpl.timedFinishConnect`), nothing can resume it. A platform thread then accepts
+  the client and resets it (the old `resetTheNextClient`), and the carriers are released.
+  The client finds the reset when it finishes its connect, and reports "cannot be reached:
+  Connection reset by peer" (macOS, 2026-11-18: on the third attempt). With the fix below the
+  same interleaving gives "could not make an encrypted connection (TLS): Connection reset".
+- **Cause**: the fake broker of the test reset the client as soon as it had accepted it. A
+  non-blocking connect returns before it is finished, and the client checks whether it
+  succeeded afterwards (`Net.pollConnectNow`, which reads `SO_ERROR`). In this test the connect
+  runs on the platform thread of `assertTimeoutPreemptively`. When that thread came back to it
+  only after the reset had arrived, the connect itself failed with `ECONNRESET`, before any
+  handshake. `AmqpBrokerConnection.establish` rightly reports a connect that fails as a broker
+  that cannot be reached. Present since T-004.
+- **Status**: **fixed** in the test: `resetTheNextClient` reads the first octet the client
+  sends, the start of its ClientHello, before it resets the connection, so the reset always
+  falls inside the handshake. The read gives up after 10 s, so the test cannot hang.
